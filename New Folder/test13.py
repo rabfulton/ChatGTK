@@ -4,6 +4,7 @@ os.environ['AUDIODEV'] = 'pulse'  # Force use of PulseAudio
 import gi
 import re
 import threading
+import os  # Import os to read/write environment variables and settings
 import sounddevice as sd  # For recording audio
 import soundfile as sf    # For saving audio files
 import numpy as np       # For audio processing
@@ -19,7 +20,7 @@ gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GLib, Pango, GtkSource, GdkPixbuf
+from gi.repository import Gtk, GLib, Pango, GtkSource
 
 # Path to settings file (in same directory as this script)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
@@ -561,7 +562,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def append_ai_message(self, text):
         """Add an AI message with possible code blocks using GtkSourceView for syntax highlighting."""
-        # Container for the entire AI response (including play/stop button)
+        # Container for the entire AI response (including speak button)
         response_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
         # Container for the text content
@@ -600,7 +601,7 @@ class OpenAIGTKClient(Gtk.Window):
         segments = re.split(r'(--- Code Block Start \(.*?--- Code Block End ---)', text, flags=re.DOTALL)
 
         for seg in segments:
-            #seg = seg.strip("\n")
+            seg = seg.strip("\n")
             if seg.startswith('--- Code Block Start ('):
                 # Example: --- Code Block Start (python) ---some code--- Code Block End ---
                 # Extract language from parentheses
@@ -649,68 +650,29 @@ class OpenAIGTKClient(Gtk.Window):
                 # Add a note about code block for TTS
                 full_text.append("Code block follows.")
             else:
+                # Normal text from the AI
                 if seg.strip():
-                    # Process TeX expressions first
-                    processed = process_tex_markup(seg, self.user_color)
+                    # Escape Pango markup chars, then interpret **bold**
+                    escaped = escape_for_pango_markup(seg)
+                    escaped = convert_double_asterisks_to_bold(escaped)
+                    # Convert lines starting with ### to bigger font
+                    escaped = convert_h3_to_large(escaped, self.font_size)
+
+                    lbl_ai_text = Gtk.Label()
+                    lbl_ai_text.set_selectable(True)
+                    lbl_ai_text.set_line_wrap(True)
+                    lbl_ai_text.set_line_wrap_mode(Gtk.WrapMode.WORD)
+                    lbl_ai_text.set_xalign(0)
+                    # apply same AI style
+                    self.apply_css(lbl_ai_text, css_ai)
+
+                    # Use markup instead of set_text
+                    lbl_ai_text.set_use_markup(True)
+                    lbl_ai_text.set_markup(escaped)
+
+                    content_container.pack_start(lbl_ai_text, False, False, 0)
                     
-                    if "<img" in processed:
-                        # If we have images, use TextView
-                        text_view = Gtk.TextView()
-                        text_view.set_wrap_mode(Gtk.WrapMode.WORD)
-                        text_view.set_editable(False)
-                        text_view.set_cursor_visible(False)
-                        text_view.set_pixels_above_lines(5)
-                        text_view.set_pixels_below_lines(5)
-                        text_view.set_left_margin(5)
-                        text_view.set_right_margin(5)
-                        
-                        # Apply the same font as labels
-                        text_view.override_font(Pango.FontDescription(f"{self.font_family} {self.font_size}"))
-                        
-                        buffer = text_view.get_buffer()
-                        
-                        # Process the text and add images
-                        parts = re.split(r'(<img src="[^"]+"/>)', processed)
-                        iter = buffer.get_start_iter()
-                        
-                        for part in parts:
-                            if part.startswith('<img src="'):
-                                # Extract image path and create pixbuf
-                                img_path = re.search(r'src="([^"]+)"', part).group(1)
-                                try:
-                                    pixbuf = GdkPixbuf.Pixbuf.new_from_file(img_path)
-                                    buffer.insert_pixbuf(iter, pixbuf)
-                                    # Handle spacing based on math type
-                                    if 'math_display_' in img_path:
-                                        buffer.insert(iter, "\n")
-                                    elif 'math_inline_' in img_path:
-                                        buffer.insert(iter, " ")
-                                except Exception as e:
-                                    print(f"Error loading image: {e}")
-                            else:
-                                # Process remaining text for other markup
-                                text = process_inline_markup(part)
-                                text = convert_double_asterisks_to_bold(text)
-                                text = convert_h3_to_large(text, self.font_size)
-                                buffer.insert_markup(iter, text, -1)
-                        
-                        content_container.pack_start(text_view, False, False, 0)
-                    else:
-                        # No images, use Label as before
-                        processed = process_inline_markup(processed)
-                        processed = convert_double_asterisks_to_bold(processed)
-                        processed = convert_h3_to_large(processed, self.font_size)
-                        
-                        lbl_ai_text = Gtk.Label()
-                        lbl_ai_text.set_selectable(True)
-                        lbl_ai_text.set_line_wrap(True)
-                        lbl_ai_text.set_line_wrap_mode(Gtk.WrapMode.WORD)
-                        lbl_ai_text.set_xalign(0)
-                        self.apply_css(lbl_ai_text, css_ai)
-                        lbl_ai_text.set_use_markup(True)
-                        lbl_ai_text.set_markup(processed)
-                        content_container.pack_start(lbl_ai_text, False, False, 0)
-                    
+                    # Add this segment to the full text for TTS
                     full_text.append(seg.strip())
 
         # Variable to track playback state
@@ -1002,216 +964,6 @@ class OpenAIGTKClient(Gtk.Window):
             
         except Exception as e:
             self.append_message('ai', f"Error generating speech: {str(e)}")
-
-def tex_to_png(tex_string, is_display_math=False, text_color="white"):
-    """Convert a TeX string to PNG using system latex tools."""
-    import subprocess
-    import tempfile
-    import os
-    from pathlib import Path
-    import re
-
-    # Map of special characters to their LaTeX equivalents
-    special_chars = {
-        'Ω': r'\Omega',
-        'π': r'\pi',
-        'μ': r'\mu',
-        'θ': r'\theta',
-        'α': r'\alpha',
-        'β': r'\beta',
-        'γ': r'\gamma',
-        'δ': r'\delta',
-        'ε': r'\epsilon',
-        'λ': r'\lambda',
-        'σ': r'\sigma',
-        'τ': r'\tau',
-        'φ': r'\phi',
-        'ω': r'\omega',
-        '±': r'\pm',
-        '∑': r'\sum',
-        '∫': r'\int',
-        '∞': r'\infty',
-        '≈': r'\approx',
-        '≠': r'\neq',
-        '≤': r'\leq',
-        '≥': r'\geq',
-        '×': r'\times',
-        '÷': r'\div',
-        '→': r'\rightarrow',
-        '←': r'\leftarrow',
-        '↔': r'\leftrightarrow',
-        '∂': r'\partial',
-        '∇': r'\nabla',
-        '°': r'^{\circ}',
-    }
-
-    print(f"Original tex_string: {tex_string}")  # Debug print
-    # Replace special characters with their LaTeX equivalents
-    for char, latex_cmd in special_chars.items():
-        if char in tex_string:
-            print(f"Replacing {char} with {latex_cmd}")  # Debug print
-            tex_string = tex_string.replace(char, latex_cmd)
-    print(f"Processed tex_string: {tex_string}")  # Debug print
-
-    # Convert hex color to RGB components
-    if text_color.startswith('#'):
-        try:
-            r = int(text_color[1:3], 16) / 255
-            g = int(text_color[3:5], 16) / 255
-            b = int(text_color[5:7], 16) / 255
-            latex_color = f"{r:.3f},{g:.3f},{b:.3f}"
-        except ValueError as e:
-            latex_color = "1,1,1"
-    else:
-        latex_color = "1,1,1"
-
-    # Create a temporary directory for our latex files
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        
-        # Create the LaTeX document
-        if is_display_math:
-            latex_doc = r"""
-\documentclass{article}
-\usepackage{amsmath}
-\usepackage{amssymb}
-\usepackage{xcolor}
-\pagestyle{empty}
-\begin{document}
-\color[rgb]{%s}
-\[\displaystyle %s\]
-\end{document}
-""" % (latex_color, tex_string)
-        else:
-            latex_doc = r"""
-\documentclass{article}
-\usepackage{amsmath}
-\usepackage{amssymb}
-\usepackage{xcolor}
-\pagestyle{empty}
-\begin{document}
-\color[rgb]{%s}
-\(%s\)
-\end{document}
-""" % (latex_color, tex_string)
-
-        print(f"Generated LaTeX document:\n{latex_doc}")  # Debug print
-
-        # Write the LaTeX document
-        tex_file = tmp_path / "equation.tex"
-        tex_file.write_text(latex_doc)
-
-        try:
-            # Run latex to create DVI
-            result = subprocess.run(['latex', '-interaction=nonstopmode', str(tex_file)], 
-                         cwd=tmpdir, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"LaTeX Error Output:\n{result.stdout}\n{result.stderr}")  # Show both stdout and stderr
-                return None
-
-            # Convert DVI to PNG
-            dvi_file = tmp_path / "equation.dvi"
-            png_file = tmp_path / "equation.png"
-            result = subprocess.run(['dvipng', '-D', '300', '-T', 'tight', '-bg', 'Transparent',
-                          str(dvi_file), '-o', str(png_file)],
-                         cwd=tmpdir, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"dvipng Error Output:\n{result.stdout}\n{result.stderr}")  # Show both stdout and stderr
-                return None
-
-            # Read the PNG data
-            return png_file.read_bytes()
-        except subprocess.CalledProcessError as e:
-            print(f"Error converting TeX to PNG: {e}")
-            print(f"Error output:\n{e.stdout}\n{e.stderr}")  # Show both stdout and stderr
-            return None
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            return None
-
-def process_tex_markup(text, text_color="white"):
-    """Process text for TeX expressions and convert them to images."""
-    import re
-    
-    # Process display math first \[...\]
-    def replace_display_math(match):
-        math_content = match.group(1)
-        print(f"Display math content: {math_content}")  # Debug print
-        png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color)
-        if png_data:
-            temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
-            temp_file.write_bytes(png_data)
-            return f'<img src="{temp_file}"/>\n'
-        return match.group(0)  # Return original if conversion fails
-    
-    # Process inline math \(...\)
-    def replace_inline_math(match):
-        math_content = match.group(1)
-        png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color)
-        if png_data:
-            temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
-            temp_file.write_bytes(png_data)
-            return f'<img src="{temp_file}"/>'
-        return match.group(0)  # Return original if conversion fails
-
-    # Replace display math first - using non-greedy match and handling escaped brackets
-    text = re.sub(r'\\\[(.*?)\\\]', replace_display_math, text, flags=re.DOTALL)
-    
-    # Then replace inline math
-    text = re.sub(r'\\\((.*?)\\\)', replace_inline_math, text)
-    
-    return text
-
-def process_inline_markup(text):
-    """
-    Process text for inline code. It splits the text on backticks,
-    escapes non-code parts, and converts backticked parts to styled
-    monospace with theme-appropriate highlighting.
-    """
-    import re
-    
-    # Create a temporary label to get theme colors
-    label = Gtk.Label()
-    context = label.get_style_context()
-    context.add_class('selection')  # This should give us selection colors
-    
-    # Get computed values for the background and foreground
-    bg_color = "#404040"  # Fallback dark gray
-    fg_color = "#ffffff"  # Fallback white
-    
-    try:
-        provider = Gtk.CssProvider()
-        provider.load_from_data(b"""
-            .selection:selected {
-                background-color: @theme_selected_bg_color;
-                color: @theme_selected_fg_color;
-            }
-        """)
-        context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        bg_color = context.get_background_color(Gtk.StateFlags.SELECTED).to_string()
-        fg_color = context.get_color(Gtk.StateFlags.SELECTED).to_string()
-    except Exception:
-        pass  # Use fallback colors if we can't get theme colors
-    
-    # Split the text on inline-code parts. The backticks are preserved.
-    parts = re.split(r'(`[^`]+`)', text)
-    processed_parts = []
-    for part in parts:
-        if part.startswith("`") and part.endswith("`"):
-            # Strip the backticks and escape the code content
-            code_content = part[1:-1]
-            # Style with monospace font and theme colors
-            processed_parts.append(
-                f'<span font_family="monospace" background="{bg_color}" foreground="{fg_color}">' + 
-                GLib.markup_escape_text(code_content) + 
-                '</span>'
-            )
-        else:
-            # Escape the non-code parts
-            processed_parts.append(GLib.markup_escape_text(part))
-    return "".join(processed_parts)
 
 def main():
     win = OpenAIGTKClient()

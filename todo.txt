@@ -6,3 +6,13 @@ Don't hang app at startup while downloading models list.
 
 Don't crash if key not detected
 
+Equations need to be formatted better!
+\[ V = I \times R \]
+
+Where:
+• \( V \) is the voltage (in volts, V)
+• \( I \) is the current (in amperes, A)
+• \( R \) is the resistance (in ohms, Ω)
+
+Confirm if temperature is working correctly
+
