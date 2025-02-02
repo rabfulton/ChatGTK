@@ -16,14 +16,17 @@ move latex stuff to seperate file
 
 sav chat history button
 
-reset chat histiry buttton
+reset chat history buttton
 
 research pandoc
 
 re learn regex
 
-4 hash markup not handled ####
-
 investigate gtk textview
 
 ** text ** not working in latex sections
+
+Settings not reloading after changes.
+
+Voice input sometimes hangs (could be when network is bad.
+

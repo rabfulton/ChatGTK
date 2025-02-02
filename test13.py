@@ -236,6 +236,18 @@ class SettingsDialog(Gtk.Dialog):
         hbox_tts.pack_start(self.btn_preview, False, False, 0)
         vbox.pack_start(hbox_tts, False, False, 0)
 
+        # Create horizontal box for buttons
+        button_box = Gtk.Box(spacing=6)
+        vbox_main.pack_start(button_box, False, False, 0)
+
+        # Add voice button to horizontal box
+        button_box.pack_start(self.btn_voice, True, True, 0)
+
+        # Add history button to the same horizontal box
+        self.history_button = Gtk.Button(label="Clear History")
+        self.history_button.connect("clicked", self.on_clear_clicked)
+        button_box.pack_start(self.history_button, True, True, 0)
+
         # Buttons
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
@@ -316,7 +328,6 @@ class OpenAIGTKClient(Gtk.Window):
         self.window_width = int(loaded['WINDOW_WIDTH'])
         self.window_height = int(loaded['WINDOW_HEIGHT'])
         self.system_message = loaded['SYSTEM_MESSAGE']
-        # New: store temperament
         self.temperament = float(loaded['TEMPERAMENT'])
         self.microphone = loaded['MICROPHONE']
         self.tts_voice = loaded['TTS_VOICE']
@@ -404,7 +415,18 @@ class OpenAIGTKClient(Gtk.Window):
         self.recording = False
         self.btn_voice = Gtk.Button(label="Start Voice Input")
         self.btn_voice.connect("clicked", self.on_voice_input)
-        vbox_main.pack_start(self.btn_voice, False, False, 0)
+        
+        # Create horizontal box for buttons
+        button_box = Gtk.Box(spacing=6)
+        vbox_main.pack_start(button_box, False, False, 0)
+
+        # Add voice button to horizontal box
+        button_box.pack_start(self.btn_voice, True, True, 0)
+
+        # Add history button to the same horizontal box
+        self.history_button = Gtk.Button(label="Clear History")
+        self.history_button.connect("clicked", self.on_clear_clicked)
+        button_box.pack_start(self.history_button, True, True, 0)
 
         # Check LaTeX installation
         if not is_latex_installed():
@@ -962,6 +984,13 @@ class OpenAIGTKClient(Gtk.Window):
             
         except Exception as e:
             self.append_message('ai', f"Error generating speech: {str(e)}")
+
+    def on_clear_clicked(self, button):
+        """Handle clear chat button click."""
+        # Reset conversation history to just the system message
+        self.conversation_history = [
+            {"role": "system", "content": self.system_message}
+        ]
 
 def rgb_to_hex(rgb_str):
     """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""

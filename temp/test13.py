@@ -12,6 +12,13 @@ import tempfile         # For temporary files
 from pathlib import Path # For path handling
 import subprocess
 import time
+from latex_utils import (
+    tex_to_png, 
+    process_tex_markup, 
+    insert_tex_image, 
+    cleanup_temp_files, 
+    is_latex_installed
+)
 
 from openai import OpenAI
 client = OpenAI()
@@ -20,7 +27,7 @@ gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GLib, Pango, GtkSource
+from gi.repository import Gtk, GLib, Pango, GtkSource, GdkPixbuf
 
 # Path to settings file (in same directory as this script)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
@@ -443,6 +450,10 @@ class OpenAIGTKClient(Gtk.Window):
         self.btn_voice.connect("clicked", self.on_voice_input)
         vbox_main.pack_start(self.btn_voice, False, False, 0)
 
+        # Check LaTeX installation
+        if not is_latex_installed():
+            print("Warning: LaTeX installation not found. Formula rendering will be disabled.")
+
     def on_destroy(self, widget):
         # Save the last known geometry to settings
         to_save = load_settings()
@@ -455,6 +466,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['MICROPHONE'] = self.microphone
         to_save['TTS_VOICE'] = self.tts_voice
         save_settings(to_save)
+        cleanup_temp_files()
         Gtk.main_quit()
 
     def on_configure_event(self, widget, event):
@@ -562,7 +574,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def append_ai_message(self, text):
         """Add an AI message with possible code blocks using GtkSourceView for syntax highlighting."""
-        # Container for the entire AI response (including speak button)
+        # Container for the entire AI response (including play/stop button)
         response_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
         # Container for the text content
@@ -601,7 +613,7 @@ class OpenAIGTKClient(Gtk.Window):
         segments = re.split(r'(--- Code Block Start \(.*?--- Code Block End ---)', text, flags=re.DOTALL)
 
         for seg in segments:
-            seg = seg.strip("\n")
+            #seg = seg.strip("\n")
             if seg.startswith('--- Code Block Start ('):
                 # Example: --- Code Block Start (python) ---some code--- Code Block End ---
                 # Extract language from parentheses
@@ -650,29 +662,59 @@ class OpenAIGTKClient(Gtk.Window):
                 # Add a note about code block for TTS
                 full_text.append("Code block follows.")
             else:
-                # Normal text from the AI
                 if seg.strip():
-                    # Escape Pango markup chars, then interpret **bold**
-                    escaped = escape_for_pango_markup(seg)
-                    escaped = convert_double_asterisks_to_bold(escaped)
-                    # Convert lines starting with ### to bigger font
-                    escaped = convert_h3_to_large(escaped, self.font_size)
-
-                    lbl_ai_text = Gtk.Label()
-                    lbl_ai_text.set_selectable(True)
-                    lbl_ai_text.set_line_wrap(True)
-                    lbl_ai_text.set_line_wrap_mode(Gtk.WrapMode.WORD)
-                    lbl_ai_text.set_xalign(0)
-                    # apply same AI style
-                    self.apply_css(lbl_ai_text, css_ai)
-
-                    # Use markup instead of set_text
-                    lbl_ai_text.set_use_markup(True)
-                    lbl_ai_text.set_markup(escaped)
-
-                    content_container.pack_start(lbl_ai_text, False, False, 0)
+                    # Process TeX expressions first
+                    processed = process_tex_markup(seg, self.user_color)
                     
-                    # Add this segment to the full text for TTS
+                    if "<img" in processed:
+                        # If we have images, use TextView
+                        text_view = Gtk.TextView()
+                        text_view.set_wrap_mode(Gtk.WrapMode.WORD)
+                        text_view.set_editable(False)
+                        text_view.set_cursor_visible(False)
+                        text_view.set_pixels_above_lines(5)
+                        text_view.set_pixels_below_lines(5)
+                        text_view.set_left_margin(5)
+                        text_view.set_right_margin(5)
+                        
+                        # Apply the same font as labels
+                        text_view.override_font(Pango.FontDescription(f"{self.font_family} {self.font_size}"))
+                        
+                        buffer = text_view.get_buffer()
+                        
+                        # Process the text and add images
+                        parts = re.split(r'(<img src="[^"]+"/>)', processed)
+                        iter = buffer.get_start_iter()
+                        
+                        for part in parts:
+                            if part.startswith('<img src="'):
+                                # Extract image path and create pixbuf
+                                img_path = re.search(r'src="([^"]+)"', part).group(1)
+                                insert_tex_image(buffer, iter, img_path)
+                            else:
+                                # Process remaining text for other markup
+                                text = process_inline_markup(part)
+                                text = convert_double_asterisks_to_bold(text)
+                                text = convert_h3_to_large(text, self.font_size)
+                                buffer.insert_markup(iter, text, -1)
+                        
+                        content_container.pack_start(text_view, False, False, 0)
+                    else:
+                        # No images, use Label as before
+                        processed = process_inline_markup(processed)
+                        processed = convert_double_asterisks_to_bold(processed)
+                        processed = convert_h3_to_large(processed, self.font_size)
+                        
+                        lbl_ai_text = Gtk.Label()
+                        lbl_ai_text.set_selectable(True)
+                        lbl_ai_text.set_line_wrap(True)
+                        lbl_ai_text.set_line_wrap_mode(Gtk.WrapMode.WORD)
+                        lbl_ai_text.set_xalign(0)
+                        self.apply_css(lbl_ai_text, css_ai)
+                        lbl_ai_text.set_use_markup(True)
+                        lbl_ai_text.set_markup(processed)
+                        content_container.pack_start(lbl_ai_text, False, False, 0)
+                    
                     full_text.append(seg.strip())
 
         # Variable to track playback state
@@ -964,6 +1006,87 @@ class OpenAIGTKClient(Gtk.Window):
             
         except Exception as e:
             self.append_message('ai', f"Error generating speech: {str(e)}")
+
+def rgb_to_hex(rgb_str):
+    """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""
+    try:
+        # Extract the RGB values
+        r, g, b = map(int, rgb_str.strip('rgb()').split(','))
+        # Convert to hex
+        return f'#{r:02x}{g:02x}{b:02x}'
+    except:
+        return '#000000'  # Default to black if conversion fails
+
+def process_inline_markup(text):
+    """
+    Process text for inline code. It splits the text on backticks,
+    escapes non-code parts, and converts backticked parts to styled
+    monospace with theme-appropriate highlighting.
+    """
+    import re
+    
+    # Create a temporary label to get theme colors
+    label = Gtk.Label()
+    context = label.get_style_context()
+    context.add_class('selection')  # This should give us selection colors
+    
+    # Get computed values for the background and foreground
+    bg_color = "#404040"  # Fallback dark gray
+    fg_color = "#ffffff"  # Fallback white
+    
+    try:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(b"""
+            .selection:selected {
+                background-color: @theme_selected_bg_color;
+                color: @theme_selected_fg_color;
+            }
+        """)
+        context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        bg_color = context.get_background_color(Gtk.StateFlags.SELECTED).to_string()
+        fg_color = context.get_color(Gtk.StateFlags.SELECTED).to_string()
+        bg_color = fix_rgb_colors_in_markup(bg_color)
+        fg_color = fix_rgb_colors_in_markup(fg_color)
+    except Exception:
+        pass  # Use fallback colors if we can't get theme colors
+    
+    # Split the text on inline-code parts. The backticks are preserved.
+    parts = re.split(r'(`[^`]+`)', text)
+    processed_parts = []
+    for part in parts:
+        if part.startswith("`") and part.endswith("`"):
+            # Strip the backticks and escape the code content
+            code_content = part[1:-1]
+            # Style with monospace font and theme colors
+            processed_parts.append(
+                f'<span font_family="monospace" background="{bg_color}" foreground="{fg_color}">' + 
+                GLib.markup_escape_text(code_content) + 
+                '</span>'
+            )
+        else:
+            # Escape the non-code parts
+            processed_parts.append(GLib.markup_escape_text(part))
+    return "".join(processed_parts)
+
+def fix_rgb_colors_in_markup(text: str) -> str:
+    """
+    Convert any occurrences of 'rgb(R, G, B)' in the string to '#RRGGBB'.
+    This does not attempt to parse attribute names or validate usage,
+    it just replaces the pattern wherever it appears.
+    """
+    if not text:
+        return text
+
+    # Regex to match rgb(...) anywhere in the string
+    pattern = re.compile(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)')
+
+    def replacer(match):
+        r = int(match.group(1))
+        g = int(match.group(2))
+        b = int(match.group(3))
+        return f'#{r:02X}{g:02X}{b:02X}'  # uppercase hex
+
+    return pattern.sub(replacer, text)
 
 def main():
     win = OpenAIGTKClient()
