@@ -683,6 +683,9 @@ class OpenAIGTKClient(Gtk.Window):
                                     # Handle spacing based on math type
                                     if 'math_display_' in img_path:
                                         buffer.insert(iter, "\n")
+                                        # If this is part of a list item, add another newline
+                                        if part.strip().startswith('-') or part.strip().startswith('•'):
+                                            buffer.insert(iter, "\n")
                                     elif 'math_inline_' in img_path:
                                         buffer.insert(iter, " ")
                                 except Exception as e:
@@ -1106,7 +1109,13 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white"):
             result = subprocess.run(['latex', '-interaction=nonstopmode', str(tex_file)], 
                          cwd=tmpdir, capture_output=True, text=True)
             if result.returncode != 0:
-                print(f"LaTeX Error Output:\n{result.stdout}\n{result.stderr}")  # Show both stdout and stderr
+                print(f"LaTeX Error Output:\n{result.stdout}")
+                print(f"LaTeX Error Details:\n{result.stderr}")
+                # Write the error log to a file for inspection
+                with open('latex_error.log', 'w') as f:
+                    f.write(f"LaTeX Document:\n{latex_doc}\n\n")
+                    f.write(f"Stdout:\n{result.stdout}\n\n")
+                    f.write(f"Stderr:\n{result.stderr}")
                 return None
 
             # Convert DVI to PNG
@@ -1116,14 +1125,15 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white"):
                           str(dvi_file), '-o', str(png_file)],
                          cwd=tmpdir, capture_output=True, text=True)
             if result.returncode != 0:
-                print(f"dvipng Error Output:\n{result.stdout}\n{result.stderr}")  # Show both stdout and stderr
+                print(f"dvipng Error Output:\n{result.stdout}")
+                print(f"dvipng Error Details:\n{result.stderr}")
                 return None
 
             # Read the PNG data
             return png_file.read_bytes()
         except subprocess.CalledProcessError as e:
             print(f"Error converting TeX to PNG: {e}")
-            print(f"Error output:\n{e.stdout}\n{e.stderr}")  # Show both stdout and stderr
+            print(f"Error details:\n{e.stdout}\n{e.stderr}")
             return None
         except Exception as e:
             print(f"Unexpected error: {e}")
