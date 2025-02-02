@@ -140,7 +140,6 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white"):
 
 def process_tex_markup(text, text_color="white"):
     """Process text for TeX expressions and convert them to images."""
-    # Process display math first \[...\]
     def replace_display_math(match):
         math_content = match.group(1)
         png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color)
@@ -149,9 +148,8 @@ def process_tex_markup(text, text_color="white"):
             temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
             temp_file.write_bytes(png_data)
             return f'<img src="{temp_file}"/>\n'
-        return match.group(0)  # Return original if conversion fails
-    
-    # Process inline math \(...\)
+        return match.group(0)
+
     def replace_inline_math(match):
         math_content = match.group(1)
         png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color)
@@ -160,15 +158,24 @@ def process_tex_markup(text, text_color="white"):
             temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
             temp_file.write_bytes(png_data)
             return f'<img src="{temp_file}"/>'
-        return match.group(0)  # Return original if conversion fails
+        return match.group(0)
 
-    # Replace display math first
-    text = re.sub(r'\\\[(.*?)\\\]', replace_display_math, text, flags=re.DOTALL)
-    
-    # Then replace inline math
-    text = re.sub(r'\\\((.*?)\\\)', replace_inline_math, text)
-    
-    return text 
+    # 1) Replace display math of the form \[ ... \]
+    text = re.sub(
+        r'\\\[(.*?)\\\]',
+        replace_display_math,
+        text,
+        flags=re.DOTALL
+    )
+
+    # 2) Replace inline math of the form \( ... \)
+    text = re.sub(
+        r'\\\((.*?)\\\)',
+        replace_inline_math,
+        text
+    )
+
+    return text
 
 def insert_tex_image(buffer, iter, img_path):
     """Insert a TeX-generated image into the text buffer."""
