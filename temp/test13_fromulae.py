@@ -4,7 +4,6 @@ os.environ['AUDIODEV'] = 'pulse'  # Force use of PulseAudio
 import gi
 import re
 import threading
-import os  # Import os to read/write environment variables and settings
 import sounddevice as sd  # For recording audio
 import soundfile as sf    # For saving audio files
 import numpy as np       # For audio processing
@@ -1007,15 +1006,173 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             self.append_message('ai', f"Error generating speech: {str(e)}")
 
-def rgb_to_hex(rgb_str):
-    """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""
-    try:
-        # Extract the RGB values
-        r, g, b = map(int, rgb_str.strip('rgb()').split(','))
-        # Convert to hex
-        return f'#{r:02x}{g:02x}{b:02x}'
-    except:
-        return '#000000'  # Default to black if conversion fails
+def tex_to_png(tex_string, is_display_math=False, text_color="white"):
+    """Convert a TeX string to PNG using system latex tools."""
+    import subprocess
+    import tempfile
+    import os
+    from pathlib import Path
+    import re
+
+    # Map of special characters to their LaTeX equivalents
+    special_chars = {
+        'Ω': r'\Omega',
+        'π': r'\pi',
+        'μ': r'\mu',
+        'θ': r'\theta',
+        'α': r'\alpha',
+        'β': r'\beta',
+        'γ': r'\gamma',
+        'δ': r'\delta',
+        'ε': r'\epsilon',
+        'λ': r'\lambda',
+        'σ': r'\sigma',
+        'τ': r'\tau',
+        'φ': r'\phi',
+        'ω': r'\omega',
+        '±': r'\pm',
+        '∑': r'\sum',
+        '∫': r'\int',
+        '∞': r'\infty',
+        '≈': r'\approx',
+        '≠': r'\neq',
+        '≤': r'\leq',
+        '≥': r'\geq',
+        '×': r'\times',
+        '÷': r'\div',
+        '→': r'\rightarrow',
+        '←': r'\leftarrow',
+        '↔': r'\leftrightarrow',
+        '∂': r'\partial',
+        '∇': r'\nabla',
+        '°': r'^{\circ}',
+    }
+
+    print(f"Original tex_string: {tex_string}")  # Debug print
+    # Replace special characters with their LaTeX equivalents
+    for char, latex_cmd in special_chars.items():
+        if char in tex_string:
+            print(f"Replacing {char} with {latex_cmd}")  # Debug print
+            tex_string = tex_string.replace(char, latex_cmd)
+    print(f"Processed tex_string: {tex_string}")  # Debug print
+
+    # Convert hex color to RGB components
+    if text_color.startswith('#'):
+        try:
+            r = int(text_color[1:3], 16) / 255
+            g = int(text_color[3:5], 16) / 255
+            b = int(text_color[5:7], 16) / 255
+            latex_color = f"{r:.3f},{g:.3f},{b:.3f}"
+        except ValueError as e:
+            latex_color = "1,1,1"
+    else:
+        latex_color = "1,1,1"
+
+    # Create a temporary directory for our latex files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        
+        # Create the LaTeX document
+        if is_display_math:
+            latex_doc = r"""
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\pagestyle{empty}
+\begin{document}
+\color[rgb]{%s}
+\[\displaystyle %s\]
+\end{document}
+""" % (latex_color, tex_string)
+        else:
+            latex_doc = r"""
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\pagestyle{empty}
+\begin{document}
+\color[rgb]{%s}
+\(%s\)
+\end{document}
+""" % (latex_color, tex_string)
+
+        print(f"Generated LaTeX document:\n{latex_doc}")  # Debug print
+
+        # Write the LaTeX document
+        tex_file = tmp_path / "equation.tex"
+        tex_file.write_text(latex_doc)
+
+        try:
+            # Run latex to create DVI
+            result = subprocess.run(['latex', '-interaction=nonstopmode', str(tex_file)], 
+                         cwd=tmpdir, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"LaTeX Error Output:\n{result.stdout}")
+                print(f"LaTeX Error Details:\n{result.stderr}")
+                # Write the error log to a file for inspection
+                with open('latex_error.log', 'w') as f:
+                    f.write(f"LaTeX Document:\n{latex_doc}\n\n")
+                    f.write(f"Stdout:\n{result.stdout}\n\n")
+                    f.write(f"Stderr:\n{result.stderr}")
+                return None
+
+            # Convert DVI to PNG
+            dvi_file = tmp_path / "equation.dvi"
+            png_file = tmp_path / "equation.png"
+            result = subprocess.run(['dvipng', '-D', '300', '-T', 'tight', '-bg', 'Transparent',
+                          str(dvi_file), '-o', str(png_file)],
+                         cwd=tmpdir, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"dvipng Error Output:\n{result.stdout}")
+                print(f"dvipng Error Details:\n{result.stderr}")
+                return None
+
+            # Read the PNG data
+            return png_file.read_bytes()
+        except subprocess.CalledProcessError as e:
+            print(f"Error converting TeX to PNG: {e}")
+            print(f"Error details:\n{e.stdout}\n{e.stderr}")
+            return None
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            return None
+
+def process_tex_markup(text, text_color="white"):
+    """Process text for TeX expressions and convert them to images."""
+    import re
+    
+    # Process display math first \[...\]
+    def replace_display_math(match):
+        math_content = match.group(1)
+        print(f"Display math content: {math_content}")  # Debug print
+        png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color)
+        if png_data:
+            temp_dir = Path(tempfile.gettempdir())
+            temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
+            temp_file.write_bytes(png_data)
+            return f'<img src="{temp_file}"/>\n'
+        return match.group(0)  # Return original if conversion fails
+    
+    # Process inline math \(...\)
+    def replace_inline_math(match):
+        math_content = match.group(1)
+        png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color)
+        if png_data:
+            temp_dir = Path(tempfile.gettempdir())
+            temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
+            temp_file.write_bytes(png_data)
+            return f'<img src="{temp_file}"/>'
+        return match.group(0)  # Return original if conversion fails
+
+    # Replace display math first - using non-greedy match and handling escaped brackets
+    text = re.sub(r'\\\[(.*?)\\\]', replace_display_math, text, flags=re.DOTALL)
+    
+    # Then replace inline math
+    text = re.sub(r'\\\((.*?)\\\)', replace_inline_math, text)
+    
+    return text
 
 def process_inline_markup(text):
     """
@@ -1045,8 +1202,6 @@ def process_inline_markup(text):
         context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         bg_color = context.get_background_color(Gtk.StateFlags.SELECTED).to_string()
         fg_color = context.get_color(Gtk.StateFlags.SELECTED).to_string()
-        bg_color = fix_rgb_colors_in_markup(bg_color)
-        fg_color = fix_rgb_colors_in_markup(fg_color)
     except Exception:
         pass  # Use fallback colors if we can't get theme colors
     
@@ -1067,26 +1222,6 @@ def process_inline_markup(text):
             # Escape the non-code parts
             processed_parts.append(GLib.markup_escape_text(part))
     return "".join(processed_parts)
-
-def fix_rgb_colors_in_markup(text: str) -> str:
-    """
-    Convert any occurrences of 'rgb(R, G, B)' in the string to '#RRGGBB'.
-    This does not attempt to parse attribute names or validate usage,
-    it just replaces the pattern wherever it appears.
-    """
-    if not text:
-        return text
-
-    # Regex to match rgb(...) anywhere in the string
-    pattern = re.compile(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)')
-
-    def replacer(match):
-        r = int(match.group(1))
-        g = int(match.group(2))
-        b = int(match.group(3))
-        return f'#{r:02X}{g:02X}{b:02X}'  # uppercase hex
-
-    return pattern.sub(replacer, text)
 
 def main():
     win = OpenAIGTKClient()

@@ -23,3 +23,5 @@ research pandoc
 re learn regex
 
 4 hash markup not handled ####
+
+investigate gtk textview
