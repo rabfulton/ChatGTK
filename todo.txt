@@ -1,0 +1,8 @@
+code blocks should detect the language which is printed as the first line of the code, consider making a header bar containing the language and buttons to copy the code or edit it.
+
+When bullet points are used , if text flows to the next line indent as appropriate
+
+Don't hang app at startup while downloading models list.
+
+Don't crash if key not detected
+

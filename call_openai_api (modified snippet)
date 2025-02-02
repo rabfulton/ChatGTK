@@ -1,0 +1,43 @@
+def call_openai_api(self, api_key, model):
+    OpenAI.api_key = api_key
+    try:
+        # Option 1: Append an empty AI message widget for live updating
+        ai_label = Gtk.Label()
+        ai_label.set_selectable(True)
+        ai_label.set_line_wrap(True)
+        ai_label.set_line_wrap_mode(Gtk.WrapMode.WORD)
+        ai_label.set_xalign(0)
+        css_ai = f"label {{ color: {self.ai_color}; font-family: {self.font_family}; font-size: {self.font_size}pt; }}"
+        self.apply_css(ai_label, css_ai)
+        ai_label.set_markup(f"{self.ai_name}: ")
+        self.conversation_box.pack_start(ai_label, False, False, 0)
+        self.conversation_box.show_all()
+        
+        # Use streaming response to update the label
+        full_text = ""
+        stream = client.chat.completions.create(
+            model=model,
+            messages=self.conversation_history,
+            temperature=float(self.temperament),
+            stream=True  # Enable streaming mode
+        )
+        for chunk in stream:
+            token = chunk.choices[0].delta.get("content", "")
+            full_text += token
+            # For performance, you might want to throttle updates
+            GLib.idle_add(ai_label.set_text, f"{self.ai_name}: {full_text}")
+        
+        # Finalize the response: append to history and format if needed
+        self.conversation_history.append({"role": "assistant", "content": full_text})
+    except Exception as e:
+        GLib.idle_add(self.append_message, 'ai', f"** Error: {str(e)} **") 
+
+def convert_inline_code(text):
+    # Convert inline code from `code` to a markup version
+    return re.sub(r'`([^`]+)`', r'<tt>\1</tt>', text) 
+
+def format_response(text):
+    text = format_code_blocks(text)
+    text = format_bullet_points(text)
+    text = convert_inline_code(text)  # New inline code formatting
+    return text 

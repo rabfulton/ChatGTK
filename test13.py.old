@@ -584,14 +584,32 @@ class OpenAIGTKClient(Gtk.Window):
         # Calculate button size based on font size
         button_size = self.font_size * 2
         
-        # Set fixed size and don't expand
+        # Create and apply CSS before setting other properties
+        css_button = f"""
+            button {{
+                padding: 0;
+                min-height: {button_size}px;
+                min-width: {button_size}px;
+            }}
+        """
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(css_button.encode())
+        btn_speak.get_style_context().add_provider(
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        
+        # Set fixed size using GTK properties
         btn_speak.set_size_request(button_size, button_size)
         
-        # Create images for play and stop icons
-        icon_play = Gtk.Image.new_from_icon_name("media-playback-start", Gtk.IconSize.SMALL_TOOLBAR)
-        icon_stop = Gtk.Image.new_from_icon_name("media-playback-stop", Gtk.IconSize.SMALL_TOOLBAR)
-        btn_speak.set_image(icon_play)
+        # Set button properties after CSS
         btn_speak.set_tooltip_text("Play response")
+        
+        # Create images for play and stop icons, sized appropriately
+        icon_size = Gtk.IconSize.SMALL_TOOLBAR
+        icon_play = Gtk.Image.new_from_icon_name("media-playback-start", icon_size)
+        icon_stop = Gtk.Image.new_from_icon_name("media-playback-stop", icon_size)
+        btn_speak.set_image(icon_play)
 
         # Store the full text for TTS (excluding code blocks)
         full_text = []
@@ -688,7 +706,7 @@ class OpenAIGTKClient(Gtk.Window):
                 btn_speak.set_tooltip_text("Stop playback")
                 
                 def speak_thread():
-                    nonlocal is_playing, cleanup_thread
+                    nonlocal cleanup_thread
                     try:
                         # Create a temporary file for the speech
                         temp_dir = Path(tempfile.gettempdir())
@@ -745,9 +763,9 @@ class OpenAIGTKClient(Gtk.Window):
         # Connect the button click handler
         btn_speak.connect("clicked", on_speak_clicked)
         
-        # Pack everything into the response container (only once!)
+        # Pack everything into the response container
         response_container.pack_start(content_container, True, True, 0)
-        response_container.pack_end(btn_speak, False, False, 0)
+        response_container.pack_start(btn_speak, False, False, 0)
         
         self.conversation_box.pack_start(response_container, False, False, 0)
         self.conversation_box.show_all()
