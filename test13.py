@@ -19,6 +19,7 @@ from latex_utils import (
     cleanup_temp_files, 
     is_latex_installed
 )
+from utils import load_settings, save_settings
 
 from openai import OpenAI
 client = OpenAI()
@@ -65,18 +66,19 @@ def convert_double_asterisks_to_bold(text):
 
 
 def convert_h3_to_large(text, base_font_size):
-    # Lines starting with ### are section titles we want to remove ### and increase font size by 2
-    # Pango markup uses size in 1000s of a point, so e.g. 14 pt = 14000.
-    # We'll do (base_font_size + 2) * 1000. multiline so we handle lines.
+    """Convert markdown headers to large text with appropriate sizing."""
     h3_size = (base_font_size + 2) * 1000
-
-    # Pattern will match lines that start with ### (optionally trailing spaces) and capture the rest
+    h4_size = (base_font_size + 1) * 1000
+    
+    # Convert h3 headers (###)
     pattern = r'^###\s+(.*)$'
-    replacement = fr"<span size='{h3_size}'><b>\1</b></span>"
-
-    # Removing extraneous newline
-    text = text.lstrip()
-    return re.sub(pattern, replacement, text, flags=re.MULTILINE)
+    text = re.sub(pattern, fr"<span size='{h3_size}'><b>\1</b></span>", text, flags=re.MULTILINE)
+    
+    # Convert h4 headers (####)
+    pattern = r'^####\s+(.*)$'
+    text = re.sub(pattern, fr"<span size='{h4_size}'><b>\1</b></span>", text, flags=re.MULTILINE)
+    
+    return text
 
 def format_response(text):
     # 1. Format code blocks
@@ -85,52 +87,6 @@ def format_response(text):
     text = format_bullet_points(text)
     # We do not convert asterisks or ### here because we need to handle code blocks separately.
     return text
-
-def load_settings():
-    """Load settings from the SETTINGS_FILE if it exists, returning a dict of key-value pairs."""
-    settings = {
-        'AI_NAME': 'Sheila',
-        'FONT_FAMILY': 'Sans',
-        'FONT_SIZE': '12',
-        'USER_COLOR': '#0000FF',
-        'AI_COLOR': '#008000',
-        'DEFAULT_MODEL': 'gpt-4o-mini',  # user-specified default
-        'WINDOW_WIDTH': '900',
-        'WINDOW_HEIGHT': '750',
-        # New setting for system message
-        'SYSTEM_MESSAGE': 'You are a helpful assistant named Sheila.',
-        # New setting for temperature (we'll call it TEMPERAMENT)
-        'TEMPERAMENT': '0.7',
-        'MICROPHONE': 'default',  # New setting for microphone
-        'TTS_VOICE': 'alloy'  # New setting for TTS voice
-    }
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    # Expect format KEY=VALUE
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip().upper()
-                        value = value.strip()
-                        if key in settings:
-                            settings[key] = value
-        except Exception as e:
-            print("Error loading settings:", e)
-    return settings
-
-def save_settings(settings_dict):
-    """Save the settings dictionary to the SETTINGS_FILE in a simple key=value format."""
-    try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            f.write("# Application settings\n")
-            for key, value in settings_dict.items():
-                f.write(f"{key}={value}\n")
-    except Exception as e:
-        print("Error saving settings:", e)
 
 class SettingsDialog(Gtk.Dialog):
     def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice):

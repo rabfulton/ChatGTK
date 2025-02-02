@@ -25,3 +25,5 @@ re learn regex
 4 hash markup not handled ####
 
 investigate gtk textview
+
+** text ** not working in latex sections
