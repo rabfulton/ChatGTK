@@ -826,6 +826,9 @@ class OpenAIGTKClient(Gtk.Window):
     def record_audio(self, duration=5, sample_rate=16000):
         """Record audio for specified duration."""
         try:
+            # Force use of PulseAudio
+            os.environ['AUDIODEV'] = 'pulse'  # Force use of PulseAudio
+            
             # Find the device index for the selected microphone
             devices = sd.query_devices()
             device_idx = None
@@ -846,13 +849,6 @@ class OpenAIGTKClient(Gtk.Window):
             else:
                 supported_sample_rate = 16000  # fallback
             
-            try:
-                # Try to set the audio backend to 'pulse' if available
-                sd.default.backend = 'pulse'
-            except:
-                # If pulse isn't available, we'll use the default backend
-                pass
-
             # Record audio
             recording = sd.rec(
                 int(duration * supported_sample_rate),
@@ -889,8 +885,13 @@ class OpenAIGTKClient(Gtk.Window):
                         temp_dir = Path(tempfile.gettempdir())
                         temp_file = temp_dir / "voice_input.wav"
                         
-                        # Record audio
-                        recording, sample_rate = self.record_audio()
+                        # Set a timeout for recording (e.g., 30 seconds)
+                        recording = None
+                        try:
+                            recording, sample_rate = self.record_audio()
+                        except Exception as e:
+                            GLib.idle_add(self.append_message, 'ai', f"Recording failed: {str(e)}")
+                            return
                         
                         # Only proceed if recording was successful
                         if recording is not None and sample_rate is not None:
@@ -907,7 +908,8 @@ class OpenAIGTKClient(Gtk.Window):
                                     with open(temp_file, "rb") as audio_file:
                                         transcript = client.audio.transcriptions.create(
                                             model="whisper-1", 
-                                            file=audio_file
+                                            file=audio_file,
+                                            timeout=20  # Add timeout for API call
                                         )
                                         
                                     # Add transcribed text to input
