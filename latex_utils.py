@@ -140,6 +140,7 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white"):
 
 def process_tex_markup(text, text_color="white"):
     """Process text for TeX expressions and convert them to images."""
+    # Process display math first \[...\]
     def replace_display_math(match):
         math_content = match.group(1)
         png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color)
@@ -158,7 +159,7 @@ def process_tex_markup(text, text_color="white"):
             temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
             temp_file.write_bytes(png_data)
             return f'<img src="{temp_file}"/>'
-        return match.group(0)
+        return match.group(0)  # Return original if conversion fails
 
     # 1) Replace display math of the form \[ ... \]
     text = re.sub(
