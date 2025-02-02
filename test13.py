@@ -103,7 +103,7 @@ class SettingsDialog(Gtk.Dialog):
         self.default_model = default_model
         self.system_message = system_message
         self.temperament = temperament
-        self.current_microphone = microphone  # Store current microphone
+        self.current_microphone = microphone
         self.tts_voice = tts_voice
 
         box = self.get_content_area()
@@ -235,18 +235,6 @@ class SettingsDialog(Gtk.Dialog):
         hbox_tts.pack_start(self.combo_tts, True, True, 0)
         hbox_tts.pack_start(self.btn_preview, False, False, 0)
         vbox.pack_start(hbox_tts, False, False, 0)
-
-        # Create horizontal box for buttons
-        button_box = Gtk.Box(spacing=6)
-        vbox_main.pack_start(button_box, False, False, 0)
-
-        # Add voice button to horizontal box
-        button_box.pack_start(self.btn_voice, True, True, 0)
-
-        # Add history button to the same horizontal box
-        self.history_button = Gtk.Button(label="Clear History")
-        self.history_button.connect("clicked", self.on_clear_clicked)
-        button_box.pack_start(self.history_button, True, True, 0)
 
         # Buttons
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
