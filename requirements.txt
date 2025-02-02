@@ -1,0 +1,17 @@
+# Python packages
+openai>=1.0.0
+PyGObject>=3.42.0
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+pathlib>=1.0.1
+
+# System packages required (install via package manager):
+# sudo apt-get install:
+# - python3-gi
+# - gir1.2-gtk-3.0
+# - gir1.2-gtksource-4
+# - pulseaudio
+# - mpg123
+# - texlive (for LaTeX support)
+# - dvipng (for LaTeX rendering) 

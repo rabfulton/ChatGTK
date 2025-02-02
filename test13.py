@@ -358,15 +358,19 @@ class OpenAIGTKClient(Gtk.Window):
         hbox_top.pack_start(lbl_api, False, False, 0)
         hbox_top.pack_start(self.entry_api, True, True, 0)
 
-        # Model selection drop-down
-        lbl_model = Gtk.Label(label="Model:")
+        # Initialize model combo with defaults and fetch full list async
         self.combo_model = Gtk.ComboBoxText()
+        default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
+        for model in default_models:
+            self.combo_model.append_text(model)
+        if self.default_model in default_models:
+            self.combo_model.set_active(default_models.index(self.default_model))
+        else:
+            self.combo_model.set_active(0)
+        hbox_top.pack_start(self.combo_model, False, False, 0)
 
-        hbox_top.pack_start(lbl_model, False, False, 0)
-        hbox_top.pack_start(self.combo_model, True, True, 0)
-
-        # Populate model list from OpenAI or fallback
-        self.populate_model_list(env_api_key)
+        # Start async fetch of full model list
+        self.fetch_models_async()
 
         # Settings button
         btn_settings = Gtk.Button(label="Settings")
@@ -442,40 +446,36 @@ class OpenAIGTKClient(Gtk.Window):
             self.current_geometry = (width, height)
         return False
 
-    def populate_model_list(self, env_api_key):
-        """Retrieve models from OpenAI if possible, otherwise fallback to built-in. Then set the default model."""
+    def update_model_list(self, models):
+        """Update the model combo box with fetched models."""
+        # Clear existing items
         self.combo_model.remove_all()
-        models_added = []
-        try:
-            if env_api_key:
-                OpenAI.api_key = env_api_key
-                model_list = client.models.list()
-                for m in model_list.data:
-                    model_id = m.id
-                    if "gpt" in model_id:
-                        self.combo_model.append_text(model_id)
-                        models_added.append(model_id)
-            else:
-                # If no env var, fallback to manual
-                fallback_models = ["gpt-3.5-turbo", "gpt-4o-mini"]
-                for fm in fallback_models:
-                    self.combo_model.append_text(fm)
-                    models_added.append(fm)
-        except Exception as e:
-            print("Error retrieving models from API:", e)
-            fallback_models = ["gpt-3.5-turbo", "gpt-4o-mini"]
-            for fm in fallback_models:
-                self.combo_model.append_text(fm)
-                models_added.append(fm)
-
-        # Attempt to set default model if it's in the list, else set to 0
-        if self.default_model in models_added:
-            idx = models_added.index(self.default_model)
-            self.combo_model.set_active(idx)
+        # Add new models
+        for model in models:
+            self.combo_model.append_text(model)
+        # Set default model
+        if self.default_model in models:
+            self.combo_model.set_active(models.index(self.default_model))
         else:
-            self.combo_model.append_text(self.default_model)
-            models_added.append(self.default_model)
-            self.combo_model.set_active(len(models_added) - 1)
+            self.combo_model.set_active(0)
+        return False
+
+    def fetch_models_async(self):
+        """Fetch available models asynchronously."""
+        def fetch_thread():
+            try:
+                models = client.models.list()
+                model_names = [model.id for model in models]
+                # Update GUI from main thread
+                GLib.idle_add(self.update_model_list, model_names)
+            except Exception as e:
+                print(f"Error fetching models: {e}")
+                # If fetch fails, ensure we have some default models
+                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
+                GLib.idle_add(self.update_model_list, default_models)
+
+        # Start fetch in background
+        threading.Thread(target=fetch_thread, daemon=True).start()
 
     def on_open_settings(self, widget):
         dialog = SettingsDialog(
@@ -506,7 +506,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.tts_voice = new_settings['tts_voice']
 
             # Re-populate model list so default can be enforced
-            self.populate_model_list(os.environ.get('OPENAI_KEY'))
+            self.fetch_models_async()
 
             # Save to file
             to_save = load_settings()
