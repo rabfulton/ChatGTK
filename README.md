@@ -11,6 +11,8 @@ pip install -r requirements.txt
 ```
 
 ## Usage
+The application looks for an enviroment variable: $OPENAI_API_KEY
+
 ```bash
 python3 ./ChatGTK.py
 ```

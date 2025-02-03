@@ -22,7 +22,9 @@ from latex_utils import (
 from utils import load_settings, save_settings
 
 from openai import OpenAI
-client = OpenAI()
+
+# Initialize client as None
+client = None
 
 gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
@@ -345,32 +347,34 @@ class OpenAIGTKClient(Gtk.Window):
         # Top row: API Key, Model, Settings
         hbox_top = Gtk.Box(spacing=6)
 
-        # API Key input
+        # API Key input with focus-out handler
         lbl_api = Gtk.Label(label="API Key:")
         self.entry_api = Gtk.Entry()
         self.entry_api.set_visibility(False)  # Hide API key text
+        self.entry_api.connect("focus-out-event", self.on_api_key_changed)
 
-        # Check for API key in environment variable and pre-populate if exists.
-        env_api_key = os.environ.get('OPENAI_KEY')
+        # Initialize model combo before trying to use it
+        self.combo_model = Gtk.ComboBoxText()
+        
+        # Check for API key in environment variable and pre-populate if exists
+        env_api_key = os.environ.get('OPENAI_API_KEY', '')
+        default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
         if env_api_key:
             self.entry_api.set_text(env_api_key)
+            self.fetch_models_async()
+        else:
+            # Set some default models without fetching
+            for model in default_models:
+                self.combo_model.append_text(model)
+            if self.default_model in default_models:
+                self.combo_model.set_active(default_models.index(self.default_model))
+            else:
+                self.combo_model.set_active(0)
 
         hbox_top.pack_start(lbl_api, False, False, 0)
         hbox_top.pack_start(self.entry_api, True, True, 0)
 
-        # Initialize model combo with defaults and fetch full list async
-        self.combo_model = Gtk.ComboBoxText()
-        default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
-        for model in default_models:
-            self.combo_model.append_text(model)
-        if self.default_model in default_models:
-            self.combo_model.set_active(default_models.index(self.default_model))
-        else:
-            self.combo_model.set_active(0)
         hbox_top.pack_start(self.combo_model, False, False, 0)
-
-        # Start async fetch of full model list
-        self.fetch_models_async()
 
         # Settings button
         btn_settings = Gtk.Button(label="Settings")
@@ -463,6 +467,12 @@ class OpenAIGTKClient(Gtk.Window):
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
         def fetch_thread():
+            global client
+            if not client:
+                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
+                GLib.idle_add(self.update_model_list, default_models)
+                return
+
             try:
                 models = client.models.list()
                 model_names = [model.id for model in models]
@@ -471,7 +481,7 @@ class OpenAIGTKClient(Gtk.Window):
             except Exception as e:
                 print(f"Error fetching models: {e}")
                 # If fetch fails, ensure we have some default models
-                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
+                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
                 GLib.idle_add(self.update_model_list, default_models)
 
         # Start fetch in background
@@ -803,7 +813,11 @@ class OpenAIGTKClient(Gtk.Window):
         ).start()
 
     def call_openai_api(self, api_key, model):
-        OpenAI.api_key = api_key
+        global client
+        if not client:
+            self.append_message('ai', "** Error: Please enter your API key. **")
+            return
+            
         try:
             # Use the entire conversation so far
             response = client.chat.completions.create(
@@ -981,6 +995,15 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_history = [
             {"role": "system", "content": self.system_message}
         ]
+
+    def on_api_key_changed(self, widget, event):
+        """Handle API key changes and update model list if needed."""
+        global client
+        api_key = self.entry_api.get_text().strip()
+        if api_key:  # Only update if we have a key
+            client = OpenAI(api_key=api_key)
+            self.fetch_models_async()
+        return False
 
 def rgb_to_hex(rgb_str):
     """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""
