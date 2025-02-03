@@ -303,7 +303,7 @@ class SettingsDialog(Gtk.Dialog):
 
 class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
-        super().__init__(title="Sheila GTK Client")
+        super().__init__(title="ChatGTK Client")
 
         # Load settings from file or use defaults
         loaded = load_settings()
