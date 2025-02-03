@@ -1,7 +1,19 @@
-#ChatGTK - OpenAI Chat Client
+# ChatGTK - OpenAI Chat Client
 
 A GTK-based Linux desktop client for OpenAI's API, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini).
+
 Disclaimer: Written entirely by AI, I accept no resposibility for what happens to your computer if you choose to run this code!
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+```bash
+python3 ./ChatGTK.py
+```
 
 ## Features
 
@@ -15,14 +27,14 @@ Disclaimer: Written entirely by AI, I accept no resposibility for what happens t
 
 ## Screenshots
 
-![Code Feature](screenshots/syntax_highlight.jpg)
 *Syntax highlighting*
+![Code Feature](screenshots/syntax_highlight.jpg)
 
-![Formulae Feature](screenshots/formula.jpg)
 *Support for Equations*
+![Formulae Feature](screenshots/formula.jpg)
 
-![Settings Dialog](screenshots/settings.jpg)
 *Settings Dialog*
+![Settings Dialog](screenshots/settings.jpg)
 
 ## Python Packages
 - openai>=1.0.0
@@ -33,7 +45,6 @@ Disclaimer: Written entirely by AI, I accept no resposibility for what happens t
 - pathlib>=1.0.1
 
 ## System Dependencies
-
 - python3
 - gtk-3.0
 - gtksourceview4
