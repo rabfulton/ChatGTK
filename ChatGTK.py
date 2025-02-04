@@ -898,11 +898,17 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Schedule scroll to the AI response after it's shown
         def scroll_to_response():
-            adj = self.conversation_box.get_parent().get_vadjustment()
-            # Get the position of the response container
-            alloc = response_container.get_allocation()
-            # Scroll to show the start of the response
-            adj.set_value(alloc.y)
+            # Find the ScrolledWindow by traversing up the widget hierarchy
+            widget = self.conversation_box
+            while widget and not isinstance(widget, Gtk.ScrolledWindow):
+                widget = widget.get_parent()
+            
+            if widget:  # We found the ScrolledWindow
+                adj = widget.get_vadjustment()
+                # Get the position of the response container
+                alloc = response_container.get_allocation()
+                # Scroll to show the start of the response
+                adj.set_value(alloc.y)
             return False
         
         GLib.idle_add(scroll_to_response)
@@ -1345,8 +1351,14 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_box.show_all()
         
         def scroll_to_bottom():
-            adj = self.conversation_box.get_parent().get_vadjustment()
-            adj.set_value(adj.get_upper() - adj.get_page_size())
+            # Find the ScrolledWindow by traversing up the widget hierarchy
+            widget = self.conversation_box
+            while widget and not isinstance(widget, Gtk.ScrolledWindow):
+                widget = widget.get_parent()
+            
+            if widget:  # We found the ScrolledWindow
+                adj = widget.get_vadjustment()
+                adj.set_value(adj.get_upper() - adj.get_page_size())
             return False  # Don't repeat
         
         # Schedule scroll after the thinking label is shown
