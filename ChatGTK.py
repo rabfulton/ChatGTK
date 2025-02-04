@@ -1207,13 +1207,16 @@ class OpenAIGTKClient(Gtk.Window):
 
     def save_current_chat(self):
         """Save the current chat if needed and refresh history list."""
-        # Only save if:
-        # 1. We have more than just the system message
-        # 2. This is a new chat (current_chat_id is None)
-        if len(self.conversation_history) > 1 and self.current_chat_id is None:
-            chat_name = generate_chat_name(self.conversation_history[1]['content'])
+        if len(self.conversation_history) > 1:  # More than just the system message
+            if self.current_chat_id is None:
+                # New chat - generate name and save
+                chat_name = generate_chat_name(self.conversation_history[1]['content'])
+                self.current_chat_id = chat_name
+            else:
+                # Existing chat - use current ID
+                chat_name = self.current_chat_id
+                
             save_chat_history(chat_name, self.conversation_history)
-            self.current_chat_id = chat_name
             self.refresh_history_list()
 
 def rgb_to_hex(rgb_str):
