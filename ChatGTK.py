@@ -635,6 +635,52 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_box.pack_start(lbl, False, False, 0)
         self.conversation_box.show_all()
 
+    def create_source_view(self, code_content, code_lang):
+        """Create a styled source view for code display."""
+        source_view = GtkSource.View.new()
+        
+        # Apply styling
+        css_provider = Gtk.CssProvider()
+        css = f"""
+            textview {{
+                font-family: Monospace;
+                font-size: {self.font_size}pt;
+            }}
+        """
+        css_provider.load_from_data(css.encode())
+        source_view.get_style_context().add_provider(
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        
+        # Configure view settings
+        source_view.set_editable(False)
+        source_view.set_wrap_mode(Gtk.WrapMode.NONE)
+        source_view.set_highlight_current_line(False)
+        source_view.set_show_line_numbers(False)
+        
+        # Set up buffer with language and style
+        buffer = source_view.get_buffer()
+        lang_manager = GtkSource.LanguageManager.get_default()
+        if code_lang in lang_manager.get_language_ids():
+            lang = lang_manager.get_language(code_lang)
+        else:
+            lang = None
+            
+        scheme_manager = GtkSource.StyleSchemeManager.get_default()
+        style_scheme = scheme_manager.get_scheme("solarized-dark")
+        
+        buffer.set_language(lang)
+        buffer.set_highlight_syntax(True)
+        buffer.set_style_scheme(style_scheme)
+        buffer.set_text(code_content)
+        buffer.set_highlight_matching_brackets(False)
+        
+        # Set size request
+        source_view.set_size_request(-1, 100)
+        
+        return source_view
+
     def append_ai_message(self, text):
         """Add an AI message with possible code blocks using GtkSourceView for syntax highlighting."""
         # Container for the entire AI response (including play/stop button)
@@ -677,7 +723,6 @@ class OpenAIGTKClient(Gtk.Window):
 
         for seg in segments:
             if seg.startswith('--- Code Block Start ('):
-                # Example: --- Code Block Start (python) ---some code--- Code Block End ---
                 # Extract language from parentheses
                 lang_match = re.search(r'^--- Code Block Start \((.*?)\) ---', seg)
                 if lang_match:
@@ -690,46 +735,11 @@ class OpenAIGTKClient(Gtk.Window):
                 code_content = re.sub(r'--- Code Block End ---$', '', code_content)
                 code_content = code_content.strip('\n')
 
-                # Create a GtkSourceView for syntax highlighting
-                source_view = GtkSource.View.new()
-                css_provider = Gtk.CssProvider()
-                css = f"""
-                    textview {{
-                        font-family: Monospace;
-                        font-size: {self.font_size}pt;
-                    }}
-                """
-                css_provider.load_from_data(css.encode())
-                source_view.get_style_context().add_provider(
-                    css_provider,
-                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-                )
-                source_view.set_editable(False)
-                source_view.set_wrap_mode(Gtk.WrapMode.NONE)
-                source_view.set_highlight_current_line(False)
-                # Attempt to load the language definition
-                lang_manager = GtkSource.LanguageManager.get_default()
-                if code_lang in lang_manager.get_language_ids():
-                    lang = lang_manager.get_language(code_lang)
-                else:
-                    # fallback
-                    lang = None
-
-                scheme_manager = GtkSource.StyleSchemeManager.get_default()
-                style_scheme = scheme_manager.get_scheme("solarized-dark")
-                buffer = source_view.get_buffer()
-                buffer.set_language(lang)
-                buffer.set_highlight_syntax(True)
-                buffer.set_style_scheme(style_scheme)
-                buffer.set_text(code_content)
-                buffer.set_highlight_matching_brackets(False)
-
-                # Make it a bit smaller so it doesn't expand too large.
-                source_view.set_size_request(-1, 100)
-
+                # Create source view using the new function
+                source_view = self.create_source_view(code_content, code_lang)
+                
                 frame = Gtk.Frame()
                 frame.add(source_view)
-
                 content_container.pack_start(frame, False, False, 5)
                 
                 # Add a note about code block for TTS
