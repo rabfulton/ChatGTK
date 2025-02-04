@@ -37,7 +37,7 @@ gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GLib, Pango, GtkSource, GdkPixbuf
+from gi.repository import Gtk, GLib, Pango, GtkSource 
 
 # Path to settings file (in same directory as this script)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
