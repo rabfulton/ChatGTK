@@ -98,7 +98,7 @@ def format_response(text):
     return text
 
 class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice):
+    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 600)  # Made taller to accommodate all content
@@ -114,6 +114,7 @@ class SettingsDialog(Gtk.Dialog):
         self.temperament = temperament
         self.current_microphone = microphone
         self.tts_voice = tts_voice
+        self.max_tokens = max_tokens
 
         # Get the content area
         box = self.get_content_area()
@@ -279,6 +280,20 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
 
+        # Max Tokens
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Max Tokens (0 = no limit)", xalign=0)
+        label.set_hexpand(True)
+        self.spin_max_tokens = Gtk.SpinButton()
+        self.spin_max_tokens.set_range(0, 32000)  # OpenAI's maximum is 32k for some models
+        self.spin_max_tokens.set_increments(100, 1000)
+        self.spin_max_tokens.set_value(float(self.max_tokens))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_max_tokens, False, True, 0)
+        list_box.add(row)
+
         # System Message (moved to end)
         row = Gtk.ListBoxRow()
         row.set_activatable(False)  # Disable row activation
@@ -407,7 +422,8 @@ class SettingsDialog(Gtk.Dialog):
             'system_message': system_message,
             'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
-            'tts_voice': self.combo_tts.get_active_text()
+            'tts_voice': self.combo_tts.get_active_text(),
+            'max_tokens': int(self.spin_max_tokens.get_value())
         }
 
 class OpenAIGTKClient(Gtk.Window):
@@ -436,6 +452,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.microphone = loaded['MICROPHONE']
         self.tts_voice = loaded['TTS_VOICE']
         self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
+        self.max_tokens = int(loaded.get('MAX_TOKENS', '0'))
         
         self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
 
@@ -633,6 +650,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['TTS_VOICE'] = self.tts_voice
         to_save['SIDEBAR_WIDTH'] = str(self.current_sidebar_width)
         to_save['SIDEBAR_VISIBLE'] = str(self.sidebar_visible)
+        to_save['MAX_TOKENS'] = str(self.max_tokens)
         save_settings(to_save)
         cleanup_temp_files()
         Gtk.main_quit()
@@ -693,7 +711,8 @@ class OpenAIGTKClient(Gtk.Window):
             system_message=self.system_message,
             temperament=self.temperament,
             microphone=self.microphone,
-            tts_voice=self.tts_voice
+            tts_voice=self.tts_voice,
+            max_tokens=self.max_tokens
         )
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
@@ -708,6 +727,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.temperament = new_settings['temperament']
             self.microphone = new_settings['microphone']
             self.tts_voice = new_settings['tts_voice']
+            self.max_tokens = new_settings['max_tokens']
 
             # Re-populate model list so default can be enforced
             self.fetch_models_async()
@@ -724,6 +744,7 @@ class OpenAIGTKClient(Gtk.Window):
             to_save['TEMPERAMENT'] = str(self.temperament)
             to_save['MICROPHONE'] = self.microphone
             to_save['TTS_VOICE'] = self.tts_voice
+            to_save['MAX_TOKENS'] = str(self.max_tokens)
             save_settings(to_save)
         dialog.destroy()
 
@@ -1108,30 +1129,44 @@ class OpenAIGTKClient(Gtk.Window):
                     prompt = self.conversation_history[-1]["content"]
                     answer = self.call_dalle_api(prompt)
                 case _:
+                    # Print debug info
+                    print("\nAPI Call Debug Info:")
+                    print(f"Model: {model}")
+                    print(f"Temperature: {self.temperament} (type: {type(self.temperament)})")
+                    print(f"Max Tokens: {self.max_tokens}")
+                    print("Messages:")
+                    for msg in self.conversation_history:
+                        print(f"  {msg['role']}: {msg['content'][:50]}...")
+                    
+                    # Prepare API parameters
+                    params = {
+                        'model': model,
+                        'messages': self.conversation_history,
+                        'temperature': float(self.temperament)
+                    }
+                    
+                    # Add max_tokens only if it's not zero
+                    if self.max_tokens > 0:
+                        params['max_tokens'] = self.max_tokens
+                    
                     # Regular chat completion
-                    response = client.chat.completions.create(
-                        model=model,
-                        temperature=float(self.temperament),
-                        messages=self.conversation_history
-                    )
+                    response = client.chat.completions.create(**params)
                     answer = response.choices[0].message.content
 
             self.conversation_history.append({"role": "assistant", "content": answer})
 
             # Update UI in main thread
-            def update_ui():
-                self.hide_thinking_animation()
-                answer_formatted = format_response(answer)
-                self.append_message('ai', answer_formatted)
-                self.save_current_chat()
-            
-            GLib.idle_add(update_ui)
+            GLib.idle_add(self.hide_thinking_animation)
+            GLib.idle_add(lambda: self.append_message('ai', format_response(answer)))
+            GLib.idle_add(self.save_current_chat)
             
         except Exception as error:
-            def show_error(error_msg):
-                self.hide_thinking_animation()
-                self.append_message('ai', f"** Error: {error_msg} **")
-            GLib.idle_add(show_error, str(error))
+            print(f"\nAPI Call Error: {error}")
+            GLib.idle_add(self.hide_thinking_animation)
+            GLib.idle_add(lambda: self.append_message('ai', f"** Error: {str(error)} **"))
+            
+        finally:
+            GLib.idle_add(self.hide_thinking_animation)
 
     def record_audio(self, duration=5, sample_rate=16000):
         """Record audio for specified duration."""

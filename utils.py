@@ -27,6 +27,7 @@ DEFAULT_SETTINGS = {
     'TTS_VOICE': 'alloy',  # New setting for TTS voice
     'SIDEBAR_WIDTH': '200',
     'SIDEBAR_VISIBLE': 'True',  # Add this new setting
+    'MAX_TOKENS': '0',  # Add default max_tokens setting (0 = no limit)
 }
 
 def load_settings():
