@@ -19,7 +19,14 @@ from latex_utils import (
     cleanup_temp_files, 
     is_latex_installed
 )
-from utils import load_settings, save_settings
+from utils import (
+    load_settings, 
+    save_settings, 
+    generate_chat_name, 
+    save_chat_history, 
+    load_chat_history,
+    list_chat_histories
+)
 
 from openai import OpenAI
 
@@ -307,7 +314,7 @@ class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
         super().__init__(title="ChatGTK Client")
 
-        # Load settings from file or use defaults
+        # Load settings
         loaded = load_settings()
         self.ai_name = loaded['AI_NAME']
         self.font_family = loaded['FONT_FAMILY']
@@ -321,31 +328,89 @@ class OpenAIGTKClient(Gtk.Window):
         self.temperament = float(loaded['TEMPERAMENT'])
         self.microphone = loaded['MICROPHONE']
         self.tts_voice = loaded['TTS_VOICE']
-        # Start conversation history with the system prompt
+        self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
+        
+        print(f"Loading sidebar state from settings: {loaded.get('SIDEBAR_VISIBLE')}")
+        self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
+        print(f"Parsed sidebar_visible value: {self.sidebar_visible}")
+
+        # Initialize chat state
+        self.current_chat_id = None  # None means this is a new, unsaved chat
         self.conversation_history = [
             {"role": "system", "content": self.system_message}
         ]
+
         # Remember the current geometry if not maximized
         self.current_geometry = (self.window_width, self.window_height)
 
         # Set the initial window size
         self.set_default_size(self.window_width, self.window_height)
 
-        # Connect a configure-event to track resizing
-        self.connect("configure-event", self.on_configure_event)
-        # Connect destroy to handle saving geometry on exit
-        self.connect("destroy", self.on_destroy)
+        # Create main container
+        main_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add(main_hbox)
 
-        # Main container
+        # Create paned container
+        self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        
+        main_hbox.pack_start(self.paned, True, True, 0)
+        # Create sidebar
+        self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.sidebar.set_size_request(200, -1)
+        self.sidebar.set_margin_top(10)
+        self.sidebar.set_margin_bottom(10)
+        self.sidebar.set_margin_start(10)
+        self.sidebar.set_margin_end(10)
+
+        # Add "New Chat" button at the top of sidebar
+        new_chat_button = Gtk.Button(label="New Chat")
+        new_chat_button.connect("clicked", self.on_new_chat_clicked)
+        self.sidebar.pack_start(new_chat_button, False, False, 0)
+
+        # Add scrolled window for history list
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.sidebar.pack_start(scrolled, True, True, 0)
+        
+        # Create list box for chat histories
+        self.history_list = Gtk.ListBox()
+        self.history_list.connect('row-activated', self.on_history_selected)
+        scrolled.add(self.history_list)
+
+        # Pack sidebar into left pane
+        self.paned.pack1(self.sidebar, False, False)
+
+        # Create main content area
         vbox_main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         vbox_main.set_margin_top(10)
         vbox_main.set_margin_bottom(10)
         vbox_main.set_margin_start(10)
         vbox_main.set_margin_end(10)
-        self.add(vbox_main)
+        
+        # Pack main content into right pane
+        self.paned.pack2(vbox_main, True, False)
+
+        # Track sidebar width in memory
+        self.current_sidebar_width = int(loaded.get('SIDEBAR_WIDTH', '200'))
+        self.paned.set_position(self.current_sidebar_width)
+
+        # Update memory value without saving to file
+        def on_paned_position_changed(paned, param):
+            if not self.is_maximized():
+                self.current_sidebar_width = paned.get_position()
+
+        self.paned.connect('notify::position', on_paned_position_changed)
 
         # Top row: API Key, Model, Settings
         hbox_top = Gtk.Box(spacing=6)
+
+        # Add sidebar toggle button to top bar
+        self.sidebar_button = Gtk.Button()
+        self.sidebar_button.set_relief(Gtk.ReliefStyle.NONE)
+        arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.RIGHT, shadow_type=Gtk.ShadowType.NONE)
+        self.sidebar_button.add(arrow)
+        self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
+        hbox_top.pack_start(self.sidebar_button, False, False, 0)
 
         # API Key input with focus-out handler
         lbl_api = Gtk.Label(label="API Key:")
@@ -358,12 +423,14 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Check for API key in environment variable and pre-populate if exists
         env_api_key = os.environ.get('OPENAI_API_KEY', '')
-        default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
         if env_api_key:
+            global client
             self.entry_api.set_text(env_api_key)
+            client = OpenAI(api_key=env_api_key)
             self.fetch_models_async()
         else:
             # Set some default models without fetching
+            default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
             for model in default_models:
                 self.combo_model.append_text(model)
             if self.default_model in default_models:
@@ -400,22 +467,21 @@ class OpenAIGTKClient(Gtk.Window):
         hbox_input = Gtk.Box(spacing=6)
         self.entry_question = Gtk.Entry()
         self.entry_question.set_placeholder_text("Enter your question here...")
-        self.entry_question.connect("activate", self.on_submit)  # Submit on Enter key
+        self.entry_question.connect("activate", self.on_submit)
         btn_send = Gtk.Button(label="Send")
         btn_send.connect("clicked", self.on_submit)
         hbox_input.pack_start(self.entry_question, True, True, 0)
         hbox_input.pack_start(btn_send, False, False, 0)
         vbox_main.pack_start(hbox_input, False, False, 0)
 
+        # Create horizontal box for buttons
+        button_box = Gtk.Box(spacing=6)
+
         # Voice input button with recording state
         self.recording = False
         self.btn_voice = Gtk.Button(label="Start Voice Input")
         self.btn_voice.connect("clicked", self.on_voice_input)
         
-        # Create horizontal box for buttons
-        button_box = Gtk.Box(spacing=6)
-        vbox_main.pack_start(button_box, False, False, 0)
-
         # Add voice button to horizontal box
         button_box.pack_start(self.btn_voice, True, True, 0)
 
@@ -424,21 +490,48 @@ class OpenAIGTKClient(Gtk.Window):
         self.history_button.connect("clicked", self.on_clear_clicked)
         button_box.pack_start(self.history_button, True, True, 0)
 
+        vbox_main.pack_start(button_box, False, False, 0)
+
         # Check LaTeX installation
         if not is_latex_installed():
             print("Warning: LaTeX installation not found. Formula rendering will be disabled.")
 
+        # Show all widgets first
+        self.show_all()
+        
+        # Then force sidebar visibility state
+        if not self.sidebar_visible:
+            print("Hiding sidebar")
+            self.sidebar.hide()
+            self.sidebar.set_visible(False)  # More forceful hide
+            self.sidebar.set_no_show_all(True)  # Prevent show_all from showing it
+        else:
+            print("Showing sidebar")
+            self.sidebar.set_no_show_all(False)
+            self.sidebar.set_visible(True)
+        
+        # Load chat histories
+        self.refresh_history_list()
+
+        # Connect window size handlers
+        self.connect("configure-event", self.on_configure_event)
+        self.connect("destroy", self.on_destroy)
+        
+        print(f"Final sidebar widget visible: {self.sidebar.get_visible()}")
+
     def on_destroy(self, widget):
-        # Save the last known geometry to settings
+        """Save settings and cleanup before closing."""
+        # Save all settings including sidebar width
         to_save = load_settings()
         width, height = self.current_geometry
         to_save['WINDOW_WIDTH'] = str(width)
         to_save['WINDOW_HEIGHT'] = str(height)
         to_save['SYSTEM_MESSAGE'] = self.system_message
-        # Also save temperament
         to_save['TEMPERAMENT'] = str(self.temperament)
         to_save['MICROPHONE'] = self.microphone
         to_save['TTS_VOICE'] = self.tts_voice
+        to_save['SIDEBAR_WIDTH'] = str(self.current_sidebar_width)
+        to_save['SIDEBAR_VISIBLE'] = str(self.sidebar_visible)
         save_settings(to_save)
         cleanup_temp_files()
         Gtk.main_quit()
@@ -606,8 +699,18 @@ class OpenAIGTKClient(Gtk.Window):
 
                 # Create a GtkSourceView for syntax highlighting
                 source_view = GtkSource.View.new()
-                font_desc = Pango.FontDescription(f"Monospace {self.font_size}")
-                source_view.override_font(font_desc)
+                css_provider = Gtk.CssProvider()
+                css = f"""
+                    textview {{
+                        font-family: Monospace;
+                        font-size: {self.font_size}pt;
+                    }}
+                """
+                css_provider.load_from_data(css.encode())
+                source_view.get_style_context().add_provider(
+                    css_provider,
+                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                )
                 source_view.set_editable(False)
                 source_view.set_wrap_mode(Gtk.WrapMode.NONE)
 
@@ -653,8 +756,19 @@ class OpenAIGTKClient(Gtk.Window):
                         text_view.set_left_margin(5)
                         text_view.set_right_margin(5)
                         
-                        # Apply the same font as labels
-                        text_view.override_font(Pango.FontDescription(f"{self.font_family} {self.font_size}"))
+                        # Apply font using CSS instead of override_font
+                        css_provider = Gtk.CssProvider()
+                        css = f"""
+                            textview {{
+                                font-family: {self.font_family};
+                                font-size: {self.font_size}pt;
+                            }}
+                        """
+                        css_provider.load_from_data(css.encode())
+                        text_view.get_style_context().add_provider(
+                            css_provider,
+                            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                        )
                         
                         buffer = text_view.get_buffer()
                         
@@ -813,13 +927,11 @@ class OpenAIGTKClient(Gtk.Window):
         ).start()
 
     def call_openai_api(self, api_key, model):
-        global client
         if not client:
             self.append_message('ai', "** Error: Please enter your API key. **")
             return
             
         try:
-            # Use the entire conversation so far
             response = client.chat.completions.create(
                 model=model,
                 messages=self.conversation_history,
@@ -827,12 +939,12 @@ class OpenAIGTKClient(Gtk.Window):
             )
 
             answer = response.choices[0].message.content
-            # Append AI reply to the conversation history
             self.conversation_history.append({"role": "assistant", "content": answer})
 
-            # Format the response with bullet points and code blocks
+            # Save after each response
+            GLib.idle_add(self.save_current_chat)
+
             answer = format_response(answer)
-            # Update the UI
             GLib.idle_add(self.append_message, 'ai', answer)
         except Exception as e:
             GLib.idle_add(self.append_message, 'ai', f"** Error: {str(e)} **")
@@ -1004,6 +1116,111 @@ class OpenAIGTKClient(Gtk.Window):
             client = OpenAI(api_key=api_key)
             self.fetch_models_async()
         return False
+
+    def on_sidebar_toggle(self, button):
+        """Toggle sidebar visibility."""
+        if self.sidebar_visible:
+            self.sidebar.hide()
+            arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.RIGHT, shadow_type=Gtk.ShadowType.NONE)
+        else:
+            self.sidebar.show()
+            arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.LEFT, shadow_type=Gtk.ShadowType.NONE)
+        
+        # Update button arrow
+        old_arrow = button.get_child()
+        button.remove(old_arrow)
+        button.add(arrow)
+        button.show_all()
+        
+        self.sidebar_visible = not self.sidebar_visible
+
+    def on_new_chat_clicked(self, button):
+        """Start a new chat conversation."""
+        # Clear conversation history
+        self.conversation_history = [
+            {"role": "system", "content": self.system_message}
+        ]
+        
+        # Reset chat ID to indicate this is a new chat
+        self.current_chat_id = None
+        
+        # Clear the conversation display
+        for child in self.conversation_box.get_children():
+            child.destroy()
+        
+        # Refresh the history list
+        self.refresh_history_list()
+
+    def refresh_history_list(self):
+        """Refresh the list of chat histories in the sidebar."""
+        # Clear existing items
+        for child in self.history_list.get_children():
+            self.history_list.remove(child)
+        
+        # Get histories from utils
+        histories = list_chat_histories()
+        
+        for history in histories:
+            row = Gtk.ListBoxRow()
+            # Truncate message to first 40 characters and add ellipsis if needed
+            display_text = history['first_message'][:40]
+            if len(history['first_message']) > 40:
+                display_text += "..."
+            
+            label = Gtk.Label(
+                label=display_text,
+                xalign=0,  # Left align
+                margin=6
+            )
+            label.set_line_wrap(False)  # Prevent wrapping
+            label.set_ellipsize(Pango.EllipsizeMode.END)  # Add ellipsis if text is too long
+            row.add(label)
+            
+            # Store filename in row data
+            row.filename = history['filename']
+            
+            self.history_list.add(row)
+        
+        self.history_list.show_all()
+
+    def on_history_selected(self, listbox, row):
+        """Handle selection of a chat history."""
+        if row is None:
+            return
+        
+        # Save current chat if it's new and has messages
+        if self.current_chat_id is None and len(self.conversation_history) > 1:
+            self.save_current_chat()
+        
+        # Load the selected chat history
+        history = load_chat_history(row.filename)
+        if history:
+            # Update conversation history and chat ID
+            self.conversation_history = history
+            self.current_chat_id = row.filename
+            
+            # Clear and reload chat display
+            for child in self.conversation_box.get_children():
+                child.destroy()
+            
+            # Rebuild conversation display
+            for message in history:
+                if message['role'] != 'system':  # Skip system message
+                    if message['role'] == 'user':
+                        self.append_message('user', message['content'])
+                    elif message['role'] == 'assistant':
+                        self.append_message('ai', message['content'])
+
+    def save_current_chat(self):
+        """Save the current chat if needed and refresh history list."""
+        # Only save if:
+        # 1. We have more than just the system message
+        # 2. This is a new chat (current_chat_id is None)
+        if len(self.conversation_history) > 1 and self.current_chat_id is None:
+            chat_name = generate_chat_name(self.conversation_history[1]['content'])
+            save_chat_history(chat_name, self.conversation_history)
+            self.current_chat_id = chat_name
+            self.refresh_history_list()
 
 def rgb_to_hex(rgb_str):
     """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""
