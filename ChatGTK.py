@@ -930,7 +930,11 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Clear the question input
         self.entry_question.set_text("")
-        # Call OpenAI API in a separate thread so the UI doesn't freeze
+        
+        # Show thinking animation before API call
+        self.show_thinking_animation()
+        
+        # Call OpenAI API in a separate thread
         threading.Thread(
             target=self.call_openai_api,
             args=(api_key, model),
@@ -975,10 +979,6 @@ class OpenAIGTKClient(Gtk.Window):
             return f"Error generating image: {str(e)}"
 
     def call_openai_api(self, api_key, model):
-        if not client:
-            self.append_message('ai', "** Error: Please enter your API key. **")
-            return
-            
         try:
             match model:
                 case "dall-e-3":
@@ -996,14 +996,20 @@ class OpenAIGTKClient(Gtk.Window):
 
             self.conversation_history.append({"role": "assistant", "content": answer})
 
-            # Save after each response
-            GLib.idle_add(self.save_current_chat)
-
-            answer = format_response(answer)
-            GLib.idle_add(self.append_message, 'ai', answer)
+            # Update UI in main thread
+            def update_ui():
+                self.hide_thinking_animation()  # Only place we hide the animation
+                answer_formatted = format_response(answer)
+                self.append_message('ai', answer_formatted)
+                self.save_current_chat()
             
-        except Exception as e:
-            GLib.idle_add(self.append_message, 'ai', f"** Error: {str(e)} **")
+            GLib.idle_add(update_ui)
+            
+        except Exception as error:  # Changed from 'e' to 'error'
+            def show_error(error_msg):  # Pass the error message as parameter
+                self.hide_thinking_animation()
+                self.append_message('ai', f"** Error: {error_msg} **")
+            GLib.idle_add(show_error, str(error))  # Pass the error message
 
     def record_audio(self, duration=5, sample_rate=16000):
         """Record audio for specified duration."""
@@ -1313,6 +1319,57 @@ class OpenAIGTKClient(Gtk.Window):
                 
             save_chat_history(chat_name, self.conversation_history)
             self.refresh_history_list()
+
+    def show_thinking_animation(self):
+        """Show an animated thinking indicator."""
+        # Remove any existing thinking animation first
+        if hasattr(self, 'thinking_label') and self.thinking_label:
+            self.thinking_label.destroy()
+            self.thinking_label = None
+        
+        # Create new thinking label
+        self.thinking_label = Gtk.Label()
+        self.thinking_label.set_markup(f"<span color='{self.ai_color}'>{self.ai_name} is thinking</span>")
+        self.conversation_box.pack_start(self.thinking_label, False, False, 0)
+        self.conversation_box.show_all()
+        
+        def scroll_to_bottom():
+            adj = self.conversation_box.get_parent().get_vadjustment()
+            adj.set_value(adj.get_upper() - adj.get_page_size())
+            return False  # Don't repeat
+        
+        # Schedule scroll after the thinking label is shown
+        GLib.idle_add(scroll_to_bottom)
+        
+        self.thinking_dots = 0
+        
+        def update_dots():
+            if hasattr(self, 'thinking_label') and self.thinking_label:
+                self.thinking_dots = (self.thinking_dots + 1) % 4
+                dots = "." * self.thinking_dots
+                self.thinking_label.set_markup(
+                    f"<span color='{self.ai_color}'>{self.ai_name} is thinking{dots}</span>"
+                )
+                return True  # Continue animation
+            return False  # Stop animation if label is gone
+        
+        # Update every 500ms
+        self.thinking_timer = GLib.timeout_add(500, update_dots)
+
+    def hide_thinking_animation(self):
+        """Remove the thinking animation."""
+        # Only try to remove the timer if it exists
+        if hasattr(self, 'thinking_timer') and self.thinking_timer is not None:
+            try:
+                GLib.source_remove(self.thinking_timer)
+            except:
+                pass
+        self.thinking_timer = None
+        
+        # Remove the label if it exists
+        if hasattr(self, 'thinking_label') and self.thinking_label:
+            self.thinking_label.destroy()
+            self.thinking_label = None
 
 def rgb_to_hex(rgb_str):
     """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""
