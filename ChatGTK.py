@@ -115,94 +115,135 @@ class SettingsDialog(Gtk.Dialog):
         self.current_microphone = microphone
         self.tts_voice = tts_voice
 
+        # Create scrolled window
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         box = self.get_content_area()
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.add(vbox)
+        box.pack_start(scrolled, True, True, 0)
 
-        # AI name
-        hbox_ai_name = Gtk.Box(spacing=6)
-        lbl_ai_name = Gtk.Label(label="AI Name:")
+        # Create list box
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        scrolled.add(list_box)
+
+        # Style the list box
+        list_box.set_margin_top(12)
+        list_box.set_margin_bottom(12)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
+
+        # AI Name
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="AI Name", xalign=0)
+        label.set_hexpand(True)
         self.entry_ai_name = Gtk.Entry()
         self.entry_ai_name.set_text(self.ai_name)
-        hbox_ai_name.pack_start(lbl_ai_name, False, False, 0)
-        hbox_ai_name.pack_start(self.entry_ai_name, True, True, 0)
-        vbox.pack_start(hbox_ai_name, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_ai_name, False, True, 0)
+        list_box.add(row)
 
-        # Font family
-        hbox_font = Gtk.Box(spacing=6)
-        lbl_font = Gtk.Label(label="Font Family:")
+        # Font Family
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Font Family", xalign=0)
+        label.set_hexpand(True)
         self.entry_font = Gtk.Entry()
         self.entry_font.set_text(self.font_family)
-        hbox_font.pack_start(lbl_font, False, False, 0)
-        hbox_font.pack_start(self.entry_font, True, True, 0)
-        vbox.pack_start(hbox_font, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_font, False, True, 0)
+        list_box.add(row)
 
-        # Font size
-        hbox_size = Gtk.Box(spacing=6)
-        lbl_size = Gtk.Label(label="Font Size:")
+        # Font Size
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Font Size", xalign=0)
+        label.set_hexpand(True)
         self.spin_size = Gtk.SpinButton()
         self.spin_size.set_range(6, 72)
         self.spin_size.set_increments(1, 2)
         self.spin_size.set_value(float(self.font_size))
-        hbox_size.pack_start(lbl_size, False, False, 0)
-        hbox_size.pack_start(self.spin_size, True, True, 0)
-        vbox.pack_start(hbox_size, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_size, False, True, 0)
+        list_box.add(row)
 
-        # User color
-        hbox_user_color = Gtk.Box(spacing=6)
-        lbl_user_color = Gtk.Label(label="User Color:")
+        # User Color
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="User Color", xalign=0)
+        label.set_hexpand(True)
         self.entry_user_color = Gtk.Entry()
         self.entry_user_color.set_text(self.user_color)
-        hbox_user_color.pack_start(lbl_user_color, False, False, 0)
-        hbox_user_color.pack_start(self.entry_user_color, True, True, 0)
-        vbox.pack_start(hbox_user_color, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_user_color, False, True, 0)
+        list_box.add(row)
 
-        # AI color
-        hbox_ai_color = Gtk.Box(spacing=6)
-        lbl_ai_color = Gtk.Label(label="AI Color:")
+        # AI Color
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="AI Color", xalign=0)
+        label.set_hexpand(True)
         self.entry_ai_color = Gtk.Entry()
         self.entry_ai_color.set_text(self.ai_color)
-        hbox_ai_color.pack_start(lbl_ai_color, False, False, 0)
-        hbox_ai_color.pack_start(self.entry_ai_color, True, True, 0)
-        vbox.pack_start(hbox_ai_color, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_ai_color, False, True, 0)
+        list_box.add(row)
 
-        # Default model
-        hbox_model = Gtk.Box(spacing=6)
-        lbl_model = Gtk.Label(label="Default Model:")
+        # Default Model
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Default Model", xalign=0)
+        label.set_hexpand(True)
         self.entry_default_model = Gtk.Entry()
         self.entry_default_model.set_text(self.default_model)
-        hbox_model.pack_start(lbl_model, False, False, 0)
-        hbox_model.pack_start(self.entry_default_model, True, True, 0)
-        vbox.pack_start(hbox_model, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_default_model, False, True, 0)
+        list_box.add(row)
 
-        # System message
-        hbox_sys = Gtk.Box(spacing=6)
-        lbl_sys = Gtk.Label(label="System Prompt:")
+        # System Message
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="System Prompt", xalign=0)
+        label.set_hexpand(True)
         self.entry_system_message = Gtk.Entry()
         self.entry_system_message.set_text(self.system_message)
-        hbox_sys.pack_start(lbl_sys, False, False, 0)
-        hbox_sys.pack_start(self.entry_system_message, True, True, 0)
-        vbox.pack_start(hbox_sys, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_system_message, False, True, 0)
+        list_box.add(row)
 
-        # Temperament slider
-        hbox_temp = Gtk.Box(spacing=6)
-        lbl_temp = Gtk.Label(label="Temperament:")
+        # Temperament
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Temperament", xalign=0)
+        label.set_hexpand(True)
         self.scale_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
+        self.scale_temp.set_size_request(200, -1)  # Set a reasonable width for the scale
         self.scale_temp.set_value(float(self.temperament))
-        self.scale_temp.set_digits(2)  # show 2 decimals
-        hbox_temp.pack_start(lbl_temp, False, False, 0)
-        hbox_temp.pack_start(self.scale_temp, True, True, 0)
-        vbox.pack_start(hbox_temp, False, False, 0)
+        self.scale_temp.set_digits(2)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.scale_temp, False, True, 0)
+        list_box.add(row)
 
-        # Microphone selection
-        hbox_mic = Gtk.Box(spacing=6)
-        lbl_mic = Gtk.Label(label="Microphone:")
+        # Microphone
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Microphone", xalign=0)
+        label.set_hexpand(True)
         self.combo_mic = Gtk.ComboBoxText()
         
         # Get list of available microphones
         try:
             devices = sd.query_devices()
-            for i, device in enumerate(devices):
+            for device in devices:
                 if device['max_input_channels'] > 0:  # Only input devices
                     self.combo_mic.append_text(f"{device['name']}")
         except Exception as e:
@@ -216,13 +257,17 @@ class SettingsDialog(Gtk.Dialog):
         else:
             self.combo_mic.set_active(0)
         
-        hbox_mic.pack_start(lbl_mic, False, False, 0)
-        hbox_mic.pack_start(self.combo_mic, True, True, 0)
-        vbox.pack_start(hbox_mic, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_mic, False, True, 0)
+        list_box.add(row)
 
-        # TTS Voice selection
-        hbox_tts = Gtk.Box(spacing=6)
-        lbl_tts = Gtk.Label(label="AI Voice:")
+        # TTS Voice
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="AI Voice", xalign=0)
+        label.set_hexpand(True)
+        voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.combo_tts = Gtk.ComboBoxText()
         
         # Available TTS voices
@@ -237,15 +282,16 @@ class SettingsDialog(Gtk.Dialog):
             self.combo_tts.set_active(0)
         
         # Preview button
-        self.btn_preview = Gtk.Button(label="Preview Voice")
+        self.btn_preview = Gtk.Button(label="Preview")
         self.btn_preview.connect("clicked", self.on_preview_voice)
         
-        hbox_tts.pack_start(lbl_tts, False, False, 0)
-        hbox_tts.pack_start(self.combo_tts, True, True, 0)
-        hbox_tts.pack_start(self.btn_preview, False, False, 0)
-        vbox.pack_start(hbox_tts, False, False, 0)
+        voice_box.pack_start(self.combo_tts, True, True, 0)
+        voice_box.pack_start(self.btn_preview, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(voice_box, False, True, 0)
+        list_box.add(row)
 
-        # Buttons
+        # Add buttons
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
 
