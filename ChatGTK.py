@@ -930,19 +930,40 @@ class OpenAIGTKClient(Gtk.Window):
             daemon=True
         ).start()
 
+    def call_dalle_api(self, prompt):
+        """Handle image generation requests to DALL-E."""
+        try:
+            response = client.images.generate(
+                model="dall-e-3",
+                prompt=prompt,
+                size="1024x1024",
+                quality="standard",
+                n=1,
+            )
+            return response.data[0].url
+        except Exception as e:
+            return f"Error generating image: {str(e)}"
+
     def call_openai_api(self, api_key, model):
         if not client:
             self.append_message('ai', "** Error: Please enter your API key. **")
             return
             
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=self.conversation_history,
-                temperature=float(self.temperament),
-            )
+            match model:
+                case "dall-e-3":
+                    # Get the last user message as the prompt
+                    prompt = self.conversation_history[-1]["content"]
+                    answer = self.call_dalle_api(prompt)
+                case _:
+                    # Regular chat completion
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=self.conversation_history,
+                        temperature=float(self.temperament),
+                    )
+                    answer = response.choices[0].message.content
 
-            answer = response.choices[0].message.content
             self.conversation_history.append({"role": "assistant", "content": answer})
 
             # Save after each response
@@ -950,6 +971,7 @@ class OpenAIGTKClient(Gtk.Window):
 
             answer = format_response(answer)
             GLib.idle_add(self.append_message, 'ai', answer)
+            
         except Exception as e:
             GLib.idle_add(self.append_message, 'ai', f"** Error: {str(e)} **")
 
@@ -1221,6 +1243,16 @@ class OpenAIGTKClient(Gtk.Window):
             self.conversation_history = history
             self.current_chat_id = row.filename
             
+            # Set the model if it was saved with the chat
+            if history and len(history) > 0 and "model" in history[0]:
+                saved_model = history[0]["model"]
+                # Find and set the model in combo box
+                model_store = self.combo_model.get_model()
+                for i in range(len(model_store)):
+                    if model_store[i][0] == saved_model:
+                        self.combo_model.set_active(i)
+                        break
+            
             # Clear and reload chat display
             for child in self.conversation_box.get_children():
                 child.destroy()
@@ -1237,6 +1269,10 @@ class OpenAIGTKClient(Gtk.Window):
     def save_current_chat(self):
         """Save the current chat if needed and refresh history list."""
         if len(self.conversation_history) > 1:  # More than just the system message
+            # Add or update the model in the system message
+            if len(self.conversation_history) > 0:
+                self.conversation_history[0]["model"] = self.combo_model.get_active_text()
+            
             if self.current_chat_id is None:
                 # New chat - generate name and save
                 chat_name = generate_chat_name(self.conversation_history[1]['content'])
