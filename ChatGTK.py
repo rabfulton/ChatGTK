@@ -101,7 +101,7 @@ class SettingsDialog(Gtk.Dialog):
     def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.set_modal(True)
-        self.set_default_size(500, 500)
+        self.set_default_size(500, 600)  # Made taller to accommodate all content
 
         # Store current values
         self.ai_name = ai_name
@@ -115,22 +115,22 @@ class SettingsDialog(Gtk.Dialog):
         self.current_microphone = microphone
         self.tts_voice = tts_voice
 
-        # Create scrolled window
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        # Get the content area
         box = self.get_content_area()
-        box.pack_start(scrolled, True, True, 0)
+        box.set_spacing(6)  # Add some spacing between elements
 
-        # Create list box
+        # Create list box directly (no scrolled window)
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        scrolled.add(list_box)
-
+        
         # Style the list box
         list_box.set_margin_top(12)
         list_box.set_margin_bottom(12)
         list_box.set_margin_start(12)
         list_box.set_margin_end(12)
+
+        # Add list box directly to the content area
+        box.pack_start(list_box, True, True, 0)
 
         # AI Name
         row = Gtk.ListBoxRow()
@@ -206,18 +206,6 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_default_model, False, True, 0)
         list_box.add(row)
 
-        # System Message
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="System Prompt", xalign=0)
-        label.set_hexpand(True)
-        self.entry_system_message = Gtk.Entry()
-        self.entry_system_message.set_text(self.system_message)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_system_message, False, True, 0)
-        list_box.add(row)
-
         # Temperament
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -291,6 +279,65 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
 
+        # System Message (moved to end)
+        row = Gtk.ListBoxRow()
+        row.set_activatable(False)  # Disable row activation
+        row.set_selectable(False)   # Disable row selection
+        
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        row.add(vbox)
+        
+        label = Gtk.Label(label="System Prompt", xalign=0)
+        vbox.pack_start(label, False, False, 0)
+        
+        # Create text view inside a frame for better visual separation
+        frame = Gtk.Frame()
+        frame.set_shadow_type(Gtk.ShadowType.IN)
+        
+        # Create scrolled window specifically for the text view
+        text_scroll = Gtk.ScrolledWindow()
+        text_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        text_scroll.set_size_request(-1, 150)  # Fixed height for the text area
+        
+        self.entry_system_message = Gtk.TextView()
+        self.entry_system_message.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.entry_system_message.set_margin_start(6)
+        self.entry_system_message.set_margin_end(6)
+        self.entry_system_message.set_margin_top(6)
+        self.entry_system_message.set_margin_bottom(6)
+        self.entry_system_message.set_editable(True)
+        self.entry_system_message.set_cursor_visible(True)
+        
+        # Make sure TextView can receive focus and input
+        self.entry_system_message.set_can_focus(True)
+        self.entry_system_message.set_accepts_tab(True)
+        
+        # Make sure parent widgets don't interfere with events
+        text_scroll.set_can_focus(False)
+        frame.set_can_focus(False)
+        vbox.set_can_focus(False)
+        row.set_can_focus(False)
+        
+        # Connect focus events
+        def on_focus_in(widget, event):
+            return False  # Allow focus
+            
+        def on_button_press(widget, event):
+            widget.grab_focus()
+            return False  # Allow event propagation
+            
+        self.entry_system_message.connect("focus-in-event", on_focus_in)
+        self.entry_system_message.connect("button-press-event", on_button_press)
+        
+        # Set the text after configuring the TextView
+        self.entry_system_message.get_buffer().set_text(self.system_message)
+        
+        text_scroll.add(self.entry_system_message)
+        frame.add(text_scroll)
+        vbox.pack_start(frame, True, True, 0)
+        
+        list_box.add(row)
+
         # Add buttons
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
@@ -343,6 +390,13 @@ class SettingsDialog(Gtk.Dialog):
 
     def get_settings(self):
         """Return updated settings from dialog."""
+        buffer = self.entry_system_message.get_buffer()
+        system_message = buffer.get_text(
+            buffer.get_start_iter(),
+            buffer.get_end_iter(),
+            True
+        )
+        
         return {
             'ai_name': self.entry_ai_name.get_text(),
             'font_family': self.entry_font.get_text(),
@@ -350,7 +404,7 @@ class SettingsDialog(Gtk.Dialog):
             'user_color': self.entry_user_color.get_text(),
             'ai_color': self.entry_ai_color.get_text(),
             'default_model': self.entry_default_model.get_text(),
-            'system_message': self.entry_system_message.get_text(),
+            'system_message': system_message,
             'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
             'tts_voice': self.combo_tts.get_active_text()
