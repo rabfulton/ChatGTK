@@ -26,6 +26,7 @@ python3 ./ChatGTK.py
 - LaTeX formula rendering
 - Customizable settings
 - Conversation history management
+- Image generation using Dall-e-3 model
 
 ## Screenshots
 
@@ -38,6 +39,8 @@ python3 ./ChatGTK.py
 *Settings Dialog*
 ![Settings Dialog](screenshots/settings.jpg)
 
+*Image Generation*
+![Image Generation](screenshots/images.jpg)
 
 ## Python Packages
 - openai>=1.0.0

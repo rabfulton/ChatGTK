@@ -940,7 +940,30 @@ class OpenAIGTKClient(Gtk.Window):
                 quality="standard",
                 n=1,
             )
-            return response.data[0].url
+            
+            # Get the image URL
+            image_url = response.data[0].url
+            
+            # Download the image
+            import requests
+            from datetime import datetime
+            
+            # Create images directory if it doesn't exist
+            chat_id = self.current_chat_id or generate_chat_name(prompt)
+            images_dir = Path('history') / chat_id.replace('.json', '') / 'images'
+            images_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate unique filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            image_path = images_dir / f"dalle_{timestamp}.png"
+            
+            # Download and save image
+            response = requests.get(image_url)
+            image_path.write_bytes(response.content)
+            
+            # Return path to saved image
+            return f'<img src="{image_path}"/>'
+            
         except Exception as e:
             return f"Error generating image: {str(e)}"
 
