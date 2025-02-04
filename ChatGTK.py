@@ -706,7 +706,7 @@ class OpenAIGTKClient(Gtk.Window):
                 )
                 source_view.set_editable(False)
                 source_view.set_wrap_mode(Gtk.WrapMode.NONE)
-
+                source_view.set_highlight_current_line(False)
                 # Attempt to load the language definition
                 lang_manager = GtkSource.LanguageManager.get_default()
                 if code_lang in lang_manager.get_language_ids():
@@ -722,6 +722,7 @@ class OpenAIGTKClient(Gtk.Window):
                 buffer.set_highlight_syntax(True)
                 buffer.set_style_scheme(style_scheme)
                 buffer.set_text(code_content)
+                buffer.set_highlight_matching_brackets(False)
 
                 # Make it a bit smaller so it doesn't expand too large.
                 source_view.set_size_request(-1, 100)
