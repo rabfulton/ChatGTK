@@ -1094,12 +1094,33 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             self.append_message('ai', f"Error generating speech: {str(e)}")
 
-    def on_clear_clicked(self, button):
-        """Handle clear chat button click."""
-        # Reset conversation history to just the system message
+    def on_clear_clicked(self, widget):
+        """Clear the current chat and its associated files."""
+        # Clear the display
+        for child in self.conversation_box.get_children():
+            child.destroy()
+            
+        # If this was a saved chat, clean up its files
+        if self.current_chat_id:
+            # Remove formula cache directory
+            chat_dir = Path('history') / self.current_chat_id.replace('.json', '')
+            if chat_dir.exists():
+                import shutil
+                shutil.rmtree(chat_dir)
+            
+            # Remove the chat history file
+            history_file = Path('history') / self.current_chat_id
+            if history_file.exists():
+                history_file.unlink()
+        
+        # Reset conversation state
         self.conversation_history = [
             {"role": "system", "content": self.system_message}
         ]
+        self.current_chat_id = None
+        
+        # Refresh the history list
+        self.refresh_history_list()
 
     def on_api_key_changed(self, widget, event):
         """Handle API key changes and update model list if needed."""
