@@ -1178,9 +1178,6 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_history_selected(self, listbox, row):
         """Handle selection of a chat history."""
-        if row is None:
-            return
-        
         # Save current chat if it's new and has messages
         if self.current_chat_id is None and len(self.conversation_history) > 1:
             self.save_current_chat()
@@ -1196,13 +1193,14 @@ class OpenAIGTKClient(Gtk.Window):
             for child in self.conversation_box.get_children():
                 child.destroy()
             
-            # Rebuild conversation display
+            # Rebuild conversation display with formatting
             for message in history:
                 if message['role'] != 'system':  # Skip system message
                     if message['role'] == 'user':
                         self.append_message('user', message['content'])
                     elif message['role'] == 'assistant':
-                        self.append_message('ai', message['content'])
+                        formatted_content = format_response(message['content'])
+                        self.append_message('ai', formatted_content)
 
     def save_current_chat(self):
         """Save the current chat if needed and refresh history list."""
