@@ -1430,8 +1430,12 @@ def process_inline_markup(text):
             }
         """)
         context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        bg_color = context.get_background_color(Gtk.StateFlags.SELECTED).to_string()
-        fg_color = context.get_color(Gtk.StateFlags.SELECTED).to_string()
+        
+        # Use get_property instead of deprecated get_background_color
+        style = context.get_style()
+        bg_color = style.lookup_color('theme_selected_bg_color')[1].to_string()
+        fg_color = style.lookup_color('theme_selected_fg_color')[1].to_string()
+        
         bg_color = fix_rgb_colors_in_markup(bg_color)
         fg_color = fix_rgb_colors_in_markup(fg_color)
     except Exception:
