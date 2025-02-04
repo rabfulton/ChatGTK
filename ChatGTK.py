@@ -895,6 +895,17 @@ class OpenAIGTKClient(Gtk.Window):
         
         self.conversation_box.pack_start(response_container, False, False, 0)
         self.conversation_box.show_all()
+        
+        # Schedule scroll to the AI response after it's shown
+        def scroll_to_response():
+            adj = self.conversation_box.get_parent().get_vadjustment()
+            # Get the position of the response container
+            alloc = response_container.get_allocation()
+            # Scroll to show the start of the response
+            adj.set_value(alloc.y)
+            return False
+        
+        GLib.idle_add(scroll_to_response)
 
     def apply_css(self, widget, css_string):
         """Apply the provided CSS string to a widget."""
