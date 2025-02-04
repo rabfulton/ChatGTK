@@ -676,7 +676,6 @@ class OpenAIGTKClient(Gtk.Window):
         segments = re.split(r'(--- Code Block Start \(.*?--- Code Block End ---)', text, flags=re.DOTALL)
 
         for seg in segments:
-            #seg = seg.strip("\n")
             if seg.startswith('--- Code Block Start ('):
                 # Example: --- Code Block Start (python) ---some code--- Code Block End ---
                 # Extract language from parentheses
@@ -736,8 +735,8 @@ class OpenAIGTKClient(Gtk.Window):
                 full_text.append("Code block follows.")
             else:
                 if seg.strip():
-                    # Process TeX expressions first
-                    processed = process_tex_markup(seg, self.user_color)
+                    # Process TeX expressions with chat_id
+                    processed = process_tex_markup(seg, self.user_color, self.current_chat_id)
                     
                     if "<img" in processed:
                         # If we have images, use TextView

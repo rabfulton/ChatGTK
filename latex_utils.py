@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import os
 import gi
+import hashlib
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf
 
@@ -76,7 +77,14 @@ SPECIAL_CHARS = {
     '°': r'^{\circ}',
 }
 
-def tex_to_png(tex_string, is_display_math=False, text_color="white"):
+def generate_formula_hash(formula, is_display_math, text_color):
+    """Generate a consistent hash for a formula."""
+    # Create a string combining all relevant parameters
+    hash_string = f"{formula}_{is_display_math}_{text_color}"
+    # Create a consistent hash using SHA-256
+    return hashlib.sha256(hash_string.encode()).hexdigest()[:16]
+
+def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=None):
     """
     Convert a TeX string to PNG using system latex tools.
     
@@ -84,10 +92,25 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white"):
         tex_string (str): The TeX expression to render
         is_display_math (bool): Whether to render as display math
         text_color (str): Color for the rendered formula (hex or name)
+        chat_id (str): Optional chat ID for caching formulas
     
     Returns:
         bytes: PNG image data, or None if conversion fails
     """
+    # Generate a consistent hash for this formula
+    formula_hash = generate_formula_hash(tex_string, is_display_math, text_color)
+    
+    # Check cache first if chat_id is provided
+    if chat_id:
+        # Remove .json extension if present
+        chat_id = chat_id.replace('.json', '')
+        cache_dir = Path('history') / chat_id / 'formula_cache'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"formula_{formula_hash}.png"
+        
+        if cache_file.exists():
+            return cache_file.read_bytes()
+    
     # Replace special characters with their LaTeX equivalents
     for char, latex_cmd in SPECIAL_CHARS.items():
         if char in tex_string:
@@ -134,36 +157,53 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white"):
                 return None
 
             # Read the PNG data
-            return png_file.read_bytes()
+            png_data = png_file.read_bytes()
+            
+            # Save to cache if chat_id is provided
+            if chat_id and png_data:
+                cache_dir = Path('history') / chat_id / 'formula_cache'
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                cache_file = cache_dir / f"formula_{formula_hash}.png"
+                cache_file.write_bytes(png_data)
+            
+            return png_data
         except Exception:
             return None
 
-def process_tex_markup(text, text_color="white"):
+def process_tex_markup(text, text_color="white", chat_id=None):
     """Process text for TeX expressions and convert them to images."""
     # Clean up multiple newlines before processing
     text = re.sub(r'\n\n+', '\n', text)
     
     def replace_display_math(match):
         math_content = match.group(1)
-        png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color)
+        png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color, chat_id=chat_id)
         if png_data:
-            temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
-            temp_file.write_bytes(png_data)
-            # Add newline before and after the formula
-            result = f'\n<img src="{temp_file}"/>'
-            return result
+            if chat_id:
+                clean_chat_id = chat_id.replace('.json', '')
+                formula_hash = generate_formula_hash(math_content, True, text_color)
+                return f'<img src="history/{clean_chat_id}/formula_cache/formula_{formula_hash}.png"/>'
+            else:
+                temp_dir = Path(tempfile.gettempdir())
+                temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
+                temp_file.write_bytes(png_data)
+                return f'<img src="{temp_file}"/>'
         return match.group(0)
 
     def replace_inline_math(match):
         math_content = match.group(1)
-        png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color)
+        png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color, chat_id=chat_id)
         if png_data:
-            temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
-            temp_file.write_bytes(png_data)
-            return f'<img src="{temp_file}"/>'
-        return match.group(0)  # Return original if conversion fails
+            if chat_id:
+                clean_chat_id = chat_id.replace('.json', '')
+                formula_hash = generate_formula_hash(math_content, False, text_color)
+                return f'<img src="history/{clean_chat_id}/formula_cache/formula_{formula_hash}.png"/>'
+            else:
+                temp_dir = Path(tempfile.gettempdir())
+                temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
+                temp_file.write_bytes(png_data)
+                return f'<img src="{temp_file}"/>'
+        return match.group(0)
 
     # Process display math first \[...\]
     text = re.sub(
