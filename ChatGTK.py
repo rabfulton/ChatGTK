@@ -314,6 +314,13 @@ class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
         super().__init__(title="ChatGTK Client")
 
+        # Set window icon
+        try:
+            icon_path = Path(__file__).parent / "icon.png"
+            self.set_icon_from_file(str(icon_path))
+        except Exception as e:
+            print(f"Could not load application icon: {e}")
+
         # Load settings
         loaded = load_settings()
         self.ai_name = loaded['AI_NAME']
