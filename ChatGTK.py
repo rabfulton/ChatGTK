@@ -1097,6 +1097,11 @@ class OpenAIGTKClient(Gtk.Window):
 
     def call_openai_api(self, api_key, model):
         try:
+            # Ensure we have a valid model
+            if not model:
+                model = "gpt-3.5-turbo"  # Default fallback
+                print(f"No model selected, falling back to {model}")
+            
             match model:
                 case "dall-e-3":
                     # Get the last user message as the prompt
@@ -1106,8 +1111,8 @@ class OpenAIGTKClient(Gtk.Window):
                     # Regular chat completion
                     response = client.chat.completions.create(
                         model=model,
-                        messages=self.conversation_history,
                         temperature=float(self.temperament),
+                        messages=self.conversation_history
                     )
                     answer = response.choices[0].message.content
 
@@ -1115,18 +1120,18 @@ class OpenAIGTKClient(Gtk.Window):
 
             # Update UI in main thread
             def update_ui():
-                self.hide_thinking_animation()  # Only place we hide the animation
+                self.hide_thinking_animation()
                 answer_formatted = format_response(answer)
                 self.append_message('ai', answer_formatted)
                 self.save_current_chat()
             
             GLib.idle_add(update_ui)
             
-        except Exception as error:  # Changed from 'e' to 'error'
-            def show_error(error_msg):  # Pass the error message as parameter
+        except Exception as error:
+            def show_error(error_msg):
                 self.hide_thinking_animation()
                 self.append_message('ai', f"** Error: {error_msg} **")
-            GLib.idle_add(show_error, str(error))  # Pass the error message
+            GLib.idle_add(show_error, str(error))
 
     def record_audio(self, duration=5, sample_rate=16000):
         """Record audio for specified duration."""
