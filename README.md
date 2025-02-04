@@ -38,8 +38,6 @@ python3 ./ChatGTK.py
 *Settings Dialog*
 ![Settings Dialog](screenshots/settings.jpg)
 
-*Sidebar With Chat History*
-![Sidebar](screenshots/sidebar.jpg)
 
 ## Python Packages
 - openai>=1.0.0
