@@ -330,9 +330,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.tts_voice = loaded['TTS_VOICE']
         self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
         
-        print(f"Loading sidebar state from settings: {loaded.get('SIDEBAR_VISIBLE')}")
         self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
-        print(f"Parsed sidebar_visible value: {self.sidebar_visible}")
 
         # Initialize chat state
         self.current_chat_id = None  # None means this is a new, unsaved chat
@@ -501,12 +499,10 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Then force sidebar visibility state
         if not self.sidebar_visible:
-            print("Hiding sidebar")
             self.sidebar.hide()
             self.sidebar.set_visible(False)  # More forceful hide
             self.sidebar.set_no_show_all(True)  # Prevent show_all from showing it
         else:
-            print("Showing sidebar")
             self.sidebar.set_no_show_all(False)
             self.sidebar.set_visible(True)
         
@@ -517,8 +513,6 @@ class OpenAIGTKClient(Gtk.Window):
         self.connect("configure-event", self.on_configure_event)
         self.connect("destroy", self.on_destroy)
         
-        print(f"Final sidebar widget visible: {self.sidebar.get_visible()}")
-
     def on_destroy(self, widget):
         """Save settings and cleanup before closing."""
         # Save all settings including sidebar width
