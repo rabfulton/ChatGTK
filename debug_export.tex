@@ -1,0 +1,84 @@
+
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{parskip}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+
+\geometry{margin=1in}
+\definecolor{usercolor}{RGB}{70, 130, 180}    % Steel Blue
+\definecolor{assistantcolor}{RGB}{60, 179, 113}  % Medium Sea Green
+\definecolor{codebg}{RGB}{40, 44, 52}          % Dark background for code
+\definecolor{codetext}{RGB}{171, 178, 191}     % Light text for code
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small\color{codetext},
+    backgroundcolor=\color{codebg},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{codetext},
+    showstringspaces=false,
+    columns=flexible,
+    keepspaces=true,
+    escapeinside={(*@}{@*)},
+    mathescape=false,
+    texcl=false,
+    escapechar=\%,
+    upquote=true,
+    literate={\\}{\\}1 {\ }{ }1,
+    basewidth={0.5em,0.45em},
+    lineskip=-0.1pt,
+    xleftmargin=\dimexpr\fboxsep+1pt\relax,
+    xrightmargin=\dimexpr\fboxsep+1pt\relax,
+    framexleftmargin=\dimexpr\fboxsep+.4pt\relax,
+    resetmargins=true
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Chat Export}
+\lhead{\thepage}
+
+% Set up math mode
+\allowdisplaybreaks
+\setlength{\jot}{10pt}
+
+\begin{document}
+
+\begin{center}
+\Large\textbf{Chat Export - shoe hello world in C, do not explain it.}
+
+\normalsize Generated on 2025-02-05 05:07
+\end{center}
+\bigskip
+
+\noindent{\textbf{\color{usercolor}USER:}}
+
+shoe hello world in C, do not explain it.
+
+\bigskip
+
+
+\noindent{\textbf{\color{assistantcolor}ASSISTANT:}}
+
+
+\begin{lstlisting}[language=c]
+\#include <stdio.h>
+
+int main() {
+    printf("Hello, World!\\n");
+    return 0;
+}
+
+\end{lstlisting}
+
+
+\bigskip
+\end{document}

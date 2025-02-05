@@ -17,7 +17,8 @@ from latex_utils import (
     process_tex_markup, 
     insert_tex_image, 
     cleanup_temp_files, 
-    is_latex_installed
+    is_latex_installed,
+    export_chat_to_pdf
 )
 from utils import (
     load_settings, 
@@ -480,6 +481,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Create list box for chat histories
         self.history_list = Gtk.ListBox()
         self.history_list.connect('row-activated', self.on_history_selected)
+        self.history_list.connect('button-press-event', self.on_history_button_press)
         scrolled.add(self.history_list)
 
         # Pack sidebar into left pane
@@ -1409,6 +1411,108 @@ class OpenAIGTKClient(Gtk.Window):
         if hasattr(self, 'thinking_label') and self.thinking_label:
             self.thinking_label.destroy()
             self.thinking_label = None
+
+    def create_history_context_menu(self, history_row):
+        """Create a context menu for chat history items."""
+        menu = Gtk.Menu()
+        
+        # Export to PDF option
+        export_item = Gtk.MenuItem(label="Export to PDF")
+        export_item.connect("activate", self.on_export_chat, history_row)
+        menu.append(export_item)
+        
+        menu.show_all()
+        menu.popup_at_pointer(None)
+
+    def on_export_chat(self, widget, history_row):
+        """Handle export to PDF action."""
+        # Create file chooser dialog
+        dialog = Gtk.FileChooserDialog(
+            title="Export Chat to PDF",
+            parent=self,
+            action=Gtk.FileChooserAction.SAVE
+        )
+        
+        # Add buttons properly
+        dialog.add_buttons(
+            "Cancel", Gtk.ResponseType.CANCEL,
+            "Save", Gtk.ResponseType.OK
+        )
+        
+        try:
+            # Add PDF file filter
+            pdf_filter = Gtk.FileFilter()
+            pdf_filter.set_name("PDF files")
+            pdf_filter.add_pattern("*.pdf")
+            dialog.add_filter(pdf_filter)
+            
+            # Set default filename from the chat history
+            default_name = f"chat_{history_row.filename.replace('.json', '.pdf')}"
+            dialog.set_current_name(default_name)
+            
+            # Show the dialog
+            response = dialog.run()
+            
+            if response == Gtk.ResponseType.OK:
+                filename = dialog.get_filename()
+                if not filename.endswith('.pdf'):
+                    filename += '.pdf'
+                    
+                # Load the chat history
+                history = load_chat_history(history_row.filename)
+                if history:
+                    # Get the first user message for the title
+                    first_message = next((msg['content'] for msg in history if msg['role'] == 'user'), "Chat Export")
+                    title = f"Chat Export - {first_message[:50]}"
+                    
+                    try:
+                        success = export_chat_to_pdf(history, filename, title)
+                        
+                        if success:
+                            info_dialog = Gtk.MessageDialog(
+                                transient_for=self,
+                                flags=0,
+                                message_type=Gtk.MessageType.INFO,
+                                buttons=Gtk.ButtonsType.OK,
+                                text="Export Successful"
+                            )
+                            info_dialog.format_secondary_text(f"Chat exported to {filename}")
+                            info_dialog.run()
+                            info_dialog.destroy()
+                        else:
+                            error_dialog = Gtk.MessageDialog(
+                                transient_for=self,
+                                flags=0,
+                                message_type=Gtk.MessageType.ERROR,
+                                buttons=Gtk.ButtonsType.OK,
+                                text="Export Failed"
+                            )
+                            error_dialog.format_secondary_text("Failed to export chat to PDF. Please check the logs.")
+                            error_dialog.run()
+                            error_dialog.destroy()
+                    except Exception as e:
+                        error_dialog = Gtk.MessageDialog(
+                            transient_for=self,
+                            flags=0,
+                            message_type=Gtk.MessageType.ERROR,
+                            buttons=Gtk.ButtonsType.OK,
+                            text="Export Error"
+                        )
+                        error_dialog.format_secondary_text(f"Error during export: {str(e)}")
+                        error_dialog.run()
+                        error_dialog.destroy()
+        finally:
+            dialog.destroy()
+
+    def on_history_button_press(self, widget, event):
+        """Handle right-click on history items."""
+        if event.button == 3:  # Right click
+            # Get the row at the clicked position
+            row = widget.get_row_at_y(int(event.y))
+            if row is not None:
+                self.create_history_context_menu(row)
+            return True
+        return False
 
 def main():
     win = OpenAIGTKClient()

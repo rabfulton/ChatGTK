@@ -18,6 +18,8 @@ import hashlib
 from markup_utils import create_source_view
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf
+import shutil
+from datetime import datetime
 
 # Constants for LaTeX templates
 LATEX_DISPLAY_TEMPLATE = r"""
@@ -41,6 +43,45 @@ LATEX_INLINE_TEMPLATE = r"""
 \begin{document}
 \color[rgb]{%s}
 \(%s\)
+\end{document}
+"""
+
+# Constants for PDF export
+CHAT_PDF_TEMPLATE = r"""
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{parskip}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+
+\geometry{margin=1in}
+\definecolor{usercolor}{RGB}{70, 130, 180}    % Steel Blue
+\definecolor{assistantcolor}{RGB}{60, 179, 113}  % Medium Sea Green
+\definecolor{codebg}{RGB}{40, 44, 52}          % Dark background for code
+\definecolor{codetext}{RGB}{171, 178, 191}     % Light text for code
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    basicstyle=\color{codetext}\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{codetext},
+    showstringspaces=false
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Chat Export}
+\lhead{\thepage}
+
+\begin{document}
+%s
 \end{document}
 """
 
@@ -264,4 +305,337 @@ def is_latex_installed():
 
 # Add initialization check at module level
 if not is_latex_installed():
-    print("Warning: LaTeX or dvipng not found. Formula rendering will not work.") 
+    print("Warning: LaTeX or dvipng not found. Formula rendering will not work.")
+
+def escape_latex_text(text):
+    """Escape special LaTeX characters in text."""
+    print(f"DEBUG: Escaping text: {repr(text[:100])}...")
+    
+    # Don't escape if the text is already a LaTeX equation
+    if text.strip().startswith('$') and text.strip().endswith('$'):
+        print("DEBUG: Skipping escape for equation")
+        return text
+    
+    if text.strip().startswith('\\begin{equation*}'):
+        print("DEBUG: Skipping escape for display equation")
+        return text
+
+    escapes = {
+        '\\': r'\textbackslash{}',
+        '&': r'\&',
+        '%': r'\%',
+        '$': r'\$',
+        '#': r'\#',
+        '_': r'\_',
+        '{': r'\{',
+        '}': r'\}',
+        '~': r'\textasciitilde{}',
+        '^': r'\textasciicircum{}',
+    }
+    
+    result = text
+    for char, escape in escapes.items():
+        result = result.replace(char, escape)
+    
+    print(f"DEBUG: Escaped result: {repr(result[:100])}...")
+    return result
+
+def format_code_block(code, language='text'):
+    """Format a code block for LaTeX using listings package."""
+    # Clean up the code to avoid LaTeX special character issues
+    code = code.replace('\\', '\\\\')  # Escape backslashes first
+    code = code.replace('#', '\\#')    # Escape hash symbols
+    return f"""
+\\begin{{lstlisting}}[language={language}]
+{code}
+\\end{{lstlisting}}
+"""
+
+def format_message_content(content):
+    """Format message content, handling both regular text, code blocks, and LaTeX equations."""
+    print("\nDEBUG: === Starting format_message_content ===")
+    print(f"DEBUG: Initial content: {repr(content[:200])}")
+
+    def process_display_math(match):
+        equation = match.group(1).strip()
+        print(f"DEBUG: Processing display math: {repr(equation)}")
+        # Remove extra backslashes and \{\} sequences
+        equation = equation.replace('\\\\', '\\').replace('\\{}', '\\')
+        return f"\n\\begin{{equation*}}\n{equation}\n\\end{{equation*}}\n"
+
+    def process_inline_math(match):
+        equation = match.group(1).strip()
+        print(f"DEBUG: Processing inline math: {repr(equation)}")
+        # Remove extra backslashes and \{\} sequences
+        equation = equation.replace('\\\\', '\\').replace('\\{}', '\\')
+        return f"${equation}$"
+
+    # First handle display math \[...\]
+    display_pattern = r'\\\\?\[(.*?)\\\\?\]'
+    print(f"\nDEBUG: Searching for display math with pattern: {display_pattern}")
+    matches = list(re.finditer(display_pattern, content, re.DOTALL))
+    print(f"DEBUG: Found {len(matches)} display math equations")
+    for i, match in enumerate(matches):
+        print(f"DEBUG: Display math {i + 1}: {repr(match.group(0))}")
+    
+    try:
+        # Process display math
+        content = re.sub(
+            display_pattern,
+            process_display_math,
+            content,
+            flags=re.DOTALL
+        )
+
+        # Then handle inline math \(...\)
+        inline_pattern = r'\\\\?\((.*?)\\\\?\)'
+        print(f"\nDEBUG: Searching for inline math with pattern: {inline_pattern}")
+        matches = list(re.finditer(inline_pattern, content, re.DOTALL))
+        print(f"DEBUG: Found {len(matches)} inline math equations")
+        for i, match in enumerate(matches):
+            print(f"DEBUG: Inline math {i + 1}: {repr(match.group(0))}")
+        
+        # Process inline math
+        content = re.sub(
+            inline_pattern,
+            process_inline_math,
+            content,
+            flags=re.DOTALL
+        )
+
+        print(f"\nDEBUG: Content after equation processing: {repr(content[:200])}")
+
+        # Handle code blocks
+        parts = content.split('```')
+        formatted_parts = []
+        
+        for i, part in enumerate(parts):
+            if i % 2 == 0:  # Regular text
+                if part.strip():
+                    # Don't escape LaTeX content
+                    text_parts = []
+                    current_pos = 0
+                    # Find all LaTeX expressions
+                    latex_pattern = r'(\$.*?\$|\\begin\{equation\*\}.*?\\end\{equation\*\})'
+                    for match in re.finditer(latex_pattern, part, re.DOTALL):
+                        # Add escaped text before the equation
+                        if match.start() > current_pos:
+                            text_parts.append(escape_latex_text(part[current_pos:match.start()]))
+                        # Add the equation unchanged
+                        text_parts.append(match.group(1))
+                        current_pos = match.end()
+                    # Add any remaining text
+                    if current_pos < len(part):
+                        text_parts.append(escape_latex_text(part[current_pos:]))
+                    formatted_parts.append(''.join(text_parts))
+            else:  # Code block
+                lines = part.split('\n', 1)
+                language = lines[0].strip() or 'text'
+                code = lines[1] if len(lines) > 1 else part
+                # Don't escape the code content
+                formatted_parts.append(format_code_block(code, language))
+
+        result = '\n'.join(formatted_parts)
+        print("\nDEBUG: === Final formatted content ===")
+        print(repr(result[:200]))
+        return result
+        
+    except Exception as e:
+        print(f"DEBUG: Error in format_message_content: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+def format_chat_message(message):
+    """Format a single chat message for LaTeX."""
+    role = message["role"].upper()
+    content = format_message_content(message["content"])
+    color = 'usercolor' if role == 'USER' else 'assistantcolor'
+    
+    # Ensure role is properly escaped
+    role = escape_latex_text(role)
+    
+    # Use raw string for LaTeX formatting to avoid string formatting issues
+    return r"""
+\noindent{\textbf{\color{%s}%s:}}
+
+%s
+
+\bigskip
+""" % (color, role, content)
+
+def export_chat_to_pdf(conversation, filename, title=None):
+    """
+    Export a chat conversation to PDF.
+    """
+    try:
+        print("\nDEBUG: === Message Contents ===")
+        for i, msg in enumerate(conversation):
+            print(f"\nDEBUG: Message {i} raw content:")
+            print(repr(msg['content']))
+        # Debug: Print initial parameters
+        print("\nDEBUG: Starting PDF export")
+        print(f"DEBUG: Output filename: {filename}")
+        print(f"DEBUG: Title: {title}")
+        print(f"DEBUG: Number of messages: {len(conversation)}")
+
+        # Format title and date
+        export_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+        title_section = ""
+        if title:
+            escaped_title = escape_latex_text(title)
+            print(f"DEBUG: Escaped title: {escaped_title}")
+            title_section = r"""
+\begin{center}
+\Large\textbf{%s}
+
+\normalsize Generated on %s
+\end{center}
+\bigskip
+""" % (escaped_title, export_date)
+            print("DEBUG: Title section created successfully")
+
+        # Format all messages with debug output
+        messages_content = []
+        for i, message in enumerate(conversation):
+            if message['role'] != 'system':
+                print(f"\nDEBUG: Processing message {i}")
+                print(f"DEBUG: Role: {message['role']}")
+                print(f"DEBUG: Content length: {len(message['content'])}")
+                try:
+                    formatted_message = format_chat_message(message)
+                    print(f"DEBUG: Message {i} formatted successfully")
+                    messages_content.append(formatted_message)
+                except Exception as e:
+                    print(f"DEBUG: Error formatting message {i}: {str(e)}")
+                    raise
+
+        # Debug: Print formatted messages count
+        print(f"\nDEBUG: Total formatted messages: {len(messages_content)}")
+
+        # Combine all content
+        document_content = title_section + "\n".join(messages_content)
+        print("\nDEBUG: Document content created")
+        
+        # Create temporary directory for LaTeX files
+        temp_dir = Path(tempfile.mkdtemp())
+        print(f"DEBUG: Created temp directory: {temp_dir}")
+        
+        try:
+            # Updated LaTeX preamble with better listings settings
+            latex_preamble = r"""
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{parskip}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+
+\geometry{margin=1in}
+\definecolor{usercolor}{RGB}{70, 130, 180}    % Steel Blue
+\definecolor{assistantcolor}{RGB}{60, 179, 113}  % Medium Sea Green
+\definecolor{codebg}{RGB}{40, 44, 52}          % Dark background for code
+\definecolor{codetext}{RGB}{171, 178, 191}     % Light text for code
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small\color{codetext},
+    backgroundcolor=\color{codebg},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{codetext},
+    showstringspaces=false,
+    columns=flexible,
+    keepspaces=true,
+    escapeinside={(*@}{@*)},
+    mathescape=false,
+    texcl=false,
+    escapechar=\%,
+    upquote=true,
+    literate={\\}{\\}1 {\ }{ }1,
+    basewidth={0.5em,0.45em},
+    lineskip=-0.1pt,
+    xleftmargin=\dimexpr\fboxsep+1pt\relax,
+    xrightmargin=\dimexpr\fboxsep+1pt\relax,
+    framexleftmargin=\dimexpr\fboxsep+.4pt\relax,
+    resetmargins=true
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Chat Export}
+\lhead{\thepage}
+
+% Set up math mode
+\allowdisplaybreaks
+\setlength{\jot}{10pt}
+
+\begin{document}
+"""
+            latex_end = r"\end{document}"
+            
+            # Combine document parts
+            full_document = latex_preamble + document_content + latex_end
+            
+            # Debug: Save a copy of the LaTeX content for inspection
+            debug_tex = Path('debug_export.tex')
+            debug_tex.write_text(full_document, encoding='utf-8')
+            print(f"DEBUG: Saved debug LaTeX file to {debug_tex}")
+            
+            # Write the actual LaTeX file
+            tex_file = temp_dir / "chat_export.tex"
+            tex_file.write_text(full_document, encoding='utf-8')
+            print("DEBUG: LaTeX file written successfully")
+            
+            # Run pdflatex with detailed output
+            for i in range(2):
+                print(f"\nDEBUG: Running pdflatex (pass {i+1})")
+                result = subprocess.run(
+                    ['pdflatex', '-interaction=nonstopmode', str(tex_file)],
+                    cwd=temp_dir,
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print("DEBUG: pdflatex error output:")
+                    print(result.stdout)
+                    print(result.stderr)
+                    
+                    # Save the problematic LaTeX file for inspection
+                    debug_file = Path('debug_failed.tex')
+                    debug_file.write_text(full_document, encoding='utf-8')
+                    print(f"DEBUG: Saved failing LaTeX to {debug_file}")
+                    return False
+                    
+                print(f"DEBUG: pdflatex pass {i+1} completed successfully")
+            
+            # Check if PDF was created
+            output_pdf = temp_dir / "chat_export.pdf"
+            if not output_pdf.exists():
+                print("DEBUG: PDF file was not created")
+                return False
+            
+            # Move the file
+            output_path = Path(filename)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(output_pdf), filename)
+            print(f"DEBUG: PDF moved to final location: {filename}")
+            return True
+            
+        finally:
+            # Cleanup temporary files
+            print("\nDEBUG: Cleaning up temporary files")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+    except Exception as e:
+        print(f"DEBUG: Exception in export_chat_to_pdf: {str(e)}")
+        print("DEBUG: Exception type:", type(e))
+        import traceback
+        print("DEBUG: Traceback:")
+        traceback.print_exc()
+        return False 
