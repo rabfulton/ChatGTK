@@ -441,101 +441,194 @@ def clean_latex_commands(text):
     
     return re.sub(pattern, replace_command, text)
 
-def format_message_content(content):
-    """Format message content, handling text, code blocks, LaTeX equations, and images."""
-    print("\nDEBUG: === Starting format_message_content ===")
-    print(f"DEBUG: Initial content: {repr(content[:200])}")
+def format_message_content(content: str) -> str:
+    """
+    Process a message content through markdown-like formatting for LaTeX export.
+    Converts code blocks with triple backticks to raw LaTeX lstlisting blocks,
+    preserving line breaks and avoiding further inline markdown processing.
+    """
+    import re, sys
+
+    # --- Step 1: Tokenize code blocks so that inline processing does not affect them.
+    code_blocks = []
+
+    def codeblock_repl(match):
+        language = match.group(1) or ""
+        code = match.group(2)
+        # Do not alter the code—the newlines and spacing are preserved as-is.
+        # If no language is provided, default to printing as raw LaTeX.
+        if not language:
+            language = "{[LaTeX]TeX}"
+        if language.lower() == 'javascript':
+            language = 'java'
+        # Create a raw LaTeX lstlisting environment.
+        formatted = f"\n\\begin{{lstlisting}}[language={language}]\n{code}\n\\end{{lstlisting}}\n"
+        token = f"@@CODEBLOCK_{len(code_blocks)}@@"
+        code_blocks.append(formatted)
+        return token
+
+    # Process closed code blocks.
+    pattern_closed = r"(?ms)^[ \t]*```(\w+)?\n(.*?)\n[ \t]*```[ \t]*(\n|$)"
+    content = re.sub(pattern_closed, codeblock_repl, content)
+    # Process any unclosed code blocks.
+    pattern_unclosed = r"(?ms)^[ \t]*```(\w+)?\n(.*)$"
+    content = re.sub(pattern_unclosed, codeblock_repl, content)
+
+    # --- Step 2: Process inline math (e.g. convert \( ... \) to $...$)
+    content = re.sub(r"\\\((.*?)\\\)", r'$\1$', content)
+
+    # --- Step 3: Process inline markdown formatting (headers, bold, inline code, etc.)
+    this_mod = sys.modules[__name__]
+    content = this_mod.process_inline_markup(content)
+
+    # --- Step 4: Reinsert our protected code blocks.
+    for i, block in enumerate(code_blocks):
+        content = content.replace(f"@@CODEBLOCK_{i}@@", block)
+
+    # --- Step 5: (Optional) Other processing step for preserving newlines in non-code parts,
+    # if needed, can be done here.
+
+    return content
+
+def escape_latex_inline_code(text):
+    """
+    Escape LaTeX special characters for inline code text.
+    For inline code, we want to preserve backslashes and underscores so that
+    common programming sequences like `\n` or identifiers like `my_var` appear as-is.
+    """
+    # Do not escape backslashes or underscores.
+    replacements = {
+        '&': r'\&',
+        '%': r'\%',
+        '$': r'\$',
+        '#': r'\#',
+        '{': r'\{',
+        '}': r'\}',
+        '~': r'\textasciitilde{}',
+        '^': r'\textasciicircum{}',
+    }
+    for orig, repl in replacements.items():
+        text = text.replace(orig, repl)
+    return text
+
+def maybe_detokenize(code_content: str) -> str:
+    return f'\\detokenize{{{code_content}}}'
+
+def process_inline_markup(text):
+    """
+    Process inline markdown markup and convert it to raw LaTeX.
     
-    # Process headers before any other formatting
-    content = process_headers(content)
+    This function converts:
+      - Inline code (wrapped in backticks) into LaTeX verbatim text using the \verb command.
+      - Headers (lines starting with 1–4 '#' characters) into the corresponding
+        sectioning commands (\section*, \subsection*, etc.).
+      - Bold text (wrapped in **...**) into \textbf{...}
+      - Italic text (wrapped in *...*) into \textit{...}
+      
+    After these conversions, it detects single newline instances in non-protected regions
+    (i.e. outside code blocks, inline code, or headers) and inserts explicit LaTeX forced line breaks.
+    """
+    import re
+
+    # --- Step 1: Tokenize Inline Code using \verb ---
+    inline_code_tokens = []
+    def choose_delim(code_content):
+        # Choose a delimiter that does not appear in the code snippet.
+        candidates = ['|', '!', '/', ':', ';', '@', '#', '$']
+        for d in candidates:
+            if d not in code_content:
+                return d
+        return '|'  # fallback if all candidates appear
+
+    def inline_code_token(match):
+        content = match.group(1)
+        token = f"@@INLINECODE_{len(inline_code_tokens)}@@"
+        # Use a robust alternative to \verb.
+        inline_code_tokens.append(f"\\texttt{{\\detokenize{{{content}}}}}")
+        return token
+
+    text = re.sub(r'`([^`]+)`', inline_code_token, text)
+
+    # --- Step 2: Tokenize Headers ---
+    headers = []
+    def header_repl(match):
+        level = len(match.group(1))
+        title = match.group(2).strip()
+        if level == 1:
+            header_cmd = f"\\section*{{{title}}}"
+        elif level == 2:
+            header_cmd = f"\\subsection*{{{title}}}"
+        elif level == 3:
+            header_cmd = f"\\subsubsection*{{{title}}}"
+        else:
+            header_cmd = f"\\paragraph*{{{title}}}"
+        token = f"@@HEADER_{len(headers)}@@"
+        headers.append(header_cmd)
+        return token
+
+    text = re.sub(r'^(#{1,4})\s*(.+)$', header_repl, text, flags=re.MULTILINE)
+
+    # --- Step 3: Process Bold and Italic Text ---
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\\textbf{\1}', text)
+    text = re.sub(r'\*([^*]+)\*', r'\\textit{\1}', text)
+
+    # --- Step 4: Reinstate Tokenized Inline Code and Headers ---
+    for i, token_val in enumerate(inline_code_tokens):
+        text = text.replace(f"@@INLINECODE_{i}@@", token_val)
+    for i, token_val in enumerate(headers):
+        text = text.replace(f"@@HEADER_{i}@@", token_val)
+
+    # --- Step 5: Insert Forced Newlines in Non-Protected Segments ---
+    text = insert_forced_newlines(text)
+    return text
+
+def insert_forced_newlines(text):
+    """
+    Process the text so that every single (isolated) newline outside of tokens
+    is replaced with an explicit LaTeX forced break (\\), except when:
+      - The line is empty (or only whitespace),
+      - The line begins with a header command (e.g. \section*, \subsection*, etc.),
+      - The line already ends with a forced break, or
+      - The newline is at the end of the chunk (so that a paragraph break is preserved).
     
-    # Process HTML-style image tags
-    content = re.sub(
-        r'<img\s+src="([^"]+)"\s*/?>',
-        process_image_tag,
-        content,
-        flags=re.DOTALL
-    )
-
-    # After content is escaped, replace the markers with actual LaTeX
-    def replace_image_marker(match):
-        path = match.group(1)
-        return r'\begin{center}\includegraphics[max width=\linewidth]{' + path + r'}\end{center}'
-
-    content = re.sub(
-        r'__LATEX_IMAGE__(.+?)__END_LATEX_IMAGE__',
-        replace_image_marker,
-        content
-    )
-
-    def process_display_math(match):
-        equation = match.group(1).strip()
-        print(f"DEBUG: Processing display math: {repr(equation)}")
-        # Remove extra backslashes and \{\} sequences
-        equation = equation.replace('\\\\', '\\').replace('\\{}', '\\')
-        return f"\n\\begin{{equation*}}\n{equation}\n\\end{{equation*}}\n"
-
-    def process_inline_math(match):
-        equation = match.group(1).strip()
-        print(f"DEBUG: Processing inline math: {repr(equation)}")
-        # Remove extra backslashes and \{\} sequences
-        equation = equation.replace('\\\\', '\\').replace('\\{}', '\\')
-        return f"${equation}$"
-
-    # Then handle display math
-    content = re.sub(
-        r'\\\[(.*?)\\\]',
-        process_display_math,
-        content,
-        flags=re.DOTALL
-    )
-
-    # Then handle inline math
-    content = re.sub(
-        r'\\\((.*?)\\\)',
-        process_inline_math,
-        content,
-        flags=re.DOTALL
-    )
-
-    # Handle code blocks
-    parts = content.split('```')
-    formatted_parts = []
+    Tokens (matching @@CODEBLOCK_x@@, @@INLINECODE_x@@, or @@HEADER_x@@) are not modified.
     
-    for i, part in enumerate(parts):
-        if i % 2 == 0:  # Regular text
-            if part.strip():
-                # Don't escape LaTeX content
-                text_parts = []
-                current_pos = 0
-                # Find all LaTeX expressions
-                latex_pattern = r'(\$.*?\$|\\begin\{equation\*\}.*?\\end\{equation\*\})'
-                for match in re.finditer(latex_pattern, part, re.DOTALL):
-                    # Add escaped text before the equation
-                    if match.start() > current_pos:
-                        text_parts.append(escape_latex_text(part[current_pos:match.start()]))
-                    # Add the equation unchanged
-                    text_parts.append(match.group(1))
-                    current_pos = match.end()
-                # Add any remaining text
-                if current_pos < len(part):
-                    text_parts.append(escape_latex_text(part[current_pos:]))
-                formatted_parts.append(''.join(text_parts))
-        else:  # Code block
-            lines = part.split('\n', 1)
-            language = lines[0].strip() or 'text'
-            code = lines[1] if len(lines) > 1 else part
-            # Don't escape the code content
-            formatted_parts.append(format_code_block(code, language))
+    Single newlines (i.e. a newline not immediately preceded or followed by another newline)
+    in non-tokenized text are replaced with "\\\\\n" so that LaTeX forces a line break.
+    """
+    import re
 
-    result = '\n'.join(formatted_parts)
-    
-    # Clean up any remaining incorrectly escaped LaTeX commands
-    result = clean_latex_commands(result)
-    
-    print("\nDEBUG: === Final formatted content ===")
-    print(repr(result[:200]))
-    return result
+    token_pattern = r'(@@(?:CODEBLOCK|INLINECODE|HEADER)_\d+@@)'
+    parts = re.split(token_pattern, text)
+    new_parts = []
+    for part in parts:
+        # Skip processing if this part is a token.
+        if re.fullmatch(token_pattern, part):
+            new_parts.append(part)
+        else:
+            # Process each non-token part line-by-line.
+            lines = part.split('\n')
+            processed_lines = []
+            for i, line in enumerate(lines):
+                # If the line is blank, leave it (results in a paragraph break).
+                if line.strip() == "":
+                    processed_lines.append(line)
+                # If the line starts with a header command, leave it as is.
+                elif re.match(r'^\s*\\(section|subsection|subsubsection|paragraph)\*?\{', line):
+                    processed_lines.append(line)
+                # If the line already ends with a forced break, leave it.
+                elif re.search(r'\\\\\s*$', line):
+                    processed_lines.append(line)
+                else:
+                    # Only insert a forced break if it is not the last line in the chunk
+                    # and the next line is not blank. This prevents inserting \\ at the end
+                    # of a paragraph (which can trigger the error "There's no line here to end.")
+                    if i < len(lines) - 1 and lines[i + 1].strip() != "":
+                        processed_lines.append(line + r"\\")
+                    else:
+                        processed_lines.append(line)
+            new_parts.append("\n".join(processed_lines))
+    return ''.join(new_parts)
 
 def format_chat_message(message):
     """Format a single chat message for LaTeX."""
@@ -611,7 +704,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
         print(f"DEBUG: Created temp directory: {temp_dir}")
         
         try:
-            # Updated LaTeX preamble with textcomp package
+            # Updated LaTeX preamble with textcomp package and robust custom inline code macro
             latex_preamble = r"""
 \documentclass{article}
 \usepackage[utf8]{inputenc}
@@ -625,6 +718,9 @@ def export_chat_to_pdf(conversation, filename, title=None):
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage[hidelinks]{hyperref}
+
+% Define a robust custom macro for inline code using listings' inline code command.
+\DeclareRobustCommand{\inlinecode}[1]{\lstinline!#1!}
 
 % Configure image handling
 \DeclareGraphicsExtensions{.pdf,.png,.jpg,.jpeg}
@@ -734,43 +830,3 @@ def export_chat_to_pdf(conversation, filename, title=None):
         print("DEBUG: Traceback:")
         traceback.print_exc()
         return False 
-
-def process_inline_markup(text):
-    """Process text for inline code and other markup, similar to markup_utils."""
-    # Handle headers first (before other markup)
-    def process_headers(match):
-        level = len(match.group(1))  # Count the number of #
-        title = match.group(2).strip()
-        if level == 1:
-            return f'\\section*{{{title}}}'
-        elif level == 2:
-            return f'\\subsection*{{{title}}}'
-        elif level == 3:
-            return f'\\subsubsection*{{{title}}}'
-        else:
-            return f'\\paragraph*{{{title}}}'
-    
-    # Process headers (match 1-4 #s followed by text)
-    text = re.sub(r'^(#{1,4})\s*(.+?)$', process_headers, text, flags=re.MULTILINE)
-    
-    # Handle bold text with code inside first
-    pattern0 = r'\*\*`([^`]+)`\*\*'
-    text = re.sub(pattern0, lambda m: f'\\textbf{{\\texttt{{{m.group(1)}}}}}', text)
-    
-    # Handle remaining bold text
-    pattern1 = r'\*\*([^*]+?)\*\*'
-    text = re.sub(pattern1, r'\\textbf{\1}', text)
-    
-    # Handle remaining inline code
-    parts = re.split(r'(`[^`]+`)', text)
-    processed_parts = []
-    
-    for part in parts:
-        if part.startswith("`") and part.endswith("`"):
-            # Strip all formatting from code content
-            code_content = part[1:-1].replace('\\', '')  # Remove all backslashes
-            processed_parts.append(f'\\texttt{{{code_content}}}')
-        else:
-            processed_parts.append(part)
-    
-    return "".join(processed_parts) 
