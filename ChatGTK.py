@@ -28,6 +28,13 @@ from utils import (
     list_chat_histories
 )
 from ai_providers import get_ai_provider
+from markup_utils import (
+    format_response,
+    process_inline_markup,
+    create_source_view,
+    escape_for_pango_markup,
+    process_text_formatting
+)
 
 # Initialize provider as None
 ai_provider = None
@@ -40,61 +47,6 @@ from gi.repository import Gtk, GLib, Pango, GtkSource
 
 # Path to settings file (in same directory as this script)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
-
-# Utility functions for response formatting
-
-def format_code_blocks(text):
-    # Updated pattern to capture optional language
-    pattern = r'```(\w+)?(.*?)```'
-
-    def replacer(match):
-        # If the user provided a language after the triple backticks, group(1) will have it.
-        code_lang = match.group(1)
-        # If there's no specified language, default to 'python' or 'plaintext'
-        if code_lang is None:
-            code_lang = "plaintext"
-        code_content = match.group(2).strip()
-        # Replace triple backticks with markers that also store the language
-        return f"--- Code Block Start ({code_lang}) ---" + code_content + "--- Code Block End ---"
-
-    return re.sub(pattern, replacer, text, flags=re.DOTALL)
-
-def format_bullet_points(text):
-    # Replace lines starting with '-' or '*' with a bullet symbol
-    return re.sub(r'^(?:-|\*)\s+', '• ', text, flags=re.MULTILINE)
-
-def escape_for_pango_markup(text):
-    # Escapes markup-sensitive characters for Pango markup
-    return GLib.markup_escape_text(text)
-
-def convert_double_asterisks_to_bold(text):
-    # Convert **bold** to <b>bold</b>
-    pattern = r'\*\*(.*?)\*\*'
-    return re.sub(pattern, r'<b>\1</b>', text, flags=re.DOTALL)
-
-
-def convert_h3_to_large(text, base_font_size):
-    """Convert markdown headers to large text with appropriate sizing."""
-    h3_size = (base_font_size + 2) * 1000
-    h4_size = (base_font_size + 1) * 1000
-    
-    # Convert h3 headers (###)
-    pattern = r'^###\s+(.*)$'
-    text = re.sub(pattern, fr"<span size='{h3_size}'><b>\1</b></span>", text, flags=re.MULTILINE)
-    
-    # Convert h4 headers (####)
-    pattern = r'^####\s+(.*)$'
-    text = re.sub(pattern, fr"<span size='{h4_size}'><b>\1</b></span>", text, flags=re.MULTILINE)
-    
-    return text
-
-def format_response(text):
-    # 1. Format code blocks
-    text = format_code_blocks(text)
-    # 2. Format bullet points
-    text = format_bullet_points(text)
-    # We do not convert asterisks or ### here because we need to handle code blocks separately.
-    return text
 
 class SettingsDialog(Gtk.Dialog):
     def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens):
@@ -762,54 +714,8 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_box.pack_start(lbl, False, False, 0)
         self.conversation_box.show_all()
 
-    def create_source_view(self, code_content, code_lang):
-        """Create a styled source view for code display."""
-        source_view = GtkSource.View.new()
-        
-        # Apply styling
-        css_provider = Gtk.CssProvider()
-        css = f"""
-            textview {{
-                font-family: Monospace;
-                font-size: {self.font_size}pt;
-            }}
-        """
-        css_provider.load_from_data(css.encode())
-        source_view.get_style_context().add_provider(
-            css_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        
-        # Configure view settings
-        source_view.set_editable(False)
-        source_view.set_wrap_mode(Gtk.WrapMode.NONE)
-        source_view.set_highlight_current_line(False)
-        source_view.set_show_line_numbers(False)
-        
-        # Set up buffer with language and style
-        buffer = source_view.get_buffer()
-        lang_manager = GtkSource.LanguageManager.get_default()
-        if code_lang in lang_manager.get_language_ids():
-            lang = lang_manager.get_language(code_lang)
-        else:
-            lang = None
-            
-        scheme_manager = GtkSource.StyleSchemeManager.get_default()
-        style_scheme = scheme_manager.get_scheme("solarized-dark")
-        
-        buffer.set_language(lang)
-        buffer.set_highlight_syntax(True)
-        buffer.set_style_scheme(style_scheme)
-        buffer.set_text(code_content)
-        buffer.set_highlight_matching_brackets(False)
-        
-        # Set size request
-        source_view.set_size_request(-1, 100)
-        
-        return source_view
-
-    def append_ai_message(self, text):
-        """Add an AI message with possible code blocks using GtkSourceView for syntax highlighting."""
+    def append_ai_message(self, message_text):
+        """Append an AI message to the conversation."""
         # Container for the entire AI response (including play/stop button)
         response_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
@@ -845,9 +751,9 @@ class OpenAIGTKClient(Gtk.Window):
         # Store the full text for TTS (excluding code blocks)
         full_text = []
 
-        # We split out code blocks by our markers (including optional language spec):
-        segments = re.split(r'(--- Code Block Start \(.*?--- Code Block End ---)', text, flags=re.DOTALL)
-
+        # Update the split pattern to be more precise
+        segments = re.split(r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---)', message_text, flags=re.DOTALL)
+        
         for seg in segments:
             if seg.startswith('--- Code Block Start ('):
                 # Extract language from parentheses
@@ -863,7 +769,7 @@ class OpenAIGTKClient(Gtk.Window):
                 code_content = code_content.strip('\n')
 
                 # Create source view using the new function
-                source_view = self.create_source_view(code_content, code_lang)
+                source_view = create_source_view(code_content, code_lang, self.font_size)
                 
                 frame = Gtk.Frame()
                 frame.add(source_view)
@@ -913,18 +819,14 @@ class OpenAIGTKClient(Gtk.Window):
                                 img_path = re.search(r'src="([^"]+)"', part).group(1)
                                 insert_tex_image(buffer, iter, img_path)
                             else:
-                                # Process remaining text for other markup
-                                text = process_inline_markup(part)
-                                text = convert_double_asterisks_to_bold(text)
-                                text = convert_h3_to_large(text, self.font_size)
+                                # Use process_text_formatting directly for this case
+                                text = process_text_formatting(part, self.font_size)
                                 buffer.insert_markup(iter, text, -1)
                         
                         content_container.pack_start(text_view, False, False, 0)
                     else:
-                        # No images, use Label as before
-                        processed = process_inline_markup(processed)
-                        processed = convert_double_asterisks_to_bold(processed)
-                        processed = convert_h3_to_large(processed, self.font_size)
+                        # Process all text formatting in one go
+                        processed = process_inline_markup(processed, self.font_size)
                         
                         lbl_ai_text = Gtk.Label()
                         lbl_ai_text.set_selectable(True)
@@ -1471,91 +1373,6 @@ class OpenAIGTKClient(Gtk.Window):
         if hasattr(self, 'thinking_label') and self.thinking_label:
             self.thinking_label.destroy()
             self.thinking_label = None
-
-def rgb_to_hex(rgb_str):
-    """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""
-    try:
-        # Extract the RGB values
-        r, g, b = map(int, rgb_str.strip('rgb()').split(','))
-        # Convert to hex
-        return f'#{r:02x}{g:02x}{b:02x}'
-    except:
-        return '#000000'  # Default to black if conversion fails
-
-def process_inline_markup(text):
-    """
-    Process text for inline code. It splits the text on backticks,
-    escapes non-code parts, and converts backticked parts to styled
-    monospace with theme-appropriate highlighting.
-    """
-    import re
-    
-    # Create a temporary label to get theme colors
-    label = Gtk.Label()
-    context = label.get_style_context()
-    context.add_class('selection')  # This should give us selection colors
-    
-    # Get computed values for the background and foreground
-    bg_color = "#404040"  # Fallback dark gray
-    fg_color = "#ffffff"  # Fallback white
-    
-    try:
-        provider = Gtk.CssProvider()
-        provider.load_from_data(b"""
-            .selection:selected {
-                background-color: @theme_selected_bg_color;
-                color: @theme_selected_fg_color;
-            }
-        """)
-        context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        
-        # Use get_property instead of deprecated get_background_color
-        style = context.get_style()
-        bg_color = style.lookup_color('theme_selected_bg_color')[1].to_string()
-        fg_color = style.lookup_color('theme_selected_fg_color')[1].to_string()
-        
-        bg_color = fix_rgb_colors_in_markup(bg_color)
-        fg_color = fix_rgb_colors_in_markup(fg_color)
-    except Exception:
-        pass  # Use fallback colors if we can't get theme colors
-    
-    # Split the text on inline-code parts. The backticks are preserved.
-    parts = re.split(r'(`[^`]+`)', text)
-    processed_parts = []
-    for part in parts:
-        if part.startswith("`") and part.endswith("`"):
-            # Strip the backticks and escape the code content
-            code_content = part[1:-1]
-            # Style with monospace font and theme colors
-            processed_parts.append(
-                f'<span font_family="monospace" background="{bg_color}" foreground="{fg_color}">' + 
-                GLib.markup_escape_text(code_content) + 
-                '</span>'
-            )
-        else:
-            # Escape the non-code parts
-            processed_parts.append(GLib.markup_escape_text(part))
-    return "".join(processed_parts)
-
-def fix_rgb_colors_in_markup(text: str) -> str:
-    """
-    Convert any occurrences of 'rgb(R, G, B)' in the string to '#RRGGBB'.
-    This does not attempt to parse attribute names or validate usage,
-    it just replaces the pattern wherever it appears.
-    """
-    if not text:
-        return text
-
-    # Regex to match rgb(...) anywhere in the string
-    pattern = re.compile(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)')
-
-    def replacer(match):
-        r = int(match.group(1))
-        g = int(match.group(2))
-        b = int(match.group(3))
-        return f'#{r:02X}{g:02X}{b:02X}'  # uppercase hex
-
-    return pattern.sub(replacer, text)
 
 def main():
     win = OpenAIGTKClient()
