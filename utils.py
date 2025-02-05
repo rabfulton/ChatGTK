@@ -129,8 +129,8 @@ def list_chat_histories():
                         history = json.load(f)
                         # Get first user message for display
                         first_message = next((msg['content'] for msg in history if msg['role'] == 'user'), "Empty chat")
-                        # Get timestamp from filename
-                        timestamp = file.split('_')[0]
+                        # Get timestamp from filename (format: message_YYYYMMDD_HHMMSS.json)
+                        timestamp = file.split('_')[-2] + '_' + file.split('_')[-1].replace('.json', '')
                         histories.append({
                             'filename': file,
                             'first_message': first_message[:50] + '...' if len(first_message) > 50 else first_message,
