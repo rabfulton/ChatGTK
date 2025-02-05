@@ -335,6 +335,9 @@ def escape_latex_text(text):
         '}': r'\}',
         '~': r'\textasciitilde{}',
         '^': r'\textasciicircum{}',
+        '<': r'\textless{}',
+        '>': r'\textgreater{}',
+        '"': "''",  # Changed to use simple quotes instead of \textquotedbl
     }
     
     result = text
@@ -608,7 +611,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
         print(f"DEBUG: Created temp directory: {temp_dir}")
         
         try:
-            # Updated LaTeX preamble with better listings settings
+            # Updated LaTeX preamble with textcomp package
             latex_preamble = r"""
 \documentclass{article}
 \usepackage[utf8]{inputenc}
@@ -620,6 +623,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{graphicx}
+\usepackage{textcomp}
 \usepackage[hidelinks]{hyperref}
 
 % Configure image handling
@@ -763,10 +767,8 @@ def process_inline_markup(text):
     
     for part in parts:
         if part.startswith("`") and part.endswith("`"):
-            code_content = part[1:-1]
-            # Clean up any existing escapes in the code content
-            code_content = code_content.replace('\\#', '#')
-            code_content = code_content.replace('\\textbackslash\\{\\}n', '\\n')
+            # Strip all formatting from code content
+            code_content = part[1:-1].replace('\\', '')  # Remove all backslashes
             processed_parts.append(f'\\texttt{{{code_content}}}')
         else:
             processed_parts.append(part)
