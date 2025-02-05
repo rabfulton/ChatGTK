@@ -59,6 +59,4 @@ python3 ./ChatGTK.py
 - texlive (for LaTeX support)
 - dvipng (for LaTeX rendering)
 
-<a href="https://buymeacoffee.com/rabfulton">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" />
-</a>
+<a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
