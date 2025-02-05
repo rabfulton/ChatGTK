@@ -309,19 +309,15 @@ if not is_latex_installed():
 
 def escape_latex_text(text):
     """Escape special LaTeX characters in text."""
-    print(f"DEBUG: Escaping text: {repr(text[:100])}...")
     
     # Don't escape if the text is already a LaTeX equation
     if text.strip().startswith('$') and text.strip().endswith('$'):
-        print("DEBUG: Skipping escape for equation")
         return text
     
     if text.strip().startswith('\\begin{equation*}'):
-        print("DEBUG: Skipping escape for display equation")
         return text
 
     if text.strip().startswith('\\begin{center}\\includegraphics'):
-        print("DEBUG: Skipping escape for image")
         return text
 
     escapes = {
@@ -344,7 +340,6 @@ def escape_latex_text(text):
     for char, escape in escapes.items():
         result = result.replace(char, escape)
     
-    print(f"DEBUG: Escaped result: {repr(result[:100])}...")
     return result
 
 def format_code_block(code, language='text'):
@@ -401,7 +396,6 @@ def create_latex_image(image_path):
 def process_image_tag(match):
     """Process an image tag and convert it to LaTeX."""
     src = match.group(1)
-    print(f"DEBUG: Processing image src: {src}")
     image_path = process_image_path(src)
     return create_latex_image(image_path)
 
@@ -488,7 +482,9 @@ def format_message_content(content: str) -> str:
     # --- Step 5: Process HTML image tags.
     content = process_html_image_tags(content)
     
-    # --- Step 6: (Optional) Other processing steps.
+    # --- Final Step: Escape stray '#' characters.
+    content = escape_unprotected_hashes(content)
+    
     return content
 
 def escape_latex_inline_code(text):
@@ -652,22 +648,11 @@ def format_chat_message(message):
 def export_chat_to_pdf(conversation, filename, title=None):
     """Export a chat conversation to PDF with image support."""
     try:
-        print("\nDEBUG: === Message Contents ===")
-        for i, msg in enumerate(conversation):
-            print(f"\nDEBUG: Message {i} raw content:")
-            print(repr(msg['content']))
-        # Debug: Print initial parameters
-        print("\nDEBUG: Starting PDF export")
-        print(f"DEBUG: Output filename: {filename}")
-        print(f"DEBUG: Title: {title}")
-        print(f"DEBUG: Number of messages: {len(conversation)}")
-
         # Format title and date
         export_date = datetime.now().strftime("%Y-%m-%d %H:%M")
         title_section = ""
         if title:
             escaped_title = escape_latex_text(title)
-            print(f"DEBUG: Escaped title: {escaped_title}")
             title_section = r"""
 \begin{center}
 \Large\textbf{%s}
@@ -676,33 +661,22 @@ def export_chat_to_pdf(conversation, filename, title=None):
 \end{center}
 \bigskip
 """ % (escaped_title, export_date)
-            print("DEBUG: Title section created successfully")
-
+        # print("DEBUG: Title section created successfully")
         # Format all messages with debug output
         messages_content = []
         for i, message in enumerate(conversation):
             if message['role'] != 'system':
-                print(f"\nDEBUG: Processing message {i}")
-                print(f"DEBUG: Role: {message['role']}")
-                print(f"DEBUG: Content length: {len(message['content'])}")
                 try:
                     formatted_message = format_chat_message(message)
-                    print(f"DEBUG: Message {i} formatted successfully")
                     messages_content.append(formatted_message)
                 except Exception as e:
-                    print(f"DEBUG: Error formatting message {i}: {str(e)}")
                     raise
-
-        # Debug: Print formatted messages count
-        print(f"\nDEBUG: Total formatted messages: {len(messages_content)}")
 
         # Combine all content
         document_content = title_section + "\n".join(messages_content)
-        print("\nDEBUG: Document content created")
         
         # Create temporary directory for LaTeX files
         temp_dir = Path(tempfile.mkdtemp())
-        print(f"DEBUG: Created temp directory: {temp_dir}")
         
         try:
             # Updated LaTeX preamble with textcomp package and robust custom inline code macro
@@ -774,19 +748,12 @@ def export_chat_to_pdf(conversation, filename, title=None):
             # Combine document parts
             full_document = latex_preamble + document_content + latex_end
             
-            # Debug: Save a copy of the LaTeX content for inspection
-            debug_tex = Path('debug_export.tex')
-            debug_tex.write_text(full_document, encoding='utf-8')
-            print(f"DEBUG: Saved debug LaTeX file to {debug_tex}")
-            
             # Write the actual LaTeX file
             tex_file = temp_dir / "chat_export.tex"
             tex_file.write_text(full_document, encoding='utf-8')
-            print("DEBUG: LaTeX file written successfully")
             
             # Run pdflatex with detailed output
             for i in range(2):
-                print(f"\nDEBUG: Running pdflatex (pass {i+1})")
                 result = subprocess.run(
                     ['pdflatex', '-interaction=nonstopmode', str(tex_file)],
                     cwd=temp_dir,
@@ -794,18 +761,12 @@ def export_chat_to_pdf(conversation, filename, title=None):
                     text=True
                 )
                 if result.returncode != 0:
-                    print("DEBUG: pdflatex error output:")
-                    print(result.stdout)
-                    print(result.stderr)
-                    
                     # Save the problematic LaTeX file for inspection
                     debug_file = Path('debug_failed.tex')
                     debug_file.write_text(full_document, encoding='utf-8')
                     print(f"DEBUG: Saved failing LaTeX to {debug_file}")
                     return False
                     
-                print(f"DEBUG: pdflatex pass {i+1} completed successfully")
-            
             # Check if PDF was created
             output_pdf = temp_dir / "chat_export.pdf"
             if not output_pdf.exists():
@@ -816,12 +777,10 @@ def export_chat_to_pdf(conversation, filename, title=None):
             output_path = Path(filename)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(output_pdf), filename)
-            print(f"DEBUG: PDF moved to final location: {filename}")
             return True
             
         finally:
             # Cleanup temporary files
-            print("\nDEBUG: Cleaning up temporary files")
             shutil.rmtree(temp_dir, ignore_errors=True)
             
     except Exception as e:
@@ -852,3 +811,14 @@ def process_html_image_tags(text):
             return r'\textit{[Image unavailable]}'
     # This regex matches an HTML img tag with the src attribute.
     return re.sub(r'<img\s+src="([^"]+)"\s*/?>', replacement, text) 
+
+def escape_unprotected_hashes(text):
+    """
+    Escape any unprotected '#' characters in the text so that they don't trigger
+    a "macro parameter character '#' in horizontal mode" error in LaTeX.
+    
+    This function replaces every instance of '#' that is not already escaped with '\#'.
+    """
+    import re
+    # Replace any '#' that is not preceded by a backslash with '\#'
+    return re.sub(r'(?<!\\)#', r'\\#', text) 
