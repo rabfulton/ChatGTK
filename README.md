@@ -27,6 +27,7 @@ python3 ./ChatGTK.py
 - Customizable settings
 - Conversation history management
 - Image generation using Dall-e-3 model
+- Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
 
 ## Screenshots
 
@@ -57,3 +58,7 @@ python3 ./ChatGTK.py
 - pulseaudio
 - texlive (for LaTeX support)
 - dvipng (for LaTeX rendering)
+
+<a href="https://buymeacoffee.com/rabfulton">
+  <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=rabfulton&button_colour=FFDD00" alt="Buy Me a Coffee" />
+</a>
