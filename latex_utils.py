@@ -346,9 +346,31 @@ def escape_latex_text(text):
 
 def format_code_block(code, language='text'):
     """Format a code block for LaTeX using listings package."""
-    # Clean up the code to avoid LaTeX special character issues
-    code = code.replace('\\', '\\\\')  # Escape backslashes first
-    code = code.replace('#', '\\#')    # Escape hash symbols
+    # Special handling for C code
+    if language.lower() == 'c':
+        # Remove extra backslashes from #include
+        code = re.sub(r'\\#include', '#include', code)
+        # Fix escaped newlines
+        code = re.sub(r'\\\\n', '\\n', code)
+        # Remove any \textbackslash and \{\} sequences
+        code = re.sub(r'\\textbackslash\\\{\\\}n', '\\n', code)
+    else:
+        # Clean up the code to avoid LaTeX special character issues
+        code = code.replace('\\', '\\\\')  # Escape backslashes first
+        code = code.replace('#', '\\#')    # Escape hash symbols
+    
+    # Replace javascript with java for LaTeX compatibility
+    if language.lower() == 'javascript':
+        language = 'java'
+    
+    # For text/plaintext, don't specify a language
+    if language.lower() in ['text', 'plaintext']:
+        return f"""
+\\begin{{lstlisting}}
+{code}
+\\end{{lstlisting}}
+"""
+    
     return f"""
 \\begin{{lstlisting}}[language={language}]
 {code}
