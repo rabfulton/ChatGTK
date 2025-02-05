@@ -485,9 +485,10 @@ def format_message_content(content: str) -> str:
     for i, block in enumerate(code_blocks):
         content = content.replace(f"@@CODEBLOCK_{i}@@", block)
 
-    # --- Step 5: (Optional) Other processing step for preserving newlines in non-code parts,
-    # if needed, can be done here.
-
+    # --- Step 5: Process HTML image tags.
+    content = process_html_image_tags(content)
+    
+    # --- Step 6: (Optional) Other processing steps.
     return content
 
 def escape_latex_inline_code(text):
@@ -830,3 +831,24 @@ def export_chat_to_pdf(conversation, filename, title=None):
         print("DEBUG: Traceback:")
         traceback.print_exc()
         return False 
+
+def process_html_image_tags(text):
+    """
+    Convert HTML <img> tags to LaTeX \includegraphics commands.
+    
+    This function searches the text for HTML image tags (e.g. <img src="..."/>)
+    and converts them into LaTeX image inclusion commands. It uses the process_image_path
+    function (if available) to resolve the full path.
+    """
+    import re
+    def replacement(match):
+        src = match.group(1)
+        # Optionally resolve the image path. If process_image_path returns None,
+        # an "unavailable" notice is inserted.
+        image_path = process_image_path(src)
+        if image_path:
+            return r'\begin{center}\includegraphics[width=\linewidth]{' + image_path + r'}\end{center}'
+        else:
+            return r'\textit{[Image unavailable]}'
+    # This regex matches an HTML img tag with the src attribute.
+    return re.sub(r'<img\s+src="([^"]+)"\s*/?>', replacement, text) 
