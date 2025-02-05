@@ -126,14 +126,6 @@ def process_inline_markup(text, font_size):
     # First, escape any existing markup
     text = escape_for_pango_markup(text)
     
-    # Handle bold text with code inside
-    pattern0 = r'\*\*`([^`]+)`\*\*'
-    text = re.sub(pattern0, r'<b><span font_family="monospace" background="#404040" foreground="#ffffff">\1</span></b>', text)
-    
-    # Handle remaining bold text
-    pattern1 = r'\*\*([^*]+?)\*\*'
-    text = re.sub(pattern1, r'<b>\1</b>', text)
-    
     # Get theme colors for code blocks
     label = Gtk.Label()
     context = label.get_style_context()
@@ -152,14 +144,21 @@ def process_inline_markup(text, font_size):
         """)
         context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         
-        style = context.get_style()
-        bg_color = style.lookup_color('theme_selected_bg_color')[1].to_string()
-        fg_color = style.lookup_color('theme_selected_fg_color')[1].to_string()
-        
+        # Get colors directly from context properties
+        bg_color = context.get_property('background-color', Gtk.StateFlags.SELECTED).to_string()
+        fg_color = context.get_property('color', Gtk.StateFlags.SELECTED).to_string()
         bg_color = fix_rgb_colors_in_markup(bg_color)
         fg_color = fix_rgb_colors_in_markup(fg_color)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error getting theme colors: {e}")
+    
+    # Handle bold text with code inside - use theme colors
+    pattern0 = r'\*\*`([^`]+)`\*\*'
+    text = re.sub(pattern0, lambda m: f'<b><span font_family="monospace" background="{bg_color}" foreground="{fg_color}">{m.group(1)}</span></b>', text)
+    
+    # Handle remaining bold text
+    pattern1 = r'\*\*([^*]+?)\*\*'
+    text = re.sub(pattern1, r'<b>\1</b>', text)
     
     # Handle remaining inline code
     parts = re.split(r'(`[^`]+`)', text)
