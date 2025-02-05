@@ -49,7 +49,7 @@ from gi.repository import Gtk, GLib, Pango, GtkSource
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
 class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens):
+    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens, source_theme):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 600)  # Made taller to accommodate all content
@@ -66,6 +66,7 @@ class SettingsDialog(Gtk.Dialog):
         self.current_microphone = microphone
         self.tts_voice = tts_voice
         self.max_tokens = max_tokens
+        self.source_theme = source_theme
 
         # Get the content area
         box = self.get_content_area()
@@ -245,6 +246,35 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.spin_max_tokens, False, True, 0)
         list_box.add(row)
 
+        # Add theme selector (before System Message)
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Code Theme", xalign=0)
+        label.set_hexpand(True)
+        self.combo_theme = Gtk.ComboBoxText()
+        
+        # Get available themes
+        scheme_manager = GtkSource.StyleSchemeManager.get_default()
+        themes = scheme_manager.get_scheme_ids()
+        
+        # Get current theme from settings
+        settings = load_settings()
+        current_theme = settings.get('SOURCE_THEME', 'solarized-dark')
+        
+        # Add themes to combo box
+        current_idx = 0
+        for idx, theme_id in enumerate(sorted(themes)):
+            self.combo_theme.append_text(theme_id)
+            if theme_id == current_theme:
+                current_idx = idx
+        
+        self.combo_theme.set_active(current_idx)
+        
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_theme, False, True, 0)
+        list_box.add(row)
+
         # System Message (moved to end)
         row = Gtk.ListBoxRow()
         row.set_activatable(False)  # Disable row activation
@@ -374,7 +404,8 @@ class SettingsDialog(Gtk.Dialog):
             'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
             'tts_voice': self.combo_tts.get_active_text(),
-            'max_tokens': int(self.spin_max_tokens.get_value())
+            'max_tokens': int(self.spin_max_tokens.get_value()),
+            'source_theme': self.combo_theme.get_active_text()
         }
 
 class OpenAIGTKClient(Gtk.Window):
@@ -404,6 +435,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.tts_voice = loaded['TTS_VOICE']
         self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
         self.max_tokens = int(loaded.get('MAX_TOKENS', '0'))
+        self.source_theme = loaded.get('SOURCE_THEME', 'solarized-dark')
         
         self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
 
@@ -603,6 +635,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['SIDEBAR_WIDTH'] = str(self.current_sidebar_width)
         to_save['SIDEBAR_VISIBLE'] = str(self.sidebar_visible)
         to_save['MAX_TOKENS'] = str(self.max_tokens)
+        to_save['SOURCE_THEME'] = self.source_theme
         save_settings(to_save)
         cleanup_temp_files()
         Gtk.main_quit()
@@ -663,7 +696,8 @@ class OpenAIGTKClient(Gtk.Window):
             temperament=self.temperament,
             microphone=self.microphone,
             tts_voice=self.tts_voice,
-            max_tokens=self.max_tokens
+            max_tokens=self.max_tokens,
+            source_theme=self.source_theme
         )
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
@@ -679,6 +713,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.microphone = new_settings['microphone']
             self.tts_voice = new_settings['tts_voice']
             self.max_tokens = new_settings['max_tokens']
+            self.source_theme = new_settings['source_theme']
 
             # Re-populate model list so default can be enforced
             self.fetch_models_async()
@@ -696,6 +731,7 @@ class OpenAIGTKClient(Gtk.Window):
             to_save['MICROPHONE'] = self.microphone
             to_save['TTS_VOICE'] = self.tts_voice
             to_save['MAX_TOKENS'] = str(self.max_tokens)
+            to_save['SOURCE_THEME'] = self.source_theme
             save_settings(to_save)
         dialog.destroy()
 
@@ -769,7 +805,7 @@ class OpenAIGTKClient(Gtk.Window):
                 code_content = code_content.strip('\n')
 
                 # Create source view using the new function
-                source_view = create_source_view(code_content, code_lang, self.font_size)
+                source_view = create_source_view(code_content, code_lang, self.font_size, self.source_theme)
                 
                 frame = Gtk.Frame()
                 frame.add(source_view)
@@ -780,7 +816,7 @@ class OpenAIGTKClient(Gtk.Window):
             else:
                 if seg.strip():
                     # Process TeX expressions with chat_id
-                    processed = process_tex_markup(seg, self.user_color, self.current_chat_id)
+                    processed = process_tex_markup(seg, self.user_color, self.current_chat_id, self.source_theme)
                     
                     if "<img" in processed:
                         # If we have images, use TextView

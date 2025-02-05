@@ -15,6 +15,7 @@ import re
 import os
 import gi
 import hashlib
+from markup_utils import create_source_view
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf
 
@@ -170,8 +171,8 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
         except Exception:
             return None
 
-def process_tex_markup(text, text_color="white", chat_id=None):
-    """Process text for TeX expressions and convert them to images."""
+def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark', font_size=12):
+    """Process LaTeX markup in text."""
     # Clean up multiple newlines before processing
     text = re.sub(r'\n\n+', '\n', text)
     
@@ -179,30 +180,20 @@ def process_tex_markup(text, text_color="white", chat_id=None):
         math_content = match.group(1)
         png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color, chat_id=chat_id)
         if png_data:
-            if chat_id:
-                clean_chat_id = chat_id.replace('.json', '')
-                formula_hash = generate_formula_hash(math_content, True, text_color)
-                return f'<img src="history/{clean_chat_id}/formula_cache/formula_{formula_hash}.png"/>'
-            else:
-                temp_dir = Path(tempfile.gettempdir())
-                temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
-                temp_file.write_bytes(png_data)
-                return f'<img src="{temp_file}"/>'
+            temp_dir = Path(tempfile.gettempdir())
+            temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
+            temp_file.write_bytes(png_data)
+            return f'<img src="{temp_file}"/>'
         return match.group(0)
 
     def replace_inline_math(match):
         math_content = match.group(1)
         png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color, chat_id=chat_id)
         if png_data:
-            if chat_id:
-                clean_chat_id = chat_id.replace('.json', '')
-                formula_hash = generate_formula_hash(math_content, False, text_color)
-                return f'<img src="history/{clean_chat_id}/formula_cache/formula_{formula_hash}.png"/>'
-            else:
-                temp_dir = Path(tempfile.gettempdir())
-                temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
-                temp_file.write_bytes(png_data)
-                return f'<img src="{temp_file}"/>'
+            temp_dir = Path(tempfile.gettempdir())
+            temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
+            temp_file.write_bytes(png_data)
+            return f'<img src="{temp_file}"/>'
         return match.group(0)
 
     # Process display math first \[...\]
@@ -219,6 +210,9 @@ def process_tex_markup(text, text_color="white", chat_id=None):
         replace_inline_math,
         text
     )
+
+    # Create source view for LaTeX code
+    source_view = create_source_view(text, "latex", font_size, source_theme)
 
     return text
 

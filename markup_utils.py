@@ -210,7 +210,7 @@ def rgb_to_hex(rgb_str):
     except:
         return '#000000'  # Default to black if conversion fails
 
-def create_source_view(code_content, code_lang, font_size):
+def create_source_view(code_content, code_lang, font_size, source_theme='solarized-dark'):
     """Create a styled source view for code display."""
     source_view = GtkSource.View.new()
     
@@ -243,7 +243,7 @@ def create_source_view(code_content, code_lang, font_size):
         lang = None
         
     scheme_manager = GtkSource.StyleSchemeManager.get_default()
-    style_scheme = scheme_manager.get_scheme("solarized-dark")
+    style_scheme = scheme_manager.get_scheme(source_theme)
     
     buffer.set_language(lang)
     buffer.set_highlight_syntax(True)

@@ -28,6 +28,7 @@ DEFAULT_SETTINGS = {
     'SIDEBAR_WIDTH': '200',
     'SIDEBAR_VISIBLE': 'True',  # Add this new setting
     'MAX_TOKENS': '0',  # Add default max_tokens setting (0 = no limit)
+    'SOURCE_THEME': 'solarized-dark',  # Add default theme setting
 }
 
 def load_settings():
