@@ -27,11 +27,10 @@ from utils import (
     load_chat_history,
     list_chat_histories
 )
+from ai_providers import get_ai_provider
 
-from openai import OpenAI
-
-# Initialize client as None
-client = None
+# Initialize provider as None
+ai_provider = None
 
 gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
@@ -370,7 +369,7 @@ class SettingsDialog(Gtk.Dialog):
             temp_file = temp_dir / "voice_preview.mp3"
             
             # Generate speech with proper streaming
-            with client.audio.speech.with_streaming_response.create(
+            with ai_provider.audio.speech.with_streaming_response.create(
                 model="tts-1",
                 voice=selected_voice,
                 input=preview_text
@@ -546,9 +545,10 @@ class OpenAIGTKClient(Gtk.Window):
         # Check for API key in environment variable and pre-populate if exists
         env_api_key = os.environ.get('OPENAI_API_KEY', '')
         if env_api_key:
-            global client
+            global ai_provider
             self.entry_api.set_text(env_api_key)
-            client = OpenAI(api_key=env_api_key)
+            ai_provider = get_ai_provider('openai')
+            ai_provider.initialize(env_api_key)
             self.fetch_models_async()
         else:
             # Set some default models without fetching
@@ -679,21 +679,20 @@ class OpenAIGTKClient(Gtk.Window):
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
         def fetch_thread():
-            global client
-            if not client:
-                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
+            global ai_provider
+            if not ai_provider:
+                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
                 GLib.idle_add(self.update_model_list, default_models)
                 return
 
             try:
-                models = client.models.list()
-                model_names = [model.id for model in models]
+                model_names = ai_provider.get_available_models()
                 # Update GUI from main thread
                 GLib.idle_add(self.update_model_list, model_names)
             except Exception as e:
                 print(f"Error fetching models: {e}")
                 # If fetch fails, ensure we have some default models
-                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
+                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
                 GLib.idle_add(self.update_model_list, default_models)
 
         # Start fetch in background
@@ -960,7 +959,7 @@ class OpenAIGTKClient(Gtk.Window):
                         temp_file = temp_dir / "ai_speech.mp3"
                         
                         # Generate speech with proper streaming
-                        with client.audio.speech.with_streaming_response.create(
+                        with ai_provider.audio.speech.with_streaming_response.create(
                             model="tts-1",
                             voice=self.tts_voice,
                             input=" ".join(full_text)
@@ -1079,43 +1078,6 @@ class OpenAIGTKClient(Gtk.Window):
             daemon=True
         ).start()
 
-    def call_dalle_api(self, prompt):
-        """Handle image generation requests to DALL-E."""
-        try:
-            response = client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                size="1024x1024",
-                quality="standard",
-                n=1,
-            )
-            
-            # Get the image URL
-            image_url = response.data[0].url
-            
-            # Download the image
-            import requests
-            from datetime import datetime
-            
-            # Create images directory if it doesn't exist
-            chat_id = self.current_chat_id or generate_chat_name(prompt)
-            images_dir = Path('history') / chat_id.replace('.json', '') / 'images'
-            images_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Generate unique filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            image_path = images_dir / f"dalle_{timestamp}.png"
-            
-            # Download and save image
-            response = requests.get(image_url)
-            image_path.write_bytes(response.content)
-            
-            # Return path to saved image
-            return f'<img src="{image_path}"/>'
-            
-        except Exception as e:
-            return f"Error generating image: {str(e)}"
-
     def call_openai_api(self, api_key, model):
         try:
             # Ensure we have a valid model
@@ -1127,22 +1089,14 @@ class OpenAIGTKClient(Gtk.Window):
                 case "dall-e-3":
                     # Get the last user message as the prompt
                     prompt = self.conversation_history[-1]["content"]
-                    answer = self.call_dalle_api(prompt)
+                    answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp")
                 case _:
-                    # Prepare API parameters
-                    params = {
-                        'model': model,
-                        'messages': self.conversation_history,
-                        'temperature': float(self.temperament)
-                    }
-                    
-                    # Add max_tokens only if it's not zero
-                    if self.max_tokens > 0:
-                        params['max_tokens'] = self.max_tokens
-                    
-                    # Regular chat completion
-                    response = client.chat.completions.create(**params)
-                    answer = response.choices[0].message.content
+                    answer = ai_provider.generate_chat_completion(
+                        messages=self.conversation_history,
+                        model=model,
+                        temperature=float(self.temperament),
+                        max_tokens=self.max_tokens if self.max_tokens > 0 else None
+                    )
 
             self.conversation_history.append({"role": "assistant", "content": answer})
 
@@ -1242,14 +1196,10 @@ class OpenAIGTKClient(Gtk.Window):
                                 # Transcribe with Whisper
                                 try:
                                     with open(temp_file, "rb") as audio_file:
-                                        transcript = client.audio.transcriptions.create(
-                                            model="whisper-1", 
-                                            file=audio_file,
-                                            timeout=20  # Add timeout for API call
-                                        )
+                                        transcript = ai_provider.transcribe_audio(audio_file)
                                         
                                     # Add transcribed text to input
-                                    GLib.idle_add(self.entry_question.set_text, transcript.text)
+                                    GLib.idle_add(self.entry_question.set_text, transcript)
                                     
                                 except Exception as e:
                                     GLib.idle_add(self.append_message, 'ai', f"Error transcribing audio: {str(e)}")
@@ -1295,11 +1245,7 @@ class OpenAIGTKClient(Gtk.Window):
             temp_file = temp_dir / "ai_speech.mp3"
             
             # Generate speech
-            response = client.audio.speech.create(
-                model="tts-1",
-                voice=self.tts_voice,
-                input=text
-            )
+            response = ai_provider.generate_speech(text, self.tts_voice)
             
             # Save to file
             response.stream_to_file(temp_file)
@@ -1341,10 +1287,11 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_api_key_changed(self, widget, event):
         """Handle API key changes and update model list if needed."""
-        global client
+        global ai_provider
         api_key = self.entry_api.get_text().strip()
         if api_key:  # Only update if we have a key
-            client = OpenAI(api_key=api_key)
+            ai_provider = get_ai_provider('openai')
+            ai_provider.initialize(api_key)
             self.fetch_models_async()
         return False
 
