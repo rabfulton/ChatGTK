@@ -60,5 +60,5 @@ python3 ./ChatGTK.py
 - dvipng (for LaTeX rendering)
 
 <a href="https://buymeacoffee.com/rabfulton">
-  <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=rabfulton&button_colour=FFDD00" alt="Buy Me a Coffee" />
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" />
 </a>
