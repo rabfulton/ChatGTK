@@ -1129,15 +1129,6 @@ class OpenAIGTKClient(Gtk.Window):
                     prompt = self.conversation_history[-1]["content"]
                     answer = self.call_dalle_api(prompt)
                 case _:
-                    # Print debug info
-                    print("\nAPI Call Debug Info:")
-                    print(f"Model: {model}")
-                    print(f"Temperature: {self.temperament} (type: {type(self.temperament)})")
-                    print(f"Max Tokens: {self.max_tokens}")
-                    print("Messages:")
-                    for msg in self.conversation_history:
-                        print(f"  {msg['role']}: {msg['content'][:50]}...")
-                    
                     # Prepare API parameters
                     params = {
                         'model': model,
