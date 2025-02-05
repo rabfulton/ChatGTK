@@ -320,6 +320,10 @@ def escape_latex_text(text):
         print("DEBUG: Skipping escape for display equation")
         return text
 
+    if text.strip().startswith('\\begin{center}\\includegraphics'):
+        print("DEBUG: Skipping escape for image")
+        return text
+
     escapes = {
         '\\': r'\textbackslash{}',
         '&': r'\&',
@@ -351,10 +355,54 @@ def format_code_block(code, language='text'):
 \\end{{lstlisting}}
 """
 
+def process_image_path(src):
+    """Convert a source path to a full path in the images directory."""
+    try:
+        # Extract the image filename from the src
+        image_filename = Path(src).name
+        # Construct the correct path in history/temp/images
+        image_path = str(Path('history/temp/images') / image_filename)
+        return str(Path(image_path).resolve())
+    except Exception as e:
+        print(f"DEBUG: Failed to process image path: {e}")
+        return None
+
+def create_latex_image(image_path):
+    """Create LaTeX command for including an image."""
+    if image_path:
+        return r'\begin{center}\includegraphics[width=\linewidth]{' + image_path + r'}\end{center}'
+    return r'\textit{[Image unavailable]}'
+
+def process_image_tag(match):
+    """Process an image tag and convert it to LaTeX."""
+    src = match.group(1)
+    print(f"DEBUG: Processing image src: {src}")
+    image_path = process_image_path(src)
+    return create_latex_image(image_path)
+
 def format_message_content(content):
-    """Format message content, handling both regular text, code blocks, and LaTeX equations."""
+    """Format message content, handling text, code blocks, LaTeX equations, and images."""
     print("\nDEBUG: === Starting format_message_content ===")
     print(f"DEBUG: Initial content: {repr(content[:200])}")
+
+    # Process HTML-style image tags
+    content = re.sub(
+        r'<img\s+src="([^"]+)"\s*/?>',
+        process_image_tag,
+        content,
+        flags=re.DOTALL
+    )
+
+    # After content is escaped, replace the markers with actual LaTeX
+    def replace_image_marker(match):
+        path = match.group(1)
+        return r'\begin{center}\includegraphics[max width=\linewidth]{' + path + r'}\end{center}'
+
+    content = re.sub(
+        r'__LATEX_IMAGE__(.+?)__END_LATEX_IMAGE__',
+        replace_image_marker,
+        content
+    )
 
     def process_display_math(match):
         equation = match.group(1).strip()
@@ -370,81 +418,56 @@ def format_message_content(content):
         equation = equation.replace('\\\\', '\\').replace('\\{}', '\\')
         return f"${equation}$"
 
-    # First handle display math \[...\]
-    display_pattern = r'\\\\?\[(.*?)\\\\?\]'
-    print(f"\nDEBUG: Searching for display math with pattern: {display_pattern}")
-    matches = list(re.finditer(display_pattern, content, re.DOTALL))
-    print(f"DEBUG: Found {len(matches)} display math equations")
-    for i, match in enumerate(matches):
-        print(f"DEBUG: Display math {i + 1}: {repr(match.group(0))}")
+    # Then handle display math
+    content = re.sub(
+        r'\\\[(.*?)\\\]',
+        process_display_math,
+        content,
+        flags=re.DOTALL
+    )
+
+    # Then handle inline math
+    content = re.sub(
+        r'\\\((.*?)\\\)',
+        process_inline_math,
+        content,
+        flags=re.DOTALL
+    )
+
+    # Handle code blocks
+    parts = content.split('```')
+    formatted_parts = []
     
-    try:
-        # Process display math
-        content = re.sub(
-            display_pattern,
-            process_display_math,
-            content,
-            flags=re.DOTALL
-        )
+    for i, part in enumerate(parts):
+        if i % 2 == 0:  # Regular text
+            if part.strip():
+                # Don't escape LaTeX content
+                text_parts = []
+                current_pos = 0
+                # Find all LaTeX expressions
+                latex_pattern = r'(\$.*?\$|\\begin\{equation\*\}.*?\\end\{equation\*\})'
+                for match in re.finditer(latex_pattern, part, re.DOTALL):
+                    # Add escaped text before the equation
+                    if match.start() > current_pos:
+                        text_parts.append(escape_latex_text(part[current_pos:match.start()]))
+                    # Add the equation unchanged
+                    text_parts.append(match.group(1))
+                    current_pos = match.end()
+                # Add any remaining text
+                if current_pos < len(part):
+                    text_parts.append(escape_latex_text(part[current_pos:]))
+                formatted_parts.append(''.join(text_parts))
+        else:  # Code block
+            lines = part.split('\n', 1)
+            language = lines[0].strip() or 'text'
+            code = lines[1] if len(lines) > 1 else part
+            # Don't escape the code content
+            formatted_parts.append(format_code_block(code, language))
 
-        # Then handle inline math \(...\)
-        inline_pattern = r'\\\\?\((.*?)\\\\?\)'
-        print(f"\nDEBUG: Searching for inline math with pattern: {inline_pattern}")
-        matches = list(re.finditer(inline_pattern, content, re.DOTALL))
-        print(f"DEBUG: Found {len(matches)} inline math equations")
-        for i, match in enumerate(matches):
-            print(f"DEBUG: Inline math {i + 1}: {repr(match.group(0))}")
-        
-        # Process inline math
-        content = re.sub(
-            inline_pattern,
-            process_inline_math,
-            content,
-            flags=re.DOTALL
-        )
-
-        print(f"\nDEBUG: Content after equation processing: {repr(content[:200])}")
-
-        # Handle code blocks
-        parts = content.split('```')
-        formatted_parts = []
-        
-        for i, part in enumerate(parts):
-            if i % 2 == 0:  # Regular text
-                if part.strip():
-                    # Don't escape LaTeX content
-                    text_parts = []
-                    current_pos = 0
-                    # Find all LaTeX expressions
-                    latex_pattern = r'(\$.*?\$|\\begin\{equation\*\}.*?\\end\{equation\*\})'
-                    for match in re.finditer(latex_pattern, part, re.DOTALL):
-                        # Add escaped text before the equation
-                        if match.start() > current_pos:
-                            text_parts.append(escape_latex_text(part[current_pos:match.start()]))
-                        # Add the equation unchanged
-                        text_parts.append(match.group(1))
-                        current_pos = match.end()
-                    # Add any remaining text
-                    if current_pos < len(part):
-                        text_parts.append(escape_latex_text(part[current_pos:]))
-                    formatted_parts.append(''.join(text_parts))
-            else:  # Code block
-                lines = part.split('\n', 1)
-                language = lines[0].strip() or 'text'
-                code = lines[1] if len(lines) > 1 else part
-                # Don't escape the code content
-                formatted_parts.append(format_code_block(code, language))
-
-        result = '\n'.join(formatted_parts)
-        print("\nDEBUG: === Final formatted content ===")
-        print(repr(result[:200]))
-        return result
-        
-    except Exception as e:
-        print(f"DEBUG: Error in format_message_content: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise
+    result = '\n'.join(formatted_parts)
+    print("\nDEBUG: === Final formatted content ===")
+    print(repr(result[:200]))
+    return result
 
 def format_chat_message(message):
     """Format a single chat message for LaTeX."""
@@ -465,9 +488,7 @@ def format_chat_message(message):
 """ % (color, role, content)
 
 def export_chat_to_pdf(conversation, filename, title=None):
-    """
-    Export a chat conversation to PDF.
-    """
+    """Export a chat conversation to PDF with image support."""
     try:
         print("\nDEBUG: === Message Contents ===")
         for i, msg in enumerate(conversation):
@@ -533,7 +554,12 @@ def export_chat_to_pdf(conversation, filename, title=None):
 \usepackage{fancyhdr}
 \usepackage{amsmath}
 \usepackage{amssymb}
+\usepackage{graphicx}
 \usepackage[hidelinks]{hyperref}
+
+% Configure image handling
+\DeclareGraphicsExtensions{.pdf,.png,.jpg,.jpeg}
+\graphicspath{{./}}
 
 \geometry{margin=1in}
 \definecolor{usercolor}{RGB}{70, 130, 180}    % Steel Blue
