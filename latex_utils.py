@@ -213,7 +213,19 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
             return None
 
 def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark', font_size=12):
-    """Process LaTeX markup in text."""
+    """
+    Process LaTeX markup in the provided text for LaTeX export.
+
+    This function handles a variety of transformations:
+      - Converts display and inline math to PNG images via LaTeX,
+      - Tokenizes and robustly processes code blocks and inline code (using
+        \\texttt{\\detokenize{...}} for inline code so that it can be nested inside
+        other formatting commands),
+      - Converts HTML image tags into proper LaTeX image inclusion commands,
+      - Processes headers and forced newlines while preserving structural breaks.
+
+    The resulting output is safe for further LaTeX compilation.
+    """
     # Clean up multiple newlines before processing
     text = re.sub(r'\n\n+', '\n', text)
     
@@ -342,39 +354,6 @@ def escape_latex_text(text):
     
     return result
 
-def format_code_block(code, language='text'):
-    """Format a code block for LaTeX using listings package."""
-    # Special handling for C code
-    if language.lower() == 'c':
-        # Fix section commands that got into the code
-        code = re.sub(r'\\section\*\{include', '#include', code)
-        # Fix escaped newlines
-        code = re.sub(r'\\\\n', '\\n', code)
-        # Remove any \textbackslash and \{\} sequences
-        code = re.sub(r'\\textbackslash\\\{\\\}n', '\\n', code)
-    else:
-        # Clean up the code to avoid LaTeX special character issues
-        code = code.replace('\\', '\\\\')  # Escape backslashes first
-        code = code.replace('#', '\\#')    # Escape hash symbols
-    
-    # Replace javascript with java for LaTeX compatibility
-    if language.lower() == 'javascript':
-        language = 'java'
-    
-    # For text/plaintext, don't specify a language
-    if language.lower() in ['text', 'plaintext']:
-        return f"""
-\\begin{{lstlisting}}
-{code}
-\\end{{lstlisting}}
-"""
-    
-    return f"""
-\\begin{{lstlisting}}[language={language}]
-{code}
-\\end{{lstlisting}}
-"""
-
 def process_image_path(src):
     """Convert a source path to a full path in the images directory."""
     try:
@@ -392,12 +371,6 @@ def create_latex_image(image_path):
     if image_path:
         return r'\begin{center}\includegraphics[width=\linewidth]{' + image_path + r'}\end{center}'
     return r'\textit{[Image unavailable]}'
-
-def process_image_tag(match):
-    """Process an image tag and convert it to LaTeX."""
-    src = match.group(1)
-    image_path = process_image_path(src)
-    return create_latex_image(image_path)
 
 def process_headers(text):
     """Process text for headers, similar to markup_utils."""
@@ -422,18 +395,6 @@ def process_headers(text):
     text = re.sub(r'__LATEX_CMD__(.+?)__END_LATEX_CMD__', r'\1', text)
     
     return text
-
-def clean_latex_commands(text):
-    """Clean up incorrectly escaped LaTeX commands."""
-    # Pattern to match: \textbackslash\{\}command*\{text:\}
-    pattern = r'\\textbackslash\\\{\\\}([a-zA-Z]+)\*\\\{([^}]+)\\\}'
-    
-    def replace_command(match):
-        command = match.group(1)  # e.g., 'subsubsection'
-        content = match.group(2)  # e.g., 'Explanation:'
-        return f'\\{command}*{{{content}}}'
-    
-    return re.sub(pattern, replace_command, text)
 
 def format_message_content(content: str) -> str:
     """
@@ -487,30 +448,6 @@ def format_message_content(content: str) -> str:
     
     return content
 
-def escape_latex_inline_code(text):
-    """
-    Escape LaTeX special characters for inline code text.
-    For inline code, we want to preserve backslashes and underscores so that
-    common programming sequences like `\n` or identifiers like `my_var` appear as-is.
-    """
-    # Do not escape backslashes or underscores.
-    replacements = {
-        '&': r'\&',
-        '%': r'\%',
-        '$': r'\$',
-        '#': r'\#',
-        '{': r'\{',
-        '}': r'\}',
-        '~': r'\textasciitilde{}',
-        '^': r'\textasciicircum{}',
-    }
-    for orig, repl in replacements.items():
-        text = text.replace(orig, repl)
-    return text
-
-def maybe_detokenize(code_content: str) -> str:
-    return f'\\detokenize{{{code_content}}}'
-
 def process_inline_markup(text):
     """
     Process inline markdown markup and convert it to raw LaTeX.
@@ -540,7 +477,9 @@ def process_inline_markup(text):
     def inline_code_token(match):
         content = match.group(1)
         token = f"@@INLINECODE_{len(inline_code_tokens)}@@"
-        # Use a robust alternative to \verb.
+        # Convert inline code to a robust LaTeX representation.
+        # We use \\texttt{\\detokenize{...}} so that inline code remains safe when nested
+        # within other formatting commands (avoiding issues with fragile \\verb or \\lstinline).
         inline_code_tokens.append(f"\\texttt{{\\detokenize{{{content}}}}}")
         return token
 
@@ -581,17 +520,18 @@ def process_inline_markup(text):
 
 def insert_forced_newlines(text):
     """
-    Process the text so that every single (isolated) newline outside of tokens
-    is replaced with an explicit LaTeX forced break (\\), except when:
-      - The line is empty (or only whitespace),
-      - The line begins with a header command (e.g. \section*, \subsection*, etc.),
-      - The line already ends with a forced break, or
-      - The newline is at the end of the chunk (so that a paragraph break is preserved).
+    Insert explicit LaTeX forced line breaks (\\\\) into non-protected text.
     
-    Tokens (matching @@CODEBLOCK_x@@, @@INLINECODE_x@@, or @@HEADER_x@@) are not modified.
-    
-    Single newlines (i.e. a newline not immediately preceded or followed by another newline)
-    in non-tokenized text are replaced with "\\\\\n" so that LaTeX forces a line break.
+    This function splits the text by token placeholders (used for code blocks,
+    inline code, and headers) and processes each plain-text chunk line-by-line.
+
+    A forced newline (\\\\) is added only if:
+      - The line is not blank,
+      - It does not start with a header command (e.g. \\section*),
+      - It isn't already terminated by a forced break, and
+      - It is not the final line of a paragraph.
+
+    This ensures that LaTeX won't encounter a "There's no line here to end" error.
     """
     import re
 
@@ -793,11 +733,13 @@ def export_chat_to_pdf(conversation, filename, title=None):
 
 def process_html_image_tags(text):
     """
-    Convert HTML <img> tags to LaTeX \includegraphics commands.
+    Convert HTML <img> tags to proper LaTeX image inclusion commands.
     
-    This function searches the text for HTML image tags (e.g. <img src="..."/>)
-    and converts them into LaTeX image inclusion commands. It uses the process_image_path
-    function (if available) to resolve the full path.
+    This function finds HTML image tags (e.g. <img src="..."/>) within the text and
+    replaces them with a LaTeX snippet that centers the image using \\includegraphics.
+
+    The image source is resolved (via process_image_path) and inserted with a width of
+    \\linewidth to ensure proper scaling.
     """
     import re
     def replacement(match):
@@ -814,10 +756,10 @@ def process_html_image_tags(text):
 
 def escape_unprotected_hashes(text):
     """
-    Escape any unprotected '#' characters in the text so that they don't trigger
-    a "macro parameter character '#' in horizontal mode" error in LaTeX.
+    Escape unprotected '#' characters so that they appear literally in the final LaTeX output.
     
-    This function replaces every instance of '#' that is not already escaped with '\#'.
+    Any '#' that is not already preceded by a backslash will be replaced with '\\#'
+    to avoid LaTeX errors regarding macro parameter characters in horizontal mode.
     """
     import re
     # Replace any '#' that is not preceded by a backslash with '\#'
