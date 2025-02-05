@@ -348,8 +348,8 @@ def format_code_block(code, language='text'):
     """Format a code block for LaTeX using listings package."""
     # Special handling for C code
     if language.lower() == 'c':
-        # Remove extra backslashes from #include
-        code = re.sub(r'\\#include', '#include', code)
+        # Fix section commands that got into the code
+        code = re.sub(r'\\section\*\{include', '#include', code)
         # Fix escaped newlines
         code = re.sub(r'\\\\n', '\\n', code)
         # Remove any \textbackslash and \{\} sequences
@@ -402,11 +402,50 @@ def process_image_tag(match):
     image_path = process_image_path(src)
     return create_latex_image(image_path)
 
+def process_headers(text):
+    """Process text for headers, similar to markup_utils."""
+    # Handle headers (match 1-4 #s followed by text)
+    def replace_header(match):
+        level = len(match.group(1))  # Count the number of #
+        title = match.group(2).strip()
+        # Mark the LaTeX command to prevent escaping
+        if level == 1:
+            return f'__LATEX_CMD__\\section*{{{title}}}__END_LATEX_CMD__'
+        elif level == 2:
+            return f'__LATEX_CMD__\\subsection*{{{title}}}__END_LATEX_CMD__'
+        elif level == 3:
+            return f'__LATEX_CMD__\\subsubsection*{{{title}}}__END_LATEX_CMD__'
+        else:
+            return f'__LATEX_CMD__\\paragraph*{{{title}}}__END_LATEX_CMD__'
+    
+    # Process headers first
+    text = re.sub(r'^(#{1,4})\s*(.+?)$', replace_header, text, flags=re.MULTILINE)
+    
+    # After all escaping is done, restore the LaTeX commands
+    text = re.sub(r'__LATEX_CMD__(.+?)__END_LATEX_CMD__', r'\1', text)
+    
+    return text
+
+def clean_latex_commands(text):
+    """Clean up incorrectly escaped LaTeX commands."""
+    # Pattern to match: \textbackslash\{\}command*\{text:\}
+    pattern = r'\\textbackslash\\\{\\\}([a-zA-Z]+)\*\\\{([^}]+)\\\}'
+    
+    def replace_command(match):
+        command = match.group(1)  # e.g., 'subsubsection'
+        content = match.group(2)  # e.g., 'Explanation:'
+        return f'\\{command}*{{{content}}}'
+    
+    return re.sub(pattern, replace_command, text)
+
 def format_message_content(content):
     """Format message content, handling text, code blocks, LaTeX equations, and images."""
     print("\nDEBUG: === Starting format_message_content ===")
     print(f"DEBUG: Initial content: {repr(content[:200])}")
-
+    
+    # Process headers before any other formatting
+    content = process_headers(content)
+    
     # Process HTML-style image tags
     content = re.sub(
         r'<img\s+src="([^"]+)"\s*/?>',
@@ -487,6 +526,10 @@ def format_message_content(content):
             formatted_parts.append(format_code_block(code, language))
 
     result = '\n'.join(formatted_parts)
+    
+    # Clean up any remaining incorrectly escaped LaTeX commands
+    result = clean_latex_commands(result)
+    
     print("\nDEBUG: === Final formatted content ===")
     print(repr(result[:200]))
     return result
@@ -687,3 +730,45 @@ def export_chat_to_pdf(conversation, filename, title=None):
         print("DEBUG: Traceback:")
         traceback.print_exc()
         return False 
+
+def process_inline_markup(text):
+    """Process text for inline code and other markup, similar to markup_utils."""
+    # Handle headers first (before other markup)
+    def process_headers(match):
+        level = len(match.group(1))  # Count the number of #
+        title = match.group(2).strip()
+        if level == 1:
+            return f'\\section*{{{title}}}'
+        elif level == 2:
+            return f'\\subsection*{{{title}}}'
+        elif level == 3:
+            return f'\\subsubsection*{{{title}}}'
+        else:
+            return f'\\paragraph*{{{title}}}'
+    
+    # Process headers (match 1-4 #s followed by text)
+    text = re.sub(r'^(#{1,4})\s*(.+?)$', process_headers, text, flags=re.MULTILINE)
+    
+    # Handle bold text with code inside first
+    pattern0 = r'\*\*`([^`]+)`\*\*'
+    text = re.sub(pattern0, lambda m: f'\\textbf{{\\texttt{{{m.group(1)}}}}}', text)
+    
+    # Handle remaining bold text
+    pattern1 = r'\*\*([^*]+?)\*\*'
+    text = re.sub(pattern1, r'\\textbf{\1}', text)
+    
+    # Handle remaining inline code
+    parts = re.split(r'(`[^`]+`)', text)
+    processed_parts = []
+    
+    for part in parts:
+        if part.startswith("`") and part.endswith("`"):
+            code_content = part[1:-1]
+            # Clean up any existing escapes in the code content
+            code_content = code_content.replace('\\#', '#')
+            code_content = code_content.replace('\\textbackslash\\{\\}n', '\\n')
+            processed_parts.append(f'\\texttt{{{code_content}}}')
+        else:
+            processed_parts.append(part)
+    
+    return "".join(processed_parts) 
