@@ -82,8 +82,8 @@ def generate_chat_name(first_message):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{safe_msg}_{timestamp}.json"
 
-def save_chat_history(chat_name, conversation_history):
-    """Save a chat history to a file."""
+def save_chat_history(chat_name, conversation_history, metadata=None):
+    """Save a chat history to a file with optional metadata."""
     ensure_history_dir()
     
     # Add .json extension if not present
@@ -92,17 +92,22 @@ def save_chat_history(chat_name, conversation_history):
     
     file_path = os.path.join(HISTORY_DIR, chat_name)
     
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(conversation_history, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception as e:
-        print(f"Error saving chat history: {e}")
-        return False
+    # Create the full data structure
+    chat_data = {
+        "messages": conversation_history,
+        "metadata": metadata or {}
+    }
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(chat_data, f, indent=2)
 
-def load_chat_history(chat_name):
-    """Load a chat history from a file."""
-    # Add .json extension if not present
+def load_chat_history(chat_name, messages_only=True):
+    """Load a chat history from a file.
+    
+    Args:
+        chat_name: Name of the chat file
+        messages_only: If True, returns only the messages. If False, returns full data structure
+    """
     if not chat_name.endswith('.json'):
         chat_name = f"{chat_name}.json"
     
@@ -110,10 +115,47 @@ def load_chat_history(chat_name):
     
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading chat history: {e}")
-        return None
+            data = json.load(f)
+            
+        # Handle old format (just an array of messages)
+        if isinstance(data, list):
+            return data if messages_only else {"messages": data, "metadata": {}}
+            
+        # Handle new format
+        if messages_only:
+            return data.get("messages", [])
+        return data
+            
+    except FileNotFoundError:
+        return [] if messages_only else {"messages": [], "metadata": {}}
+
+def get_chat_metadata(chat_name):
+    """Get metadata for a specific chat."""
+    data = load_chat_history(chat_name, messages_only=False)
+    return data.get("metadata", {})
+
+def set_chat_title(chat_name, title):
+    """Set a custom title for a chat."""
+    data = load_chat_history(chat_name, messages_only=False)
+    if "metadata" not in data:
+        data["metadata"] = {}
+    data["metadata"]["title"] = title
+    save_chat_history(chat_name, data["messages"], data["metadata"])
+
+def get_chat_title(chat_name):
+    """Get the title for a chat, falling back to first message if no custom title."""
+    metadata = get_chat_metadata(chat_name)
+    if "title" in metadata:
+        return metadata["title"]
+    
+    # Fall back to first message
+    data = load_chat_history(chat_name, messages_only=False)  # Get full data structure
+    messages = data.get("messages", []) if isinstance(data, dict) else data
+    
+    if messages and len(messages) > 1:  # Skip system message
+        first_msg = messages[1].get("content", "")  # Get first user message
+        return first_msg[:40] + ("..." if len(first_msg) > 40 else "")
+    return "Untitled Chat"
 
 def list_chat_histories():
     """List all saved chat histories."""
@@ -126,21 +168,28 @@ def list_chat_histories():
                 file_path = os.path.join(HISTORY_DIR, file)
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
-                        history = json.load(f)
+                        data = json.load(f)
+                        # Handle both old and new formats
+                        messages = data.get("messages", []) if isinstance(data, dict) else data
                         # Get first user message for display
-                        first_message = next((msg['content'] for msg in history if msg['role'] == 'user'), "Empty chat")
-                        # Get timestamp from filename (format: message_YYYYMMDD_HHMMSS.json)
-                        timestamp = file.split('_')[-2] + '_' + file.split('_')[-1].replace('.json', '')
+                        first_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), "Empty chat")
                         histories.append({
                             'filename': file,
-                            'first_message': first_message[:50] + '...' if len(first_message) > 50 else first_message,
-                            'timestamp': timestamp
+                            'first_message': first_message[:50] + '...' if len(first_message) > 50 else first_message
                         })
                 except Exception as e:
                     print(f"Error reading history file {file}: {e}")
     except Exception as e:
         print(f"Error listing chat histories: {e}")
     
-    # Sort by timestamp (newest first)
-    histories.sort(key=lambda x: x['timestamp'], reverse=True)
+    # Extract timestamp from filename and sort by it (newest first)
+    def get_timestamp(filename):
+        # Extract YYYYMMDD_HHMMSS from filename
+        match = re.search(r'_(\d{8}_\d{6})\.json$', filename)
+        timestamp = match.group(1) if match else '00000000_000000'
+        return timestamp
+    
+    # Sort and print the order
+    histories.sort(key=lambda x: get_timestamp(x['filename']), reverse=True)
+    
     return histories

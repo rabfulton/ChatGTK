@@ -26,7 +26,9 @@ from utils import (
     generate_chat_name, 
     save_chat_history, 
     load_chat_history,
-    list_chat_histories
+    list_chat_histories,
+    get_chat_metadata,
+    get_chat_title
 )
 from ai_providers import get_ai_provider
 from markup_utils import (
@@ -628,6 +630,8 @@ class OpenAIGTKClient(Gtk.Window):
         self.connect("configure-event", self.on_configure_event)
         self.connect("destroy", self.on_destroy)
         
+        self.apply_sidebar_styles()
+
     def on_destroy(self, widget):
         """Save settings and cleanup before closing."""
         # Save all settings including sidebar width
@@ -1281,76 +1285,24 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Get histories from utils
         histories = list_chat_histories()
-        
-        # Add CSS styling for the list rows
-        css_provider = Gtk.CssProvider()
-        css = """
-            .navigation-sidebar row {
-                padding: 8px 6px;
-                margin: 0px;
-                border-radius: 0px;
-                border: none;
-            }
-            .title {
-                margin-bottom: 4px;
-                font-size: 1.1em;
-            }
-            .timestamp {
-                font-size: 0.8em;
-                opacity: 0.7;
-            }
-            scrolledwindow {
-                border-top: none;
-                border-bottom: none;
-            }
-            scrolledwindow undershoot.top,
-            scrolledwindow undershoot.bottom,
-            scrolledwindow overshoot.top,
-            scrolledwindow overshoot.bottom {
-                background: none;
-            }
-            scrolledwindow junction {
-                background: none;
-                border: none;
-            }
-        """
-        try:
-            css_provider.load_from_data(css.encode())
-            print("CSS loaded successfully")
-        except Exception as e:
-            print(f"Error loading CSS: {e}")
-            return
-        
-        # Apply CSS to both the list and the scrolled window
-        try:
-            # Add provider to the default screen for this CSS
-            Gtk.StyleContext.add_provider_for_screen(
-                Gdk.Screen.get_default(),
-                css_provider,
-                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-            )
-        except Exception as e:
-            print(f"Error applying CSS provider: {e}")
-            return
 
         for history in histories:
             row = Gtk.ListBoxRow()
             
             # Create vertical box for title and timestamp
             vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-            vbox.set_margin_start(10)  # Adjusted to match button padding
-            vbox.set_margin_end(10)    # Adjusted to match button padding
+            vbox.set_margin_start(10)
+            vbox.set_margin_end(10)
             
-            # Title label (first message)
-            title = history['first_message'][:40]
-            if len(history['first_message']) > 40:
-                title += "..."
+            # Get chat title (will use custom title if it exists)
+            title = get_chat_title(history['filename'])
+            
             title_label = Gtk.Label(label=title, xalign=0)
             title_label.get_style_context().add_class('title')
             title_label.set_line_wrap(False)
             title_label.set_ellipsize(Pango.EllipsizeMode.END)
             
-            # Timestamp label with CSS provider
+            # Timestamp label
             timestamp = self.get_chat_timestamp(history['filename'])
             time_label = Gtk.Label(label=timestamp, xalign=0)
             time_label.get_style_context().add_class('timestamp')
@@ -1383,7 +1335,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.save_current_chat()
         
         # Load the selected chat history
-        history = load_chat_history(row.filename)
+        history = load_chat_history(row.filename, messages_only=True)  # Only get messages
         if history:
             # Update conversation history and chat ID
             self.conversation_history = history
@@ -1413,7 +1365,7 @@ class OpenAIGTKClient(Gtk.Window):
                         self.append_message('ai', formatted_content)
 
     def save_current_chat(self):
-        """Save the current chat if needed and refresh history list."""
+        """Save the current chat history."""
         if len(self.conversation_history) > 1:  # More than just the system message
             # Add or update the model in the system message
             if len(self.conversation_history) > 0:
@@ -1426,8 +1378,16 @@ class OpenAIGTKClient(Gtk.Window):
             else:
                 # Existing chat - use current ID
                 chat_name = self.current_chat_id
-                
-            save_chat_history(chat_name, self.conversation_history)
+            
+            try:
+                # Get any existing metadata before saving
+                metadata = get_chat_metadata(chat_name)
+                save_chat_history(chat_name, self.conversation_history, metadata)
+            except Exception as e:
+                print(f"Error preserving metadata: {e}")
+                # Fall back to original save behavior
+                save_chat_history(chat_name, self.conversation_history)
+            
             self.refresh_history_list()
 
     def show_thinking_animation(self):
@@ -1491,6 +1451,11 @@ class OpenAIGTKClient(Gtk.Window):
         """Create a context menu for chat history items."""
         menu = Gtk.Menu()
         
+        # Rename option
+        rename_item = Gtk.MenuItem(label="Rename Chat")
+        rename_item.connect("activate", self.on_rename_chat, history_row)
+        menu.append(rename_item)
+        
         # Export to PDF option
         export_item = Gtk.MenuItem(label="Export to PDF")
         export_item.connect("activate", self.on_export_chat, history_row)
@@ -1499,13 +1464,52 @@ class OpenAIGTKClient(Gtk.Window):
         menu.show_all()
         menu.popup_at_pointer(None)
 
+    def on_rename_chat(self, widget, history_row):
+        """Handle rename chat action."""
+        dialog = Gtk.Dialog(title="Rename Chat", parent=self, flags=0)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Rename", Gtk.ResponseType.OK)
+        
+        # Add entry for new name
+        box = dialog.get_content_area()
+        box.set_spacing(6)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        
+        entry = Gtk.Entry()
+        entry.set_text(history_row.get_children()[0].get_children()[0].get_text().replace("You: ", ""))
+        entry.set_activates_default(True)
+        box.add(entry)
+        
+        # Make the OK button the default
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        
+        dialog.show_all()
+        response = dialog.run()
+        
+        if response == Gtk.ResponseType.OK:
+            new_name = entry.get_text().strip()
+            if new_name:
+                # Update the visible title
+                history_row.get_children()[0].get_children()[0].set_text(new_name)
+                
+                # Load and update the chat history
+                history = load_chat_history(history_row.filename)
+                if history:
+                    # Update the first message which is used as the title
+                    history[1]['content'] = new_name  # Update first user message
+                    save_chat_history(history_row.filename, history)
+        
+        dialog.destroy()
+
     def on_export_chat(self, widget, history_row):
         """Handle export to PDF action."""
         # Create file chooser dialog
-        dialog = Gtk.FileChooserDialog(
+        dialog = Gtk.Dialog(
             title="Export Chat to PDF",
             parent=self,
-            action=Gtk.FileChooserAction.SAVE
+            flags=0
         )
         
         # Add buttons properly
@@ -1534,11 +1538,14 @@ class OpenAIGTKClient(Gtk.Window):
                     filename += '.pdf'
                     
                 # Load the chat history
-                history = load_chat_history(history_row.filename)
+                history = load_chat_history(history_row.filename, messages_only=True)
                 if history:
                     # Get the first user message for the title
-                    first_message = next((msg['content'] for msg in history if msg['role'] == 'user'), "Chat Export")
-                    title = f"Chat Export - {first_message[:50]}"
+                    #first_message = next((msg['content'] for msg in history if msg['role'] == 'user'), "Chat Export")
+                    #title = f"Chat Export - {first_message[:50]}"
+                    
+                    custom_title = get_chat_title(history_row.filename)
+                    title = f"Chat Export - {custom_title[:50]}"
                     
                     try:
                         success = export_chat_to_pdf(history, filename, title)
@@ -1588,6 +1595,58 @@ class OpenAIGTKClient(Gtk.Window):
                 self.create_history_context_menu(row)
             return True
         return False
+
+    def apply_sidebar_styles(self):
+        """Apply CSS styling to the sidebar."""
+        css_provider = Gtk.CssProvider()
+        css = """
+            .navigation-sidebar row {
+                padding: 8px 6px;
+                margin: 0px;
+                border-radius: 0px;
+                border: none;
+            }
+            .title {
+                margin-bottom: 4px;
+                font-size: 1.1em;
+            }
+            .timestamp {
+                font-size: 0.8em;
+                opacity: 0.7;
+            }
+            scrolledwindow {
+                border-top: none;
+                border-bottom: none;
+            }
+            scrolledwindow undershoot.top,
+            scrolledwindow undershoot.bottom,
+            scrolledwindow overshoot.top,
+            scrolledwindow overshoot.bottom {
+                background: none;
+            }
+            scrolledwindow junction {
+                background: none;
+                border: none;
+            }
+            scrollbar {
+                background: transparent;
+                border: none;
+            }
+            scrollbar slider {
+                min-width: 0px;
+                min-height: 0px;
+                background: transparent;
+            }
+        """
+        try:
+            css_provider.load_from_data(css.encode())
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(),
+                css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+        except Exception as e:
+            print(f"Error applying CSS: {e}")
 
 def create_source_view(code_content, code_lang, font_size, source_theme='solarized-dark'):
     """Create a styled source view for code display."""
