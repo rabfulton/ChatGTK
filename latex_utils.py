@@ -15,7 +15,6 @@ import re
 import os
 import gi
 import hashlib
-from markup_utils import create_source_view
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf
 import shutil
@@ -226,6 +225,9 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
 
     The resulting output is safe for further LaTeX compilation.
     """
+    # Import create_source_view here to avoid circular import
+    from ChatGTK import create_source_view
+    
     # Clean up multiple newlines before processing
     text = re.sub(r'\n\n+', '\n', text)
     

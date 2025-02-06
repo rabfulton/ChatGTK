@@ -53,7 +53,7 @@ def load_settings():
                     value = value.strip()
                     if key in settings:
                         settings[key] = value
-            print(f"Successfully loaded settings from {SETTINGS_FILE}")
+            #print(f"Successfully loaded settings from {SETTINGS_FILE}")
             return settings
     except Exception as e:
         print(f"Error loading settings: {e}")

@@ -32,7 +32,6 @@ from ai_providers import get_ai_provider
 from markup_utils import (
     format_response,
     process_inline_markup,
-    create_source_view,
     escape_for_pango_markup,
     process_text_formatting
 )
@@ -805,8 +804,7 @@ class OpenAIGTKClient(Gtk.Window):
                 code_content = re.sub(r'^--- Code Block Start \(.*?\) ---', '', seg)
                 code_content = re.sub(r'--- Code Block End ---$', '', code_content)
                 code_content = code_content.strip('\n')
-
-                # Create source view using the new function
+                # Create Styled source view 
                 source_view = create_source_view(code_content, code_lang, self.font_size, self.source_theme)
                 
                 frame = Gtk.Frame()
@@ -1513,6 +1511,55 @@ class OpenAIGTKClient(Gtk.Window):
                 self.create_history_context_menu(row)
             return True
         return False
+
+def create_source_view(code_content, code_lang, font_size, source_theme='solarized-dark'):
+    """Create a styled source view for code display."""
+    source_view = GtkSource.View.new()
+    
+    # Apply styling
+    css_provider = Gtk.CssProvider()
+    css = f"""
+        textview {{
+            font-family: Monospace;
+            font-size: {font_size}pt;
+        }}
+    """
+    css_provider.load_from_data(css.encode())
+    source_view.get_style_context().add_provider(
+        css_provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+    
+    # Configure view settings
+    source_view.set_editable(False)
+    source_view.set_wrap_mode(Gtk.WrapMode.NONE)
+    source_view.set_highlight_current_line(False)
+    source_view.set_show_line_numbers(False)
+    
+    # Set up buffer with language and style
+    buffer = source_view.get_buffer()
+    lang_manager = GtkSource.LanguageManager.get_default()
+    if code_lang in lang_manager.get_language_ids():
+        lang = lang_manager.get_language(code_lang)
+    else:
+        lang = None
+        
+    scheme_manager = GtkSource.StyleSchemeManager.get_default()
+    style_scheme = scheme_manager.get_scheme(source_theme)
+    
+    buffer.set_language(lang)
+    buffer.set_highlight_syntax(True)
+    buffer.set_style_scheme(style_scheme)
+    buffer.set_text(code_content)
+    buffer.set_highlight_matching_brackets(False)
+    
+    # Set size request based on content
+    line_count = code_content.count('\n') + 1
+    line_height = font_size * 1.5  # Approximate line height based on font size
+    height = max(line_height * line_count, line_height * 1.2)  # Minimum height of 1.2 lines
+    source_view.set_size_request(-1, int(height))
+    
+    return source_view 
 
 def main():
     win = OpenAIGTKClient()

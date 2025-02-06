@@ -3,8 +3,7 @@ import gi
 
 # Specify GTK versions before importing
 gi.require_version("Gtk", "3.0")
-gi.require_version("GtkSource", "4")
-from gi.repository import Gtk, GLib, Pango, GtkSource
+from gi.repository import Gtk, GLib, Pango
 
 def format_code_blocks(text):
     """Format code blocks with language markers."""
@@ -211,55 +210,6 @@ def rgb_to_hex(rgb_str):
         return f'#{r:02x}{g:02x}{b:02x}'
     except:
         return '#000000'  # Default to black if conversion fails
-
-def create_source_view(code_content, code_lang, font_size, source_theme='solarized-dark'):
-    """Create a styled source view for code display."""
-    source_view = GtkSource.View.new()
-    
-    # Apply styling
-    css_provider = Gtk.CssProvider()
-    css = f"""
-        textview {{
-            font-family: Monospace;
-            font-size: {font_size}pt;
-        }}
-    """
-    css_provider.load_from_data(css.encode())
-    source_view.get_style_context().add_provider(
-        css_provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-    )
-    
-    # Configure view settings
-    source_view.set_editable(False)
-    source_view.set_wrap_mode(Gtk.WrapMode.NONE)
-    source_view.set_highlight_current_line(False)
-    source_view.set_show_line_numbers(False)
-    
-    # Set up buffer with language and style
-    buffer = source_view.get_buffer()
-    lang_manager = GtkSource.LanguageManager.get_default()
-    if code_lang in lang_manager.get_language_ids():
-        lang = lang_manager.get_language(code_lang)
-    else:
-        lang = None
-        
-    scheme_manager = GtkSource.StyleSchemeManager.get_default()
-    style_scheme = scheme_manager.get_scheme(source_theme)
-    
-    buffer.set_language(lang)
-    buffer.set_highlight_syntax(True)
-    buffer.set_style_scheme(style_scheme)
-    buffer.set_text(code_content)
-    buffer.set_highlight_matching_brackets(False)
-    
-    # Set size request based on content
-    line_count = code_content.count('\n') + 1
-    line_height = font_size * 1.5  # Approximate line height based on font size
-    height = max(line_height * line_count, line_height * 1.2)  # Minimum height of 1.2 lines
-    source_view.set_size_request(-1, int(height))
-    
-    return source_view 
 
 def convert_single_asterisks_to_italic(text):
     """Convert markdown italic syntax (*text*) to Pango markup."""
