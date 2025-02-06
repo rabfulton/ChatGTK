@@ -75,6 +75,7 @@ def format_response(text):
     # Format code blocks
     text = format_code_blocks(text)
     
+    #text = normalize_line_breaks(text)
     return text
 
 def format_headers(text):
@@ -90,13 +91,13 @@ def format_headers(text):
         
         if h1_match:
             # Level 1 header - largest
-            formatted_lines.append(f'<span size="xx-large"><b>{h1_match.group(1)}</b></span>')
+            formatted_lines.append(f'\n<span size="xx-large"><b>{h1_match.group(1)}</b></span>\n')
         elif h2_match:
             # Level 2 header - medium
-            formatted_lines.append(f'<span size="x-large"><b>{h2_match.group(1)}</b></span>')
+            formatted_lines.append(f'\n<span size="x-large"><b>{h2_match.group(1)}</b></span>\n')
         elif h3_match:
             # Level 3 header - smaller
-            formatted_lines.append(f'<span size="large"><b>{h3_match.group(1)}</b></span>')
+            formatted_lines.append(f'\n<span size="large"><b>{h3_match.group(1)}</b></span>\n')
         else:
             formatted_lines.append(line)
     
@@ -115,10 +116,10 @@ def process_text_formatting(text, font_size):
     pattern1 = r'\*\*([^*`]+?)\*\*'
     text = re.sub(pattern1, r'<b>\1</b>', text)
     
-    # Apply other formatting
+    # Apply other formatting and normalize line breaks.
     text = convert_single_asterisks_to_italic(text)
     text = format_headers(text)
-    
+    text = normalize_line_breaks(text)
     return text
 
 def process_inline_markup(text, font_size):
@@ -177,6 +178,7 @@ def process_inline_markup(text, font_size):
     text = "".join(processed_parts)
     text = convert_single_asterisks_to_italic(text)
     text = format_headers(text)
+    text = normalize_line_breaks(text)
     
     return text
 
@@ -264,3 +266,72 @@ def convert_single_asterisks_to_italic(text):
     # Convert *italic* to <i>italic</i>, but not inside code blocks
     pattern = r'\*([^\*]+)\*'
     return re.sub(pattern, r'<i>\1</i>', text) 
+
+def normalize_line_breaks(text):
+    """
+    Normalize line breaks around block-level elements (e.g., headers, code blocks).
+
+    This function ensures that:
+      - Lines starting with block markers (e.g., those starting with <span for headers,
+        or with --- Code Block for code blocks) are preceded and followed by an empty line.
+      - This yields clear paragraph breaks, which Pango/GTK interprets correctly.
+
+    Adjust this logic as needed for your markup conventions.
+    """
+    lines = text.split('\n')
+    new_lines = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Identify block-level elements:
+        #   - Headers (produced by format_headers, starting with "<span")
+        #   - Code block markers (starting with "--- Code Block")
+        #   - List items that are used as headings (starting with "•")
+        if (stripped.startswith('<span') or 
+            stripped.startswith('--- Code Block') or 
+            stripped.startswith('•')):
+            # Insert an extra blank line above if the previous line isn't blank.
+            if new_lines and new_lines[-1].strip() != '':
+                new_lines.append('')
+            new_lines.append(line)
+            # Insert a blank line after only if the next line isn't block-level.
+            if i < len(lines) - 1:
+                next_stripped = lines[i+1].strip()
+                if not (next_stripped.startswith('<span') or 
+                        next_stripped.startswith('--- Code Block') or 
+                        next_stripped.startswith('•')):
+                    new_lines.append('')
+        else:
+            new_lines.append(line)
+    result = '\n'.join(new_lines)
+
+    # Debug: after joining lines
+    print("Debug: After joining new_lines:")
+    print(repr(result))
+
+    # Collapse extra newlines between adjacent block-level elements.
+    # Block-level elements here include:
+    #   - Headers produced by format_headers (lines starting with "<span")
+    #   - Code block markers (lines starting with "--- Code Block")
+    #   - List headings (lines starting with "•")
+    #
+    # Additionally, if a header is immediately followed by a numbered list item that appears
+    # to be a heading (e.g. "1. <span ..."), then we want to collapse the newlines between them.
+    #
+    # This regex captures a line that starts with one of our block-level markers and ends
+    # with a non-whitespace character, then matches one or more newline characters.
+    # The lookahead checks that the next non-blank line starts with either a header,
+    # a code block marker, or a numbered header (e.g. "1. <span") using the pattern:
+    #   (?:\d+\.\s*<span|<span|--- Code Block|•)
+    result = re.sub(
+        r'((?:<span|--- Code Block|•).*?\S)\n+(?=(?:\d+\.\s*<span|<span|--- Code Block|•))',
+        r'\1\n\n',
+        result
+    )
+    print("Debug: After collapsing newlines between adjacent block-level elements:")
+    print(repr(result))
+
+    # Optionally, trim extra newline characters at the very end of the text.
+    result = re.sub(r'\n+$', '\n', result)
+    print("Debug: Final normalized result after trimming trailing newlines:")
+    print(repr(result))
+    return result 

@@ -236,7 +236,7 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
             temp_file.write_bytes(png_data)
-            return f'<img src="{temp_file}"/>'
+            return f'\n<img src="{temp_file}"/>'
         return match.group(0)
 
     def replace_inline_math(match):
@@ -257,9 +257,9 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         flags=re.DOTALL
     )
 
-    # 2) Replace inline math of the form \( ... \)
+    # 2) Replace inline math of the form \( ... \) and remove a trailing " " character
     text = re.sub(
-        r'\\\((.*?)\\\)',
+        r'\\\((.*?)\\\)\s*',
         replace_inline_math,
         text
     )
@@ -278,6 +278,7 @@ def insert_tex_image(buffer, iter, img_path):
         if 'math_display_' in img_path:
             buffer.insert(iter, "\n")
             # If this is part of a list item, add another newline
+            # TODO this newline processing should be done by the functions in markup_utils
             if buffer.get_text(buffer.get_start_iter(), iter, True).strip().endswith(('-', '•')):
                 buffer.insert(iter, "\n")
         elif 'math_inline_' in img_path:
