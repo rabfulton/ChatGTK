@@ -1389,14 +1389,12 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_export_chat(self, widget, history_row):
         """Handle export to PDF action."""
-        # Create file chooser dialog
-        dialog = Gtk.Dialog(
+        # Use a FileChooserDialog for saving files
+        dialog = Gtk.FileChooserDialog(
             title="Export Chat to PDF",
             parent=self,
-            flags=0
+            action=Gtk.FileChooserAction.SAVE
         )
-        
-        # Add buttons properly
         dialog.add_buttons(
             "Cancel", Gtk.ResponseType.CANCEL,
             "Save", Gtk.ResponseType.OK
@@ -1424,10 +1422,7 @@ class OpenAIGTKClient(Gtk.Window):
                 # Load the chat history
                 history = load_chat_history(history_row.filename, messages_only=True)
                 if history:
-                    # Get the first user message for the title
-                    #first_message = next((msg['content'] for msg in history if msg['role'] == 'user'), "Chat Export")
-                    #title = f"Chat Export - {first_message[:50]}"
-                    
+                    # Get a custom title for the exported chat
                     custom_title = get_chat_title(history_row.filename)
                     title = f"Chat Export - {custom_title[:50]}"
                     
