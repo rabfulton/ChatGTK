@@ -226,10 +226,10 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
     The resulting output is safe for further LaTeX compilation.
     """
     # Import create_source_view here to avoid circular import
-    from ChatGTK import create_source_view
+    #from ChatGTK import create_source_view
     
     # Clean up multiple newlines before processing
-    text = re.sub(r'\n\n+', '\n', text)
+    #text = re.sub(r'\n\n+', '\n', text)
     
     def replace_display_math(match):
         math_content = match.group(1)
@@ -238,7 +238,7 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
             temp_file.write_bytes(png_data)
-            return f'\n<img src="{temp_file}"/>'
+            return f'<img src="{temp_file}"/>'
         return match.group(0)
 
     def replace_inline_math(match):
@@ -248,7 +248,7 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
             temp_file.write_bytes(png_data)
-            return f'<img src="{temp_file}"/>'
+            return f'<img src="{temp_file}"/> '
         return match.group(0)
 
     # Process display math first \[...\]
@@ -258,17 +258,12 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         text,
         flags=re.DOTALL
     )
-
     # 2) Replace inline math of the form \( ... \) and remove a trailing " " character
     text = re.sub(
         r'\\\((.*?)\\\)\s*',
         replace_inline_math,
         text
     )
-
-    # Create source view for LaTeX code
-    source_view = create_source_view(text, "latex", font_size, source_theme)
-
     return text
 
 def insert_tex_image(buffer, iter, img_path):
@@ -277,14 +272,13 @@ def insert_tex_image(buffer, iter, img_path):
         pixbuf = GdkPixbuf.Pixbuf.new_from_file(img_path)
         buffer.insert_pixbuf(iter, pixbuf)
         # Handle spacing based on math type
-        if 'math_display_' in img_path:
-            buffer.insert(iter, "\n")
+        #if 'math_display_' in img_path:
+            #buffer.insert(iter, "\n")
             # If this is part of a list item, add another newline
-            # TODO this newline processing should be done by the functions in markup_utils
-            if buffer.get_text(buffer.get_start_iter(), iter, True).strip().endswith(('-', '•')):
-                buffer.insert(iter, "\n")
-        elif 'math_inline_' in img_path:
-            buffer.insert(iter, " ")
+            #if buffer.get_text(buffer.get_start_iter(), iter, True).strip().endswith(('-', '•')):
+                #buffer.insert(iter, "")
+        #elif 'math_inline_' in img_path:
+           # buffer.insert(iter, " ")
         return True
     except Exception as e:
         print(f"Error loading image: {e}")

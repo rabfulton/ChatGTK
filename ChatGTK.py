@@ -836,7 +836,7 @@ class OpenAIGTKClient(Gtk.Window):
                         lbl_ai_text.set_use_markup(True)
                         lbl_ai_text.set_markup(processed)
                         content_container.pack_start(lbl_ai_text, False, False, 0)
-                    full_text.append(seg.strip())
+                    #full_text.append(seg.strip())
                     
         # Create the play/stop button using the new refactored method.
         speech_btn = self.create_speech_button(full_text)
@@ -1642,11 +1642,7 @@ def create_source_view(code_content, code_lang, font_size, source_theme='solariz
     buffer.set_text(code_content)
     buffer.set_highlight_matching_brackets(False)
     
-    # Set size request based on content
-    line_count = code_content.count('\n') + 1
-    line_height = font_size * 1.5  # Approximate line height based on font size
-    height = max(line_height * line_count, line_height * 1.2)  # Minimum height of 1.2 lines
-    source_view.set_size_request(-1, int(height))
+    source_view.set_size_request(-1, -1)
     
     return source_view 
 
