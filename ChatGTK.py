@@ -38,6 +38,7 @@ from markup_utils import (
     process_text_formatting
 )
 from gi.repository import Gdk
+from datetime import datetime
 
 # Initialize provider as None
 ai_provider = None
@@ -1318,12 +1319,13 @@ class OpenAIGTKClient(Gtk.Window):
         self.history_list.show_all()
 
     def get_chat_timestamp(self, filename):
-        """Get a formatted timestamp for the chat file."""
+        """Get a formatted timestamp from the filename."""
         try:
-            file_path = Path('history') / filename
-            if file_path.exists():
-                timestamp = file_path.stat().st_mtime
-                return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+            match = re.search(r'_(\d{8}_\d{6})\.json$', filename)
+            if match:
+                timestamp_str = match.group(1)
+                dt = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                return dt.strftime("%Y-%m-%d %H:%M")
         except Exception as e:
             print(f"Error getting timestamp: {e}")
         return "Unknown date"
