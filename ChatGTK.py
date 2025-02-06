@@ -35,6 +35,7 @@ from markup_utils import (
     escape_for_pango_markup,
     process_text_formatting
 )
+from gi.repository import Gdk
 
 # Initialize provider as None
 ai_provider = None
@@ -479,8 +480,13 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Create list box for chat histories
         self.history_list = Gtk.ListBox()
+        self.history_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.history_list.connect('row-activated', self.on_history_selected)
         self.history_list.connect('button-press-event', self.on_history_button_press)
+        
+        # Add navigation-sidebar style class
+        self.history_list.get_style_context().add_class('navigation-sidebar')
+        
         scrolled.add(self.history_list)
 
         # Pack sidebar into left pane
@@ -1276,28 +1282,99 @@ class OpenAIGTKClient(Gtk.Window):
         # Get histories from utils
         histories = list_chat_histories()
         
+        # Add CSS styling for the list rows
+        css_provider = Gtk.CssProvider()
+        css = """
+            .navigation-sidebar row {
+                padding: 8px 6px;
+                margin: 0px;
+                border-radius: 0px;
+                border: none;
+            }
+            .title {
+                margin-bottom: 4px;
+                font-size: 1.1em;
+            }
+            .timestamp {
+                font-size: 0.8em;
+                opacity: 0.7;
+            }
+            scrolledwindow {
+                border-top: none;
+                border-bottom: none;
+            }
+            scrolledwindow undershoot.top,
+            scrolledwindow undershoot.bottom,
+            scrolledwindow overshoot.top,
+            scrolledwindow overshoot.bottom {
+                background: none;
+            }
+            scrolledwindow junction {
+                background: none;
+                border: none;
+            }
+        """
+        try:
+            css_provider.load_from_data(css.encode())
+            print("CSS loaded successfully")
+        except Exception as e:
+            print(f"Error loading CSS: {e}")
+            return
+        
+        # Apply CSS to both the list and the scrolled window
+        try:
+            # Add provider to the default screen for this CSS
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(),
+                css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+        except Exception as e:
+            print(f"Error applying CSS provider: {e}")
+            return
+
         for history in histories:
             row = Gtk.ListBoxRow()
-            # Truncate message to first 40 characters and add ellipsis if needed
-            display_text = history['first_message'][:40]
+            
+            # Create vertical box for title and timestamp
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            vbox.set_margin_start(10)  # Adjusted to match button padding
+            vbox.set_margin_end(10)    # Adjusted to match button padding
+            
+            # Title label (first message)
+            title = history['first_message'][:40]
             if len(history['first_message']) > 40:
-                display_text += "..."
+                title += "..."
+            title_label = Gtk.Label(label=title, xalign=0)
+            title_label.get_style_context().add_class('title')
+            title_label.set_line_wrap(False)
+            title_label.set_ellipsize(Pango.EllipsizeMode.END)
             
-            label = Gtk.Label(
-                label=display_text,
-                xalign=0,  # Left align
-                margin=6
-            )
-            label.set_line_wrap(False)  # Prevent wrapping
-            label.set_ellipsize(Pango.EllipsizeMode.END)  # Add ellipsis if text is too long
-            row.add(label)
+            # Timestamp label with CSS provider
+            timestamp = self.get_chat_timestamp(history['filename'])
+            time_label = Gtk.Label(label=timestamp, xalign=0)
+            time_label.get_style_context().add_class('timestamp')
             
-            # Store filename in row data
+            vbox.pack_start(title_label, True, True, 0)
+            vbox.pack_start(time_label, True, True, 0)
+            
+            row.add(vbox)
             row.filename = history['filename']
             
             self.history_list.add(row)
         
         self.history_list.show_all()
+
+    def get_chat_timestamp(self, filename):
+        """Get a formatted timestamp for the chat file."""
+        try:
+            file_path = Path('history') / filename
+            if file_path.exists():
+                timestamp = file_path.stat().st_mtime
+                return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+        except Exception as e:
+            print(f"Error getting timestamp: {e}")
+        return "Unknown date"
 
     def on_history_selected(self, listbox, row):
         """Handle selection of a chat history."""
