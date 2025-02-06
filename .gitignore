@@ -6,3 +6,5 @@ history/
 __pycache__/
 debug_export.tex
 debug_failed.tex
+*.pdf
+!screenshots/*.pdf

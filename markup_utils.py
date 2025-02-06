@@ -255,8 +255,6 @@ def normalize_line_breaks(text):
     result = '\n'.join(new_lines)
 
     # Debug: after joining lines
-    print("Debug: After joining new_lines:")
-    print(repr(result))
 
     # Collapse extra newlines between adjacent block-level elements.
     # Block-level elements here include:
@@ -277,11 +275,8 @@ def normalize_line_breaks(text):
         r'\1\n\n',
         result
     )
-    print("Debug: After collapsing newlines between adjacent block-level elements:")
-    print(repr(result))
-
     # Optionally, trim extra newline characters at the very end of the text.
     result = re.sub(r'\n+$', '\n', result)
-    print("Debug: Final normalized result after trimming trailing newlines:")
-    print(repr(result))
+    #print("Debug: Final normalized result after trimming trailing newlines:")
+    #print(repr(result))
     return result 
