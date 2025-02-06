@@ -763,7 +763,6 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_box.show_all()
 
     def append_ai_message(self, message_text):
-        """Append an AI message to the conversation."""
         # Container for the entire AI response (including play/stop button)
         response_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
@@ -780,67 +779,29 @@ class OpenAIGTKClient(Gtk.Window):
         self.apply_css(lbl_name, css_ai)
         lbl_name.set_text(f"{self.ai_name}:")
         content_container.pack_start(lbl_name, False, False, 0)
-
-        # Add play/stop button
-        btn_speak = Gtk.Button()
         
-        # Calculate button size based on font size
-        button_size = self.font_size * 2
-        
-        # Set fixed size and don't expand
-        btn_speak.set_size_request(button_size, button_size)
-        
-        # Create images for play and stop icons
-        icon_play = Gtk.Image.new_from_icon_name("media-playback-start", Gtk.IconSize.SMALL_TOOLBAR)
-        icon_stop = Gtk.Image.new_from_icon_name("media-playback-stop", Gtk.IconSize.SMALL_TOOLBAR)
-        btn_speak.set_image(icon_play)
-        btn_speak.set_tooltip_text("Play response")
-
-        # Store the full text for TTS (excluding code blocks)
+        # Process message_text to add formatted text and (if needed) code blocks.
         full_text = []
-
-        # Update the split pattern to be more precise
         segments = re.split(r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---)', message_text, flags=re.DOTALL)
-        
         for seg in segments:
             if seg.startswith('--- Code Block Start ('):
-                # Extract language from parentheses
                 lang_match = re.search(r'^--- Code Block Start \((.*?)\) ---', seg)
-                if lang_match:
-                    code_lang = lang_match.group(1)
-                else:
-                    code_lang = "plaintext"
-
-                # Now remove the leading marker line entirely
+                code_lang = lang_match.group(1) if lang_match else "plaintext"
                 code_content = re.sub(r'^--- Code Block Start \(.*?\) ---', '', seg)
-                code_content = re.sub(r'--- Code Block End ---$', '', code_content)
-                code_content = code_content.strip('\n')
-                # Create Styled source view 
+                code_content = re.sub(r'--- Code Block End ---$', '', code_content).strip('\n')
                 source_view = create_source_view(code_content, code_lang, self.font_size, self.source_theme)
-                
                 frame = Gtk.Frame()
                 frame.add(source_view)
                 content_container.pack_start(frame, False, False, 5)
-                
-                # Add a note about code block for TTS
                 full_text.append("Code block follows.")
             else:
                 if seg.strip():
-                    # Process TeX expressions with chat_id
                     processed = process_tex_markup(seg, self.user_color, self.current_chat_id, self.source_theme)
-                    
                     if "<img" in processed:
-                        # If we have images, use TextView
                         text_view = Gtk.TextView()
                         text_view.set_wrap_mode(Gtk.WrapMode.WORD)
                         text_view.set_editable(False)
                         text_view.set_cursor_visible(False)
-                        text_view.set_pixels_above_lines(5)
-                        text_view.set_pixels_below_lines(5)
-                        text_view.set_left_margin(5)
-                        text_view.set_right_margin(5)
-                        
-                        # Apply font using CSS instead of override_font
                         css_provider = Gtk.CssProvider()
                         css = f"""
                             textview {{
@@ -853,28 +814,19 @@ class OpenAIGTKClient(Gtk.Window):
                             css_provider,
                             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
                         )
-                        
                         buffer = text_view.get_buffer()
-                        
-                        # Process the text and add images
                         parts = re.split(r'(<img src="[^"]+"/>)', processed)
                         iter = buffer.get_start_iter()
-                        
                         for part in parts:
                             if part.startswith('<img src="'):
-                                # Extract image path and create pixbuf
                                 img_path = re.search(r'src="([^"]+)"', part).group(1)
                                 insert_tex_image(buffer, iter, img_path)
                             else:
-                                # Use process_text_formatting directly for this case
                                 text = process_text_formatting(part, self.font_size)
                                 buffer.insert_markup(iter, text, -1)
-                        
                         content_container.pack_start(text_view, False, False, 0)
                     else:
-                        # Process all text formatting in one go
                         processed = process_inline_markup(processed, self.font_size)
-                        
                         lbl_ai_text = Gtk.Label()
                         lbl_ai_text.set_selectable(True)
                         lbl_ai_text.set_line_wrap(True)
@@ -884,84 +836,14 @@ class OpenAIGTKClient(Gtk.Window):
                         lbl_ai_text.set_use_markup(True)
                         lbl_ai_text.set_markup(processed)
                         content_container.pack_start(lbl_ai_text, False, False, 0)
-                    
                     full_text.append(seg.strip())
-
-        # Variable to track playback state
-        is_playing = False
-        cleanup_thread = None
-
-        def on_speak_clicked(widget):
-            nonlocal is_playing, cleanup_thread
-            
-            if not is_playing:
-                # Start playback
-                is_playing = True
-                btn_speak.set_image(icon_stop)
-                btn_speak.set_tooltip_text("Stop playback")
-                
-                def speak_thread():
-                    nonlocal is_playing, cleanup_thread
-                    try:
-                        # Create a temporary file for the speech
-                        temp_dir = Path(tempfile.gettempdir())
-                        temp_file = temp_dir / "ai_speech.mp3"
-                        
-                        # Generate speech with proper streaming
-                        with ai_provider.audio.speech.with_streaming_response.create(
-                            model="tts-1",
-                            voice=self.tts_voice,
-                            input=" ".join(full_text)
-                        ) as response:
-                            # Save to file
-                            with open(temp_file, 'wb') as f:
-                                for chunk in response.iter_bytes():
-                                    f.write(chunk)
-                        
-                        # Start playback process
-                        self.current_playback_process = subprocess.Popen(['paplay', str(temp_file)])
-                        
-                        # Wait for playback to complete or be stopped
-                        self.current_playback_process.wait()
-                        
-                        # Clean up after playback
-                        def cleanup():
-                            nonlocal is_playing
-                            time.sleep(0.5)  # Small delay to ensure file is not in use
-                            temp_file.unlink(missing_ok=True)
-                            # Reset button only if playback completed naturally
-                            if is_playing:
-                                GLib.idle_add(btn_speak.set_image, icon_play)
-                                GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
-                                is_playing = False
-                        
-                        cleanup_thread = threading.Thread(target=cleanup, daemon=True)
-                        cleanup_thread.start()
-                        
-                    except Exception as e:
-                        GLib.idle_add(self.append_message, 'ai', f"Error generating speech: {str(e)}")
-                        GLib.idle_add(btn_speak.set_image, icon_play)
-                        GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
-                        is_playing = False
-                
-                # Start playback in separate thread
-                threading.Thread(target=speak_thread, daemon=True).start()
-            
-            else:
-                # Stop playback
-                is_playing = False
-                if hasattr(self, 'current_playback_process'):
-                    self.current_playback_process.terminate()
-                btn_speak.set_image(icon_play)
-                btn_speak.set_tooltip_text("Play response")
+                    
+        # Create the play/stop button using the new refactored method.
+        speech_btn = self.create_speech_button(full_text)
         
-        # Connect the button click handler
-        btn_speak.connect("clicked", on_speak_clicked)
-        
-        # Pack everything into the response container (only once!)
+        # Pack the content and the speech button into the response container.
         response_container.pack_start(content_container, True, True, 0)
-        response_container.pack_end(btn_speak, False, False, 0)
-        
+        response_container.pack_end(speech_btn, False, False, 0)
         self.conversation_box.pack_start(response_container, False, False, 0)
         self.conversation_box.show_all()
         
@@ -1649,6 +1531,80 @@ class OpenAIGTKClient(Gtk.Window):
             )
         except Exception as e:
             print(f"Error applying CSS: {e}")
+
+    def create_speech_button(self, full_text):
+        """
+        Create a play/stop button for TTS playback of the provided full_text.
+        """
+        btn_speak = Gtk.Button()
+        # Calculate button size based on font size
+        button_size = self.font_size * 2
+        btn_speak.set_size_request(button_size, button_size)
+        
+        # Create images for play and stop icons
+        icon_play = Gtk.Image.new_from_icon_name("media-playback-start", Gtk.IconSize.SMALL_TOOLBAR)
+        icon_stop = Gtk.Image.new_from_icon_name("media-playback-stop", Gtk.IconSize.SMALL_TOOLBAR)
+        btn_speak.set_image(icon_play)
+        btn_speak.set_tooltip_text("Play response")
+        
+        is_playing = False  # Local variable to track playback state
+        
+        def on_speak_clicked(widget):
+            nonlocal is_playing
+            if not is_playing:
+                is_playing = True
+                btn_speak.set_image(icon_stop)
+                btn_speak.set_tooltip_text("Stop playback")
+                
+                def speak_thread():
+                    nonlocal is_playing
+                    try:
+                        temp_dir = Path(tempfile.gettempdir())
+                        temp_file = temp_dir / "ai_speech.mp3"
+                        
+                        # Generate speech with proper streaming
+                        with ai_provider.audio.speech.with_streaming_response.create(
+                            model="tts-1",
+                            voice=self.tts_voice,
+                            input=" ".join(full_text)
+                        ) as response:
+                            # Save to file
+                            with open(temp_file, 'wb') as f:
+                                for chunk in response.iter_bytes():
+                                    f.write(chunk)
+                        
+                        # Start playback
+                        self.current_playback_process = subprocess.Popen(['paplay', str(temp_file)])
+                        self.current_playback_process.wait()
+                        
+                        def cleanup():
+                            nonlocal is_playing
+                            time.sleep(0.5)  # Allow a brief delay for file release
+                            temp_file.unlink(missing_ok=True)
+                            if is_playing:
+                                GLib.idle_add(btn_speak.set_image, icon_play)
+                                GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
+                                is_playing = False
+                        
+                        threading.Thread(target=cleanup, daemon=True).start()
+                    
+                    except Exception as e:
+                        GLib.idle_add(self.append_message, 'ai', f"Error generating speech: {str(e)}")
+                        GLib.idle_add(btn_speak.set_image, icon_play)
+                        GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
+                        is_playing = False
+                
+                threading.Thread(target=speak_thread, daemon=True).start()
+            else:
+                # Stop playback if already playing
+                is_playing = False
+                if hasattr(self, 'current_playback_process'):
+                    self.current_playback_process.terminate()
+                btn_speak.set_image(icon_play)
+                btn_speak.set_tooltip_text("Play response")
+        
+        btn_speak.connect("clicked", on_speak_clicked)
+        return btn_speak
 
 def create_source_view(code_content, code_lang, font_size, source_theme='solarized-dark'):
     """Create a styled source view for code display."""
