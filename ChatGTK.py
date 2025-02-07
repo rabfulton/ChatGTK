@@ -754,11 +754,16 @@ class OpenAIGTKClient(Gtk.Window):
         lbl.set_line_wrap(True)
         lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
         lbl.set_xalign(0)  # left align
-        # Set font color
-        css = f"label {{ color: {self.user_color}; font-family: {self.font_family}; font-size: {self.font_size}pt; }}"
+        # Set margins
+        lbl.set_margin_start(0)
+        lbl.set_margin_end(0)
+        lbl.set_margin_top(5)
+        lbl.set_margin_bottom(5)
+        # Set font color and padding
+        css = f"label {{ color: {self.user_color}; font-family: {self.font_family}; font-size: {self.font_size}pt; background-color: @theme_base_color; border-radius: 12px; padding: 10px; }}"
         self.apply_css(lbl, css)
 
-        lbl.set_text(f"You: {text}")
+        lbl.set_text(f"You: {text}")  # Removed extra space before "You:"
         self.conversation_box.pack_start(lbl, False, False, 0)
         self.conversation_box.show_all()
 
@@ -768,20 +773,35 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Container for the text content
         content_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        
+         
+        # Style the container to the same color as the background
+        css_container = f"""
+            box {{
+                background-color: @theme_base_color;
+                padding: 12px;
+                border-radius: 12px;
+            }}
+        """
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(css_container.encode())
+        content_container.get_style_context().add_provider(
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
         # First, show a label with the AI name.
         lbl_name = Gtk.Label()
         lbl_name.set_selectable(True)
         lbl_name.set_line_wrap(True)
         lbl_name.set_line_wrap_mode(Gtk.WrapMode.WORD)
         lbl_name.set_xalign(0)
-        css_ai = f"label {{ color: {self.ai_color}; font-family: {self.font_family}; font-size: {self.font_size}pt; }}"
+        css_ai = f"label {{ color: {self.ai_color}; font-family: {self.font_family}; font-size: {self.font_size}pt; background-color: @theme_base_color;}}"
         self.apply_css(lbl_name, css_ai)
         lbl_name.set_text(f"{self.ai_name}:")
         content_container.pack_start(lbl_name, False, False, 0)
         
         # Process message_text to add formatted text and (if needed) code blocks.
         full_text = []
+        
         segments = re.split(r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---)', message_text, flags=re.DOTALL)
         for seg in segments:
             if seg.startswith('--- Code Block Start ('):
@@ -795,6 +815,13 @@ class OpenAIGTKClient(Gtk.Window):
                 content_container.pack_start(frame, False, False, 5)
                 full_text.append("Code block follows.")
             else:
+                 # For text segments that follow a code block
+                if seg.startswith('\n'):
+                    seg = seg[1:]
+                # For text segments that precede a code block    
+                if seg.endswith('\n'):
+                    seg = seg[:-1]
+                    
                 if seg.strip():
                     processed = process_tex_markup(seg, self.user_color, self.current_chat_id, self.source_theme)
                     if "<img" in processed:
