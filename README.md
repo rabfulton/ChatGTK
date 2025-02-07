@@ -16,7 +16,7 @@ Or use your package manager to install the dependencies. The application when la
 ## Usage
 The application looks for an enviroment variable: $OPENAI_API_KEY
 
-You can get API credits by signing up at [OpenAI's platform](https://platform.openai.com/signup). Credits can be purchased from [OpenAI account page](https://platform.openai.com/account/billing/overview). Credits are very cheap compared to a subscription to the ChatGTP application. You need to create an API key to use the application.
+You can get API credits by signing up at [OpenAI's platform](https://platform.openai.com/signup). Credits can be purchased from your [OpenAI account page](https://platform.openai.com/account/billing/overview). Credits are very cheap compared to a subscription to the ChatGTP application. You need to create an API key to use the application.
 
 ```bash
 python3 ./ChatGTK.py
