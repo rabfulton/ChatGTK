@@ -9,6 +9,7 @@ Disclaimer: Written entirely by AI, I accept no resposibility for what happens t
 ```bash
 pip install -r requirements.txt
 ```
+Or use your package manager to install the dependencies. The application when launched from the terminal will complain about missing dependencies.
 
 ## Usage
 The application looks for an enviroment variable: $OPENAI_API_KEY
