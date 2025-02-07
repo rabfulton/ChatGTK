@@ -37,9 +37,6 @@ python3 ./ChatGTK.py
 *Support for Equations*
 ![Formulae Feature](screenshots/formula.jpg)
 
-*Settings Dialog*
-![Settings Dialog](screenshots/settings.jpg)
-
 *Image Generation*
 ![Image Generation](screenshots/images.jpg)
 
