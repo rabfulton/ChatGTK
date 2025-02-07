@@ -245,7 +245,7 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
             temp_file.write_bytes(png_data)
-            return f'<img src="{temp_file}"/> '
+            return f'<img src="{temp_file}"/>'
         return match.group(0)
 
     # Process display math first \[...\]
@@ -255,9 +255,10 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         text,
         flags=re.DOTALL
     )
-    # 2) Replace inline math of the form \( ... \) and remove a trailing " " character
+    # 2) Replace inline math of the form \( ... \) 
+    text = text.replace("**", "")  # Remove any occurrences of "**" from inline math : Note this is not a perfect solution
     text = re.sub(
-        r'\\\((.*?)\\\)\s*',
+        r'\\\((.*?)\\\)',
         replace_inline_math,
         text
     )

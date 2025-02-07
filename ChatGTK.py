@@ -844,6 +844,7 @@ class OpenAIGTKClient(Gtk.Window):
                     
                 if seg.strip():
                     processed = process_tex_markup(seg, self.user_color, self.current_chat_id, self.source_theme, self.latex_dpi)
+                    
                     if "<img" in processed:
                         text_view = Gtk.TextView()
                         text_view.set_wrap_mode(Gtk.WrapMode.WORD)
@@ -883,7 +884,6 @@ class OpenAIGTKClient(Gtk.Window):
                         lbl_ai_text.set_use_markup(True)
                         lbl_ai_text.set_markup(processed)
                         content_container.pack_start(lbl_ai_text, False, False, 0)
-                    #full_text.append(seg.strip())
                     
         # Create the play/stop button using the new refactored method.
         speech_btn = self.create_speech_button(full_text)
