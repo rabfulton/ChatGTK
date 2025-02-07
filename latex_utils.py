@@ -587,7 +587,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
 \end{center}
 \bigskip
 """ % (escaped_title, export_date)
-        # print("DEBUG: Title section created successfully")
+
         # Format all messages with debug output
         messages_content = []
         for i, message in enumerate(conversation):
@@ -595,7 +595,9 @@ def export_chat_to_pdf(conversation, filename, title=None):
                 try:
                     formatted_message = format_chat_message(message)
                     messages_content.append(formatted_message)
+                    print(f"DEBUG: Successfully formatted message {i}")
                 except Exception as e:
+                    print(f"DEBUG: Error formatting message {i}: {str(e)}")
                     raise
 
         # Combine all content
@@ -603,6 +605,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
         
         # Create temporary directory for LaTeX files
         temp_dir = Path(tempfile.mkdtemp())
+        print(f"DEBUG: Created temp directory at {temp_dir}")
         
         try:
             # Updated LaTeX preamble with textcomp package and robust custom inline code macro
@@ -619,6 +622,33 @@ def export_chat_to_pdf(conversation, filename, title=None):
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage[hidelinks]{hyperref}
+
+% Handle common math symbols
+\DeclareUnicodeCharacter{03A9}{\ensuremath{\Omega}}  % Ω
+\DeclareUnicodeCharacter{03C0}{\ensuremath{\pi}}    % π
+\DeclareUnicodeCharacter{03BC}{\ensuremath{\mu}}    % μ
+\DeclareUnicodeCharacter{03B8}{\ensuremath{\theta}} % θ
+\DeclareUnicodeCharacter{03B1}{\ensuremath{\alpha}} % α
+\DeclareUnicodeCharacter{03B2}{\ensuremath{\beta}}  % β
+\DeclareUnicodeCharacter{03B3}{\ensuremath{\gamma}} % γ
+\DeclareUnicodeCharacter{03C3}{\ensuremath{\sigma}} % σ
+\DeclareUnicodeCharacter{03C6}{\ensuremath{\phi}}   % φ
+\DeclareUnicodeCharacter{2211}{\ensuremath{\sum}}   % ∑
+\DeclareUnicodeCharacter{222B}{\ensuremath{\int}}   % ∫
+\DeclareUnicodeCharacter{221E}{\ensuremath{\infty}} % ∞
+\DeclareUnicodeCharacter{2248}{\ensuremath{\approx}} % ≈
+\DeclareUnicodeCharacter{2260}{\ensuremath{\neq}}   % ≠
+\DeclareUnicodeCharacter{2264}{\ensuremath{\leq}}   % ≤
+\DeclareUnicodeCharacter{2265}{\ensuremath{\geq}}   % ≥
+\DeclareUnicodeCharacter{00B1}{\ensuremath{\pm}}    % ±
+\DeclareUnicodeCharacter{00D7}{\ensuremath{\times}} % ×
+\DeclareUnicodeCharacter{00F7}{\ensuremath{\div}}   % ÷
+\DeclareUnicodeCharacter{2192}{\ensuremath{\rightarrow}} % →
+\DeclareUnicodeCharacter{2190}{\ensuremath{\leftarrow}}  % ←
+\DeclareUnicodeCharacter{2194}{\ensuremath{\leftrightarrow}} % ↔
+\DeclareUnicodeCharacter{2202}{\ensuremath{\partial}}    % ∂
+\DeclareUnicodeCharacter{2207}{\ensuremath{\nabla}}     % ∇
+\DeclareUnicodeCharacter{00B0}{\ensuremath{^{\circ}}}   % °
 
 % Define a robust custom macro for inline code using listings' inline code command.
 \DeclareRobustCommand{\inlinecode}[1]{\lstinline!#1!}
@@ -677,20 +707,33 @@ def export_chat_to_pdf(conversation, filename, title=None):
             # Write the actual LaTeX file
             tex_file = temp_dir / "chat_export.tex"
             tex_file.write_text(full_document, encoding='utf-8')
+            print(f"DEBUG: Wrote LaTeX file to {tex_file}")
             
             # Run pdflatex with detailed output
             for i in range(2):
+                print(f"DEBUG: Running pdflatex iteration {i+1}")
                 result = subprocess.run(
                     ['pdflatex', '-interaction=nonstopmode', str(tex_file)],
                     cwd=temp_dir,
                     capture_output=True,
                     text=True
                 )
+                print(f"DEBUG: pdflatex return code: {result.returncode}")
                 if result.returncode != 0:
+                    print("DEBUG: pdflatex stdout:")
+                    print(result.stdout)
+                    print("DEBUG: pdflatex stderr:")
+                    print(result.stderr)
                     # Save the problematic LaTeX file for inspection
                     debug_file = Path('debug_failed.tex')
                     debug_file.write_text(full_document, encoding='utf-8')
                     print(f"DEBUG: Saved failing LaTeX to {debug_file}")
+                    # Also save the log file if it exists
+                    log_file = temp_dir / "chat_export.log"
+                    if log_file.exists():
+                        debug_log = Path('debug_failed.log')
+                        debug_log.write_text(log_file.read_text())
+                        print(f"DEBUG: Saved LaTeX log to {debug_log}")
                     return False
                     
             # Check if PDF was created
@@ -699,6 +742,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
                 print("DEBUG: PDF file was not created")
                 return False
             
+            print(f"DEBUG: Moving PDF from {output_pdf} to {filename}")
             # Move the file
             output_path = Path(filename)
             output_path.parent.mkdir(parents=True, exist_ok=True)
