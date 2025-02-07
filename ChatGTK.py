@@ -53,7 +53,7 @@ from gi.repository import Gtk, GLib, Pango, GtkSource
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
 class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens, source_theme):
+    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens, source_theme, latex_dpi):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 600)  # Made taller to accommodate all content
@@ -71,6 +71,7 @@ class SettingsDialog(Gtk.Dialog):
         self.tts_voice = tts_voice
         self.max_tokens = max_tokens
         self.source_theme = source_theme
+        self.latex_dpi = latex_dpi
 
         # Get the content area
         box = self.get_content_area()
@@ -279,6 +280,20 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.combo_theme, False, True, 0)
         list_box.add(row)
 
+        # LaTeX DPI
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Math DPI", xalign=0)
+        label.set_hexpand(True)
+        self.spin_latex_dpi = Gtk.SpinButton()
+        self.spin_latex_dpi.set_range(72, 600)  # Reasonable DPI range
+        self.spin_latex_dpi.set_increments(1, 10)
+        self.spin_latex_dpi.set_value(float(self.latex_dpi))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_latex_dpi, False, True, 0)
+        list_box.add(row)
+
         # System Message (moved to end)
         row = Gtk.ListBoxRow()
         row.set_activatable(False)  # Disable row activation
@@ -409,7 +424,8 @@ class SettingsDialog(Gtk.Dialog):
             'microphone': self.combo_mic.get_active_text() or 'default',
             'tts_voice': self.combo_tts.get_active_text(),
             'max_tokens': int(self.spin_max_tokens.get_value()),
-            'source_theme': self.combo_theme.get_active_text()
+            'source_theme': self.combo_theme.get_active_text(),
+            'latex_dpi': int(self.spin_latex_dpi.get_value()),
         }
 
 class OpenAIGTKClient(Gtk.Window):
@@ -440,6 +456,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
         self.max_tokens = int(loaded.get('MAX_TOKENS', '0'))
         self.source_theme = loaded.get('SOURCE_THEME', 'solarized-dark')
+        self.latex_dpi = int(loaded.get('LATEX_DPI', '200'))
         
         self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
 
@@ -602,7 +619,7 @@ class OpenAIGTKClient(Gtk.Window):
         button_box.pack_start(self.btn_voice, True, True, 0)
 
         # Add history button to the same horizontal box
-        self.history_button = Gtk.Button(label="Clear History")
+        self.history_button = Gtk.Button(label="Clear Chat")
         self.history_button.connect("clicked", self.on_clear_clicked)
         button_box.pack_start(self.history_button, True, True, 0)
 
@@ -626,12 +643,11 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Load chat histories
         self.refresh_history_list()
+        self.apply_sidebar_styles()
 
         # Connect window size handlers
         self.connect("configure-event", self.on_configure_event)
         self.connect("destroy", self.on_destroy)
-        
-        self.apply_sidebar_styles()
 
     def on_destroy(self, widget):
         """Save settings and cleanup before closing."""
@@ -648,6 +664,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['SIDEBAR_VISIBLE'] = str(self.sidebar_visible)
         to_save['MAX_TOKENS'] = str(self.max_tokens)
         to_save['SOURCE_THEME'] = self.source_theme
+        to_save['LATEX_DPI'] = str(self.latex_dpi)
         save_settings(to_save)
         cleanup_temp_files()
         Gtk.main_quit()
@@ -709,7 +726,8 @@ class OpenAIGTKClient(Gtk.Window):
             microphone=self.microphone,
             tts_voice=self.tts_voice,
             max_tokens=self.max_tokens,
-            source_theme=self.source_theme
+            source_theme=self.source_theme,
+            latex_dpi=self.latex_dpi
         )
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
@@ -726,6 +744,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.tts_voice = new_settings['tts_voice']
             self.max_tokens = new_settings['max_tokens']
             self.source_theme = new_settings['source_theme']
+            self.latex_dpi = new_settings['latex_dpi']
 
             # Re-populate model list so default can be enforced
             self.fetch_models_async()
@@ -744,6 +763,7 @@ class OpenAIGTKClient(Gtk.Window):
             to_save['TTS_VOICE'] = self.tts_voice
             to_save['MAX_TOKENS'] = str(self.max_tokens)
             to_save['SOURCE_THEME'] = self.source_theme
+            to_save['LATEX_DPI'] = str(self.latex_dpi)
             save_settings(to_save)
         dialog.destroy()
 
@@ -763,7 +783,7 @@ class OpenAIGTKClient(Gtk.Window):
         css = f"label {{ color: {self.user_color}; font-family: {self.font_family}; font-size: {self.font_size}pt; background-color: @theme_base_color; border-radius: 12px; padding: 10px; }}"
         self.apply_css(lbl, css)
 
-        lbl.set_text(f"You: {text}")  # Removed extra space before "You:"
+        lbl.set_text(f"You: {text}")
         self.conversation_box.pack_start(lbl, False, False, 0)
         self.conversation_box.show_all()
 
@@ -823,7 +843,7 @@ class OpenAIGTKClient(Gtk.Window):
                     seg = seg[:-1]
                     
                 if seg.strip():
-                    processed = process_tex_markup(seg, self.user_color, self.current_chat_id, self.source_theme)
+                    processed = process_tex_markup(seg, self.user_color, self.current_chat_id, self.source_theme, self.latex_dpi)
                     if "<img" in processed:
                         text_view = Gtk.TextView()
                         text_view.set_wrap_mode(Gtk.WrapMode.WORD)

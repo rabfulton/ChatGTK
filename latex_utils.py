@@ -125,7 +125,7 @@ def generate_formula_hash(formula, is_display_math, text_color):
     # Create a consistent hash using SHA-256
     return hashlib.sha256(hash_string.encode()).hexdigest()[:16]
 
-def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=None):
+def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=None, dpi=200):
     """
     Convert a TeX string to PNG using system latex tools.
     
@@ -134,6 +134,7 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
         is_display_math (bool): Whether to render as display math
         text_color (str): Color for the rendered formula (hex or name)
         chat_id (str): Optional chat ID for caching formulas
+        dpi (float): DPI value for rendering (default: 200)
     
     Returns:
         bytes: PNG image data, or None if conversion fails
@@ -191,7 +192,12 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
             # Convert DVI to PNG
             dvi_file = tmp_path / "equation.dvi"
             png_file = tmp_path / "equation.png"
-            result = subprocess.run(['dvipng', '-D', '300', '-T', 'tight', '-bg', 'Transparent',
+            if is_display_math:
+                result = subprocess.run(['dvipng', '-D', f"{dpi * 1.25:.1f}", '-T', 'tight', '-bg', 'Transparent',
+                          str(dvi_file), '-o', str(png_file)],
+                         cwd=tmpdir, capture_output=True, text=True)
+            else:
+                result = subprocess.run(['dvipng', '-D', f"{dpi:.1f}", '-T', 'tight', '-bg', 'Transparent',
                           str(dvi_file), '-o', str(png_file)],
                          cwd=tmpdir, capture_output=True, text=True)
             if result.returncode != 0:
@@ -211,29 +217,20 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
         except Exception:
             return None
 
-def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark', font_size=12):
+def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark', dpi=200):
     """
     Process LaTeX markup in the provided text for LaTeX export.
 
-    This function handles a variety of transformations:
-      - Converts display and inline math to PNG images via LaTeX,
-      - Tokenizes and robustly processes code blocks and inline code (using
-        \\texttt{\\detokenize{...}} for inline code so that it can be nested inside
-        other formatting commands),
-      - Converts HTML image tags into proper LaTeX image inclusion commands,
-      - Processes headers and forced newlines while preserving structural breaks.
-
-    The resulting output is safe for further LaTeX compilation.
+    Args:
+        text (str): The text to process
+        text_color (str): Color for the rendered formula
+        chat_id (str): Optional chat ID for caching formulas
+        source_theme (str): Theme for code highlighting
+        dpi (float): DPI value for formula rendering
     """
-    # Import create_source_view here to avoid circular import
-    #from ChatGTK import create_source_view
-    
-    # Clean up multiple newlines before processing
-    #text = re.sub(r'\n\n+', '\n', text)
-    
     def replace_display_math(match):
         math_content = match.group(1)
-        png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color, chat_id=chat_id)
+        png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color, chat_id=chat_id, dpi=dpi)
         if png_data:
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"math_display_{hash(math_content)}.png"
@@ -243,7 +240,7 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
 
     def replace_inline_math(match):
         math_content = match.group(1)
-        png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color, chat_id=chat_id)
+        png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color, chat_id=chat_id, dpi=dpi)
         if png_data:
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"math_inline_{hash(math_content)}.png"
@@ -271,14 +268,6 @@ def insert_tex_image(buffer, iter, img_path):
     try:
         pixbuf = GdkPixbuf.Pixbuf.new_from_file(img_path)
         buffer.insert_pixbuf(iter, pixbuf)
-        # Handle spacing based on math type
-        #if 'math_display_' in img_path:
-            #buffer.insert(iter, "\n")
-            # If this is part of a list item, add another newline
-            #if buffer.get_text(buffer.get_start_iter(), iter, True).strip().endswith(('-', '•')):
-                #buffer.insert(iter, "")
-        #elif 'math_inline_' in img_path:
-           # buffer.insert(iter, " ")
         return True
     except Exception as e:
         print(f"Error loading image: {e}")
