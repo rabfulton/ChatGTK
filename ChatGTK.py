@@ -28,7 +28,8 @@ from utils import (
     load_chat_history,
     list_chat_histories,
     get_chat_metadata,
-    get_chat_title
+    get_chat_title,
+    parse_color_to_rgba
 )
 from ai_providers import get_ai_provider
 from markup_utils import (
@@ -53,7 +54,7 @@ from gi.repository import Gtk, GLib, Pango, GtkSource
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
 class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens, source_theme, latex_dpi):
+    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens, source_theme, latex_dpi, latex_color):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 600)  # Made taller to accommodate all content
@@ -72,6 +73,7 @@ class SettingsDialog(Gtk.Dialog):
         self.max_tokens = max_tokens
         self.source_theme = source_theme
         self.latex_dpi = latex_dpi
+        self.latex_color = latex_color
 
         # Get the content area
         box = self.get_content_area()
@@ -150,6 +152,21 @@ class SettingsDialog(Gtk.Dialog):
         self.entry_ai_color.set_text(self.ai_color)
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.entry_ai_color, False, True, 0)
+        list_box.add(row)
+
+        # LaTeX Color picker (moved to be with other color options)
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Math Color", xalign=0)
+        label.set_hexpand(True)
+        self.btn_latex_color = Gtk.ColorButton()
+        
+        # Parse the color string and set the button color
+        rgba = parse_color_to_rgba(self.latex_color)
+        self.btn_latex_color.set_rgba(rgba)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.btn_latex_color, False, True, 0)
         list_box.add(row)
 
         # Default Model
@@ -412,6 +429,9 @@ class SettingsDialog(Gtk.Dialog):
             True
         )
         
+        # Get the color from the color button
+        latex_color = self.btn_latex_color.get_rgba().to_string()
+        
         return {
             'ai_name': self.entry_ai_name.get_text(),
             'font_family': self.entry_font.get_text(),
@@ -426,6 +446,7 @@ class SettingsDialog(Gtk.Dialog):
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
+            'latex_color': latex_color,  
         }
 
 class OpenAIGTKClient(Gtk.Window):
@@ -439,8 +460,8 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             print(f"Could not load application icon: {e}")
 
-        # Load settings
         loaded = load_settings()
+        
         self.ai_name = loaded['AI_NAME']
         self.font_family = loaded['FONT_FAMILY']
         self.font_size = int(loaded['FONT_SIZE'])
@@ -457,6 +478,14 @@ class OpenAIGTKClient(Gtk.Window):
         self.max_tokens = int(loaded.get('MAX_TOKENS', '0'))
         self.source_theme = loaded.get('SOURCE_THEME', 'solarized-dark')
         self.latex_dpi = int(loaded.get('LATEX_DPI', '200'))
+        
+        # Get LaTeX color from settings, only fall back to theme color if not set
+        if 'LATEX_COLOR' in loaded:
+            self.latex_color = loaded['LATEX_COLOR']
+        else:
+            # Get default text color from theme as fallback
+            style_context = self.get_style_context()
+            self.latex_color = style_context.get_color(Gtk.StateFlags.NORMAL).to_string()
         
         self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
 
@@ -665,6 +694,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['MAX_TOKENS'] = str(self.max_tokens)
         to_save['SOURCE_THEME'] = self.source_theme
         to_save['LATEX_DPI'] = str(self.latex_dpi)
+        to_save['LATEX_COLOR'] = self.latex_color
         save_settings(to_save)
         cleanup_temp_files()
         Gtk.main_quit()
@@ -727,7 +757,8 @@ class OpenAIGTKClient(Gtk.Window):
             tts_voice=self.tts_voice,
             max_tokens=self.max_tokens,
             source_theme=self.source_theme,
-            latex_dpi=self.latex_dpi
+            latex_dpi=self.latex_dpi,
+            latex_color=self.latex_color
         )
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
@@ -745,6 +776,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.max_tokens = new_settings['max_tokens']
             self.source_theme = new_settings['source_theme']
             self.latex_dpi = new_settings['latex_dpi']
+            self.latex_color = new_settings['latex_color']
 
             # Re-populate model list so default can be enforced
             self.fetch_models_async()
@@ -764,6 +796,7 @@ class OpenAIGTKClient(Gtk.Window):
             to_save['MAX_TOKENS'] = str(self.max_tokens)
             to_save['SOURCE_THEME'] = self.source_theme
             to_save['LATEX_DPI'] = str(self.latex_dpi)
+            to_save['LATEX_COLOR'] = self.latex_color
             save_settings(to_save)
         dialog.destroy()
 
@@ -843,7 +876,7 @@ class OpenAIGTKClient(Gtk.Window):
                     seg = seg[:-1]
                     
                 if seg.strip():
-                    processed = process_tex_markup(seg, self.user_color, self.current_chat_id, self.source_theme, self.latex_dpi)
+                    processed = process_tex_markup(seg, self.latex_color, self.current_chat_id, self.source_theme, self.latex_dpi)
                     
                     if "<img" in processed:
                         text_view = Gtk.TextView()

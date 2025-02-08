@@ -167,6 +167,20 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
             latex_color = f"{r:.3f},{g:.3f},{b:.3f}"
         except ValueError:
             latex_color = "1,1,1"
+    elif text_color.startswith('rgb'):
+        # Handle 'rgb(r,g,b)' format
+        try:
+            # Extract the numbers from the rgb string
+            rgb = re.match(r'rgb\(([\d.]+),\s*([\d.]+),\s*([\d.]+)\)', text_color)
+            if rgb:
+                r = float(rgb.group(1)) / 255
+                g = float(rgb.group(2)) / 255
+                b = float(rgb.group(3)) / 255
+                latex_color = f"{r:.3f},{g:.3f},{b:.3f}"
+            else:
+                latex_color = "1,1,1"
+        except (ValueError, AttributeError):
+            latex_color = "1,1,1"
     else:
         latex_color = "1,1,1"
 
@@ -228,6 +242,8 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         source_theme (str): Theme for code highlighting
         dpi (float): DPI value for formula rendering
     """
+    print(f"LaTeX processing with color: {text_color}")  # Debug print
+    
     def replace_display_math(match):
         math_content = match.group(1)
         png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color, chat_id=chat_id, dpi=dpi)

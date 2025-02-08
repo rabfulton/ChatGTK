@@ -3,6 +3,12 @@ import json
 from datetime import datetime
 from pathlib import Path
 import re
+import gi
+
+# Specify GTK version before importing
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk
 
 # Path to settings file (in same directory as this script)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
@@ -30,6 +36,7 @@ DEFAULT_SETTINGS = {
     'MAX_TOKENS': '0',  # Add default max_tokens setting (0 = no limit)
     'SOURCE_THEME': 'solarized-dark',  # Add default theme setting
     'LATEX_DPI': '200',  # Add this line if it's missing
+    'LATEX_COLOR': 'rgb(255,163,72)',  # Add this line if it's missing
 }
 
 def load_settings():
@@ -193,3 +200,28 @@ def list_chat_histories():
     histories.sort(key=lambda x: get_timestamp(x['filename']), reverse=True)
     
     return histories
+
+def parse_color_to_rgba(color_str):
+    """Convert a color string (rgb or hex) to Gdk.RGBA object.
+    
+    Args:
+        color_str (str): Color in 'rgb(r,g,b)' or hex format
+    
+    Returns:
+        Gdk.RGBA: Color object for GTK widgets
+    """
+    rgba = Gdk.RGBA()
+    if color_str.startswith('rgb('):
+        # Extract RGB values from the rgb() format
+        rgb_match = re.match(r'rgb\((\d+),(\d+),(\d+)\)', color_str)
+        if rgb_match:
+            r = int(rgb_match.group(1)) / 255.0
+            g = int(rgb_match.group(2)) / 255.0
+            b = int(rgb_match.group(3)) / 255.0
+            rgba.red = r
+            rgba.green = g
+            rgba.blue = b
+            rgba.alpha = 1.0
+    else:
+        rgba.parse(color_str)
+    return rgba
