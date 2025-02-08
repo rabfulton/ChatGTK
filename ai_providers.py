@@ -54,12 +54,14 @@ class OpenAIProvider(AIProvider):
         self.client = OpenAI(api_key=api_key)
     
     def get_available_models(self):
+        import re
         try:
             models = self.client.models.list()
-            return [model.id for model in models]
+            filtered_models = [model.id for model in models if not re.search(r'-\d{4}-\d{2}-\d{2}$', model.id)]
+            return sorted(filtered_models)
         except Exception as e:
             print(f"Error fetching models: {e}")
-            return ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3"]
+            return sorted(["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3"])
     
     def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None):
         params = {
@@ -143,7 +145,7 @@ class OpenAIWebSocketProvider:
                 raise ValueError("OPENAI_API_KEY environment variable not set")
                 
             self.ws = await websockets.connect(
-                "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
+                "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
                 extra_headers={
                     "Authorization": f"Bearer {api_key}",
                     "OpenAI-Beta": "realtime=v1"  # Correct beta header

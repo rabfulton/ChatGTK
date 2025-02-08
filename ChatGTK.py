@@ -716,15 +716,61 @@ class OpenAIGTKClient(Gtk.Window):
         """Update the model combo box with fetched models."""
         # Clear existing items
         self.combo_model.remove_all()
-        # Add new models
-        for model in models:
+        
+        # Get currently selected model
+        current_model = self.default_model
+        
+        # Sort models alphabetically, excluding the current model
+        other_models = sorted([m for m in models if m != current_model])
+        
+        # Add current model first if it exists in the list
+        if current_model in models:
+            self.combo_model.append_text(current_model)
+        
+        # Add remaining models
+        for model in other_models:
             self.combo_model.append_text(model)
-        # Set default model
-        if self.default_model in models:
-            self.combo_model.set_active(models.index(self.default_model))
+        
+        # Set active model
+        if current_model in models:
+            self.combo_model.set_active(0)  # Current model is always first
         else:
-            self.combo_model.set_active(0)
+            self.combo_model.set_active(0)  # Default to first model if current not found
+
+        # Connect the changed signal handler
+        self.combo_model.connect('changed', self.on_model_changed)
         return False
+
+    def on_model_changed(self, combo):
+        """Handle model selection changes."""
+        # Get all models from the combo box
+        model_store = combo.get_model()
+        models = [model_store[i][0] for i in range(len(model_store))]
+        
+        # Get newly selected model
+        selected_model = combo.get_active_text()
+        if not selected_model:
+            return
+        
+        # Temporarily block the signal to prevent recursion
+        combo.handler_block_by_func(self.on_model_changed)
+        
+        # Update the list with new order
+        combo.remove_all()
+        
+        # Add selected model first
+        combo.append_text(selected_model)
+        
+        # Add other models alphabetically
+        other_models = sorted([m for m in models if m != selected_model])
+        for model in other_models:
+            combo.append_text(model)
+        
+        # Set active to first item (the selected model)
+        combo.set_active(0)
+        
+        # Unblock the signal
+        combo.handler_unblock_by_func(self.on_model_changed)
 
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
@@ -1007,7 +1053,7 @@ class OpenAIGTKClient(Gtk.Window):
                     # Get the last user message as the prompt
                     prompt = self.conversation_history[-1]["content"]
                     answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp")
-                case "gpt-4o-realtime-preview-2024-12-17":
+                case "gpt-4o-realtime-preview":
                     # Realtime audio model using websockets
                     return
                 case _:
@@ -1181,11 +1227,11 @@ class OpenAIGTKClient(Gtk.Window):
     def on_voice_input(self, widget):
         current_model = self.combo_model.get_active_text()
 
-        if current_model != "gpt-4o-realtime-preview-2024-12-17":
+        if current_model != "gpt-4o-realtime-preview":
             # Use existing recording logic for normal transcription
             self.audio_transcription(widget)
 
-        elif current_model == "gpt-4o-realtime-preview-2024-12-17":
+        elif current_model == "gpt-4o-realtime-preview":
             # Start real-time audio streaming
             print("Starting real-time audio streaming...\n")
             
