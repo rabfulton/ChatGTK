@@ -29,7 +29,8 @@ from utils import (
     list_chat_histories,
     get_chat_metadata,
     get_chat_title,
-    parse_color_to_rgba
+    parse_color_to_rgba,
+    rgb_to_hex
 )
 from ai_providers import get_ai_provider
 from markup_utils import (
@@ -136,10 +137,11 @@ class SettingsDialog(Gtk.Dialog):
         row.add(hbox)
         label = Gtk.Label(label="User Color", xalign=0)
         label.set_hexpand(True)
-        self.entry_user_color = Gtk.Entry()
-        self.entry_user_color.set_text(self.user_color)
+        self.btn_user_color = Gtk.ColorButton()
+        rgba = parse_color_to_rgba(self.user_color)
+        self.btn_user_color.set_rgba(rgba)
         hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_user_color, False, True, 0)
+        hbox.pack_start(self.btn_user_color, False, True, 0)
         list_box.add(row)
 
         # AI Color
@@ -148,21 +150,20 @@ class SettingsDialog(Gtk.Dialog):
         row.add(hbox)
         label = Gtk.Label(label="AI Color", xalign=0)
         label.set_hexpand(True)
-        self.entry_ai_color = Gtk.Entry()
-        self.entry_ai_color.set_text(self.ai_color)
+        self.btn_ai_color = Gtk.ColorButton()
+        rgba = parse_color_to_rgba(self.ai_color)
+        self.btn_ai_color.set_rgba(rgba)
         hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_ai_color, False, True, 0)
+        hbox.pack_start(self.btn_ai_color, False, True, 0)
         list_box.add(row)
 
-        # LaTeX Color picker (moved to be with other color options)
+        # LaTeX Color picker
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Math Color", xalign=0)
         label.set_hexpand(True)
         self.btn_latex_color = Gtk.ColorButton()
-        
-        # Parse the color string and set the button color
         rgba = parse_color_to_rgba(self.latex_color)
         self.btn_latex_color.set_rgba(rgba)
         hbox.pack_start(label, True, True, 0)
@@ -429,15 +430,17 @@ class SettingsDialog(Gtk.Dialog):
             True
         )
         
-        # Get the color from the color button
+        # Get colors from color buttons
+        user_color = self.btn_user_color.get_rgba().to_string()
+        ai_color = self.btn_ai_color.get_rgba().to_string()
         latex_color = self.btn_latex_color.get_rgba().to_string()
         
         return {
             'ai_name': self.entry_ai_name.get_text(),
             'font_family': self.entry_font.get_text(),
             'font_size': int(self.spin_size.get_value()),
-            'user_color': self.entry_user_color.get_text(),
-            'ai_color': self.entry_ai_color.get_text(),
+            'user_color': user_color,
+            'ai_color': ai_color,
             'default_model': self.entry_default_model.get_text(),
             'system_message': system_message,
             'temperament': self.scale_temp.get_value(),
@@ -1363,7 +1366,8 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Create new thinking label
         self.thinking_label = Gtk.Label()
-        self.thinking_label.set_markup(f"<span color='{self.ai_color}'>{self.ai_name} is thinking</span>")
+        hex_color = rgb_to_hex(self.ai_color)
+        self.thinking_label.set_markup(f"<span color='{hex_color}'>{self.ai_name} is thinking</span>")
         self.conversation_box.pack_start(self.thinking_label, False, False, 0)
         self.conversation_box.show_all()
         
@@ -1387,8 +1391,9 @@ class OpenAIGTKClient(Gtk.Window):
             if hasattr(self, 'thinking_label') and self.thinking_label:
                 self.thinking_dots = (self.thinking_dots + 1) % 4
                 dots = "." * self.thinking_dots
+                hex_color = rgb_to_hex(self.ai_color)
                 self.thinking_label.set_markup(
-                    f"<span color='{self.ai_color}'>{self.ai_name} is thinking{dots}</span>"
+                    f"<span color='{hex_color}'>{self.ai_name} is thinking{dots}</span>"
                 )
                 return True  # Continue animation
             return False  # Stop animation if label is gone

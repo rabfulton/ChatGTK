@@ -225,3 +225,21 @@ def parse_color_to_rgba(color_str):
     else:
         rgba.parse(color_str)
     return rgba
+
+def rgb_to_hex(color_str):
+    """Convert rgb(r,g,b) color string to hex format (#RRGGBB).
+    
+    Args:
+        color_str (str): Color in 'rgb(r,g,b)' format
+    
+    Returns:
+        str: Color in hex format (#RRGGBB)
+    """
+    if color_str.startswith('rgb('):
+        rgb_match = re.match(r'rgb\((\d+),\s*(\d+),\s*(\d+)\)', color_str)
+        if rgb_match:
+            r = int(rgb_match.group(1))
+            g = int(rgb_match.group(2))
+            b = int(rgb_match.group(3))
+            return f'#{r:02x}{g:02x}{b:02x}'
+    return color_str  # Return unchanged if not rgb format

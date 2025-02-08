@@ -242,7 +242,6 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         source_theme (str): Theme for code highlighting
         dpi (float): DPI value for formula rendering
     """
-    print(f"LaTeX processing with color: {text_color}")  # Debug print
     
     def replace_display_math(match):
         math_content = match.group(1)

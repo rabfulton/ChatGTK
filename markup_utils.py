@@ -1,5 +1,6 @@
 import re
 import gi
+from utils import rgb_to_hex  # Add this import
 
 # Specify GTK versions before importing
 gi.require_version("Gtk", "3.0")
@@ -192,22 +193,10 @@ def fix_rgb_colors_in_markup(text: str) -> str:
     pattern = re.compile(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)')
 
     def replacer(match):
-        r = int(match.group(1))
-        g = int(match.group(2))
-        b = int(match.group(3))
-        return f'#{r:02X}{g:02X}{b:02X}'  # uppercase hex
+        rgb_str = f"rgb({match.group(1)},{match.group(2)},{match.group(3)})"
+        return rgb_to_hex(rgb_str)
 
     return pattern.sub(replacer, text)
-
-def rgb_to_hex(rgb_str):
-    """Convert RGB string like 'rgb(216,222,233)' to hex color like '#D8DEE9'."""
-    try:
-        # Extract the RGB values
-        r, g, b = map(int, rgb_str.strip('rgb()').split(','))
-        # Convert to hex
-        return f'#{r:02x}{g:02x}{b:02x}'
-    except:
-        return '#000000'  # Default to black if conversion fails
 
 def convert_single_asterisks_to_italic(text):
     """Convert markdown italic syntax (*text*) to Pango markup."""
