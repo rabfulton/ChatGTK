@@ -32,7 +32,7 @@ from utils import (
     parse_color_to_rgba,
     rgb_to_hex
 )
-from ai_providers import get_ai_provider
+from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
 from markup_utils import (
     format_response,
     process_inline_markup,
@@ -683,6 +683,9 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_destroy(self, widget):
         """Save settings and cleanup before closing."""
+        if hasattr(self, 'ws_provider'):
+            self.ws_provider.stop_streaming()
+            
         # Save all settings including sidebar width
         to_save = load_settings()
         width, height = self.current_geometry
@@ -1004,6 +1007,9 @@ class OpenAIGTKClient(Gtk.Window):
                     # Get the last user message as the prompt
                     prompt = self.conversation_history[-1]["content"]
                     answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp")
+                case "gpt-4o-realtime-preview-2024-12-17":
+                    # Realtime audio model using websockets
+                    return
                 case _:
                     answer = ai_provider.generate_chat_completion(
                         messages=self.conversation_history,
@@ -1072,8 +1078,9 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             print(f"Error recording audio: {e}")
             return None, None
-
-    def on_voice_input(self, widget):
+    
+    def audio_transcription(self, widget):
+        """Handle audio transcription."""
         if not self.recording:
             try:
                 # Check if audio system is available
@@ -1170,6 +1177,54 @@ class OpenAIGTKClient(Gtk.Window):
             
         except Exception as e:
             self.append_message('ai', f"Error generating speech: {str(e)}")
+
+    def on_voice_input(self, widget):
+        current_model = self.combo_model.get_active_text()
+
+        if current_model != "gpt-4o-realtime-preview-2024-12-17":
+            # Use existing recording logic for normal transcription
+            self.audio_transcription(widget)
+
+        elif current_model == "gpt-4o-realtime-preview-2024-12-17":
+            # Start real-time audio streaming
+            print("Starting real-time audio streaming...\n")
+            
+            if not self.recording:
+                try:
+                    # Check if audio system is available
+                    sd.check_output_settings()
+                    
+                    # Start recording
+                    self.recording = True
+                    self.btn_voice.set_label("Recording... Click to Stop")
+                    
+                    # Initialize WebSocket provider if needed
+                    if not hasattr(self, 'ws_provider'):
+                        self.ws_provider = OpenAIWebSocketProvider()
+                        self.ws_provider.microphone = self.microphone  # Pass selected microphone
+                    
+                    def stream_callback(content):
+                        """Handle incoming transcription/response"""
+                        print(f"Received stream content: {content}")
+                        self.append_ai_message(content)
+                    
+                    self.ws_provider.start_streaming(stream_callback)
+                    
+                except Exception as e:
+                    print(f"Real-time streaming error: {e}")
+                    self.append_message('ai', f"Error starting real-time streaming: {str(e)}")
+                    self.btn_voice.set_label("Start Voice Input")
+                    self.recording = False
+            else:
+                # Stop recording
+                print("Stopping real-time streaming...")
+                if hasattr(self, 'ws_provider'):
+                    self.ws_provider.stop_streaming()
+                    delattr(self, 'ws_provider')  # Clean up the provider
+                self.recording = False
+                self.btn_voice.set_label("Start Voice Input")
+                return False  # Prevent signal propagation
+
 
     def on_clear_clicked(self, widget):
         """Clear the current chat and its associated files."""
