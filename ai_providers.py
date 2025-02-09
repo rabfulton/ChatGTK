@@ -57,6 +57,7 @@ class OpenAIProvider(AIProvider):
         import re
         try:
             models = self.client.models.list()
+            # Remove models with specified dates, the non dated ones always point to the latest model
             filtered_models = [model.id for model in models if not re.search(r'-\d{4}-\d{2}-\d{2}$', model.id)]
             return sorted(filtered_models)
         except Exception as e:

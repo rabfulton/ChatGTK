@@ -941,6 +941,9 @@ class OpenAIGTKClient(Gtk.Window):
                                 font-family: {self.font_family};
                                 font-size: {self.font_size}pt;
                             }}
+                            textview text {{
+                                color: {self.ai_color};
+                            }}
                         """
                         css_provider.load_from_data(css.encode())
                         text_view.get_style_context().add_provider(
