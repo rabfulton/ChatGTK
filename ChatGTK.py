@@ -743,32 +743,32 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_model_changed(self, combo):
         """Handle model selection changes."""
-        # Get all models from the combo box
-        model_store = combo.get_model()
-        models = [model_store[i][0] for i in range(len(model_store))]
-        
         # Get newly selected model
         selected_model = combo.get_active_text()
         if not selected_model:
             return
-        
+
         # Temporarily block the signal to prevent recursion
         combo.handler_block_by_func(self.on_model_changed)
-        
+
+        # Get all models from the combo box
+        model_store = combo.get_model()
+        models = [model_store[i][0] for i in range(len(model_store))]
+
         # Update the list with new order
         combo.remove_all()
-        
+
         # Add selected model first
         combo.append_text(selected_model)
-        
-        # Add other models alphabetically
-        other_models = sorted([m for m in models if m != selected_model])
+
+        # Add other models alphabetically, excluding the selected model
+        other_models = sorted(m for m in models if m != selected_model)
         for model in other_models:
             combo.append_text(model)
-        
-        # Set active to first item (the selected model)
+
+        # Set active to the first item (the selected model)
         combo.set_active(0)
-        
+
         # Unblock the signal
         combo.handler_unblock_by_func(self.on_model_changed)
 
