@@ -972,6 +972,7 @@ class OpenAIGTKClient(Gtk.Window):
                         lbl_ai_text.set_use_markup(True)
                         lbl_ai_text.set_markup(processed)
                         content_container.pack_start(lbl_ai_text, False, False, 0)
+                    full_text.append(seg)
                     
         # Create the play/stop button using the new refactored method.
         speech_btn = self.create_speech_button(full_text)
@@ -1130,6 +1131,7 @@ class OpenAIGTKClient(Gtk.Window):
     
     def audio_transcription(self, widget):
         """Handle audio transcription."""
+        print("audio_transcription\n")
         if not self.recording:
             try:
                 # Check if audio system is available
