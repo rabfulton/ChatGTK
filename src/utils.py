@@ -4,17 +4,12 @@ from datetime import datetime
 from pathlib import Path
 import re
 import gi
+from config import SETTINGS_FILE, HISTORY_DIR
 
 # Specify GTK version before importing
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk
-
-# Path to settings file (in same directory as this script)
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
-
-# Add these constants at the top with the other constants
-HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history")
 
 DEFAULT_SETTINGS = {
     'AI_NAME': 'Sheila',

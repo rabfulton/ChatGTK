@@ -41,6 +41,7 @@ from markup_utils import (
 )
 from gi.repository import Gdk
 from datetime import datetime
+from config import SETTINGS_FILE, HISTORY_DIR, BASE_DIR
 
 # Initialize provider as None
 ai_provider = None
@@ -52,7 +53,7 @@ gi.require_version("GtkSource", "4")
 from gi.repository import Gtk, GLib, Pango, GtkSource 
 
 # Path to settings file (in same directory as this script)
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
+# SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
 class SettingsDialog(Gtk.Dialog):
     def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens, source_theme, latex_dpi, latex_color):
@@ -458,7 +459,8 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Set window icon
         try:
-            icon_path = Path(__file__).parent / "icon.png"
+            # Use BASE_DIR from config for icon path
+            icon_path = Path(BASE_DIR) / "icon.png"
             self.set_icon_from_file(str(icon_path))
         except Exception as e:
             print(f"Could not load application icon: {e}")

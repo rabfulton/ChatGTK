@@ -1,0 +1,1 @@
+"""ChatGTK - OpenAI Chat Client with GTK interface""" 
