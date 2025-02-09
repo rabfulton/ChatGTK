@@ -1083,7 +1083,7 @@ class OpenAIGTKClient(Gtk.Window):
         finally:
             GLib.idle_add(self.hide_thinking_animation)
 
-    def record_audio(self, duration=5, sample_rate=16000):
+    def record_audio(self, duration=5, sample_rate=24000):
         """Record audio for specified duration."""
         try:
             # Force use of PulseAudio
@@ -1131,7 +1131,6 @@ class OpenAIGTKClient(Gtk.Window):
     
     def audio_transcription(self, widget):
         """Handle audio transcription."""
-        print("audio_transcription\n")
         if not self.recording:
             try:
                 # Check if audio system is available
@@ -1150,7 +1149,7 @@ class OpenAIGTKClient(Gtk.Window):
                         # Set a timeout for recording (e.g., 30 seconds)
                         recording = None
                         try:
-                            recording, sample_rate = self.record_audio()
+                            recording, sample_rate = self.record_audio(sample_rate=24000)
                         except Exception as e:
                             GLib.idle_add(self.append_message, 'ai', f"Recording failed: {str(e)}")
                             return
