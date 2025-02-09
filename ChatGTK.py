@@ -1438,10 +1438,16 @@ class OpenAIGTKClient(Gtk.Window):
     def save_current_chat(self):
         """Save the current chat history."""
         if len(self.conversation_history) > 1:  # More than just the system message
-            # Add or update the model in the system message
-            if len(self.conversation_history) > 0:
-                self.conversation_history[0]["model"] = self.combo_model.get_active_text()
-            
+            # Check if the chat already has a model name
+            if len(self.conversation_history) > 0 and "model" in self.conversation_history[0]:
+                current_model = self.conversation_history[0]["model"]
+            else:
+                current_model = self.combo_model.get_active_text()
+
+            # Only store the model name if it's not dall-e-3 and does not contain "tts" or "audio"
+            if "dall-e" not in current_model.lower() and "tts" not in current_model.lower() and "audio" not in current_model.lower():
+                self.conversation_history[0]["model"] = current_model
+
             if self.current_chat_id is None:
                 # New chat - generate name and save
                 chat_name = generate_chat_name(self.conversation_history[1]['content'])
