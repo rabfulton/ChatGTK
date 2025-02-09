@@ -21,7 +21,10 @@ You can get API credits by signing up at [OpenAI's platform](https://platform.op
 ```bash
 ./chatgtk.sh
 ```
-
+Alterantively You can run the install script to add a desktop entry and set up the environment variable.
+```bash
+./install.sh
+```
 ## Features
 
 - Clean GTK3 interface
