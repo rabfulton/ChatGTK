@@ -1062,6 +1062,9 @@ class OpenAIGTKClient(Gtk.Window):
                 case "gpt-4o-realtime-preview":
                     # Realtime audio model using websockets
                     return
+                case "gpt-4o-mini-realtime-preview":
+                    # Realtime audio model using websockets
+                    return
                 case _:
                     answer = ai_provider.generate_chat_completion(
                         messages=self.conversation_history,
@@ -1109,7 +1112,7 @@ class OpenAIGTKClient(Gtk.Window):
                 # Use the device's supported sample rate
                 supported_sample_rate = int(device_info['default_samplerate'])
             else:
-                supported_sample_rate = 16000  # fallback
+                supported_sample_rate = 24000  # fallback
             
             # Record audio
             recording = sd.rec(
@@ -1233,11 +1236,11 @@ class OpenAIGTKClient(Gtk.Window):
     def on_voice_input(self, widget):
         current_model = self.combo_model.get_active_text()
 
-        if current_model != "gpt-4o-realtime-preview":
-            # Use existing recording logic for normal transcription
+        if "realtime" not in current_model.lower():
+            # Call function for normal transcription
             self.audio_transcription(widget)
 
-        elif current_model == "gpt-4o-realtime-preview":
+        else:
             # Start real-time audio streaming
             print("Starting real-time audio streaming...\n")
             
@@ -1255,12 +1258,17 @@ class OpenAIGTKClient(Gtk.Window):
                         self.ws_provider = OpenAIWebSocketProvider()
                         self.ws_provider.microphone = self.microphone  # Pass selected microphone
                     
-                    def stream_callback(content):
-                        """Handle incoming transcription/response"""
-                        print(f"Received stream content: {content}")
-                        self.append_ai_message(content)
+                    # def stream_callback(content):
+                    #     """Handle incoming transcription/response"""
+                    #     print(f"Received stream content: {content}")
+                    #     #self.append_ai_message(content)
                     
-                    self.ws_provider.start_streaming(stream_callback)
+                    self.ws_provider.start_streaming(
+                        callback=self.on_stream_content_received,
+                        microphone=self.microphone,
+                        system_message=self.system_message,
+                        temperature=self.temperament
+                    )
                     
                 except Exception as e:
                     print(f"Real-time streaming error: {e}")
@@ -1798,6 +1806,11 @@ class OpenAIGTKClient(Gtk.Window):
         
         btn_speak.connect("clicked", on_speak_clicked)
         return btn_speak
+
+    def on_stream_content_received(self, content):
+        """Handle received streaming content."""
+        if content.startswith('Error:'):
+            print(f"Error: {content}")
 
 def create_source_view(code_content, code_lang, font_size, source_theme='solarized-dark'):
     """Create a styled source view for code display."""

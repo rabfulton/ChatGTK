@@ -130,6 +130,7 @@ class OpenAIWebSocketProvider:
         self.current_task = None
         self.is_recording = False
         self.audio_buffer = bytearray()
+        self.is_ai_speaking = False  # New flag to track AI speech state
         
         # Audio configuration
         self.input_sample_rate = 48000  # Input from mic
@@ -145,16 +146,59 @@ class OpenAIWebSocketProvider:
             if not api_key:
                 raise ValueError("OPENAI_API_KEY environment variable not set")
                 
+            # Get model from URL parameters
+            model = getattr(self, 'model', 'gpt-4o-realtime-preview')  # Default fallback
+            
             self.ws = await websockets.connect(
-                "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+                f"wss://api.openai.com/v1/realtime?model={model}",
                 extra_headers={
                     "Authorization": f"Bearer {api_key}",
-                    "OpenAI-Beta": "realtime=v1"  # Correct beta header
+                    "OpenAI-Beta": "realtime=v1"
                 }
             )
-            print("Connected to server.")
+            print(f"Connected to server using model: {model}")
             
-            # No need for initial config event - the URL includes the model
+            # Send initial configuration with session parameters
+            config_message = {
+                "type": "response.create",
+                "response": {
+                    "modalities": ["text", "audio"],
+                    "instructions": self.system_message,
+                    "temperature": self.temperature,
+                    "voice": "alloy",        # Current voice options are alloy, ash, ballad, coral, echo sage, shimmer and verse
+                }
+            }
+            config_message2 = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "instructions": self.system_message,
+                    "voice": "alloy",
+                    "input_audio_format": "pcm16",
+                    "output_audio_format": "pcm16",
+                    "input_audio_transcription": {
+                        # "enabled": True,
+                        "model": "whisper-1"
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.1,
+                        "prefix_padding_ms": 10,
+                        "silence_duration_ms": 999
+                    },
+                }
+            }
+            await self.ws.send(json.dumps(config_message2))
+            print("Sent initial configuration message")
+
+            # Wait for session.updated confirmation
+            while True:
+                response = await self.ws.recv()
+                if isinstance(response, str):
+                    data = json.loads(response)
+                    if data.get("type") == "session.updated":
+                        print("Session configuration confirmed")
+                        break
             
     async def start_audio_stream(self, callback):
         """Start streaming audio to the API"""
@@ -214,9 +258,17 @@ class OpenAIWebSocketProvider:
                         if isinstance(message, str):
                             response = json.loads(message)
                             
+                            # Track AI speech state
+                            if response.get("type") == "response.created":
+                                print("Speech started - pausing mic input")
+                                self.is_ai_speaking = True
+                            elif response.get("type") == "response.done":
+                                print("Speech ended - resuming mic input")
+                                self.is_ai_speaking = False
+                            
                             # Only log non-heartbeat messages
                             if response.get("type") != "heartbeat":
-                                print("Received event:", json.dumps(response, indent=2))
+                                print(("Received event: " + json.dumps(response, indent=2))[:250])
                             
                             if "text" in response:
                                 print(f"Received text: {response['text']}")
@@ -241,10 +293,6 @@ class OpenAIWebSocketProvider:
                                     print(f"Error playing audio delta: {e}")
                                     import traceback
                                     traceback.print_exc()
-                            elif response.get("type") == "speech.started":
-                                print("Speech started")
-                            elif response.get("type") == "speech.ended":
-                                print("Speech ended")
                             elif response.get("type") == "error":
                                 print(f"Error from server: {response}")
                                 if response.get("error", {}).get("code") != "end_of_speech":
@@ -299,6 +347,10 @@ class OpenAIWebSocketProvider:
         """Callback for audio input"""
         if status:
             print(f"Audio input status: {status}")
+            
+        # Skip recording if AI is speaking to prevent feedback
+        if self.is_ai_speaking:
+            return
             
         if self.ws and self.ws.open and self.is_recording:
             try:
@@ -355,8 +407,13 @@ class OpenAIWebSocketProvider:
         except Exception as e:
             print(f"Error sending audio data: {e}")
 
-    def start_streaming(self, callback):
+    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None):
         """Start streaming audio in a background task"""
+        # Store the configuration
+        self.microphone = microphone
+        self.system_message = system_message or "You are a helpful assistant."
+        self.temperature = temperature or 0.7
+        
         if self.loop is None:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
