@@ -368,36 +368,6 @@ def process_image_path(src):
         print(f"DEBUG: Failed to process image path: {e}")
         return None
 
-def create_latex_image(image_path):
-    """Create LaTeX command for including an image."""
-    if image_path:
-        return r'\begin{center}\includegraphics[width=\linewidth]{' + image_path + r'}\end{center}'
-    return r'\textit{[Image unavailable]}'
-
-def process_headers(text):
-    """Process text for headers, similar to markup_utils."""
-    # Handle headers (match 1-4 #s followed by text)
-    def replace_header(match):
-        level = len(match.group(1))  # Count the number of #
-        title = match.group(2).strip()
-        # Mark the LaTeX command to prevent escaping
-        if level == 1:
-            return f'__LATEX_CMD__\\section*{{{title}}}__END_LATEX_CMD__'
-        elif level == 2:
-            return f'__LATEX_CMD__\\subsection*{{{title}}}__END_LATEX_CMD__'
-        elif level == 3:
-            return f'__LATEX_CMD__\\subsubsection*{{{title}}}__END_LATEX_CMD__'
-        else:
-            return f'__LATEX_CMD__\\paragraph*{{{title}}}__END_LATEX_CMD__'
-    
-    # Process headers first
-    text = re.sub(r'^(#{1,4})\s*(.+?)$', replace_header, text, flags=re.MULTILINE)
-    
-    # After all escaping is done, restore the LaTeX commands
-    text = re.sub(r'__LATEX_CMD__(.+?)__END_LATEX_CMD__', r'\1', text)
-    
-    return text
-
 def format_message_content(content: str) -> str:
     """
     Process a message content through markdown-like formatting for LaTeX export.

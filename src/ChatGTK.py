@@ -1227,26 +1227,6 @@ class OpenAIGTKClient(Gtk.Window):
             self.recording = False
             self.btn_voice.set_label("Start Voice Input")
 
-    def speak_text(self, text):
-        """Convert text to speech using OpenAI's TTS."""
-        try:
-            # Create a temporary file for the speech
-            temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / "ai_speech.mp3"
-            
-            # Generate speech
-            response = ai_provider.generate_speech(text, self.tts_voice)
-            
-            # Save to file
-            response.stream_to_file(temp_file)
-            
-            # Play the audio (you'll need to implement audio playback)
-            # This is a placeholder - you might want to use a library like pygame or vlc
-            os.system(f"xdg-open {temp_file}")  # Basic playback using system default
-            
-        except Exception as e:
-            self.append_message('ai', f"Error generating speech: {str(e)}")
-
     def on_voice_input(self, widget):
         current_model = self.combo_model.get_active_text()
 

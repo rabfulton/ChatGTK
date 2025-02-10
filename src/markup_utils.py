@@ -51,22 +51,6 @@ def escape_for_pango_markup(text):
     """Escapes markup-sensitive characters for Pango markup."""
     return GLib.markup_escape_text(text)
 
-def convert_double_asterisks_to_bold(text):
-    """Convert markdown bold syntax to Pango markup."""
-    # First pattern: text with colon
-    pattern1 = r'\*\*([^*]+?)\*\*:'
-    result = re.sub(pattern1, r'<b>\1</b>:', text)
-    
-    # Second pattern: remaining bold text
-    pattern2 = r'\*\*([^*]+?)\*\*'
-    result = re.sub(pattern2, r'<b>\1</b>', result)
-    
-    # Show any remaining asterisks
-    if '**' in result:
-        print("WARNING: Remaining ** found at positions:", [i for i, c in enumerate(result) if c == '*'])
-    
-    return result
-
 def format_response(text):
     """Apply all formatting to a response."""
     # Format bullet points first
