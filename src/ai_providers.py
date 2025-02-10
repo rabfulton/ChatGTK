@@ -307,7 +307,6 @@ class OpenAIWebSocketProvider:
                             if "event_id" in response:
                                 self.last_event_id = response["event_id"]
                             
-                    
                             # Track AI speech state
                             if response.get("type") == "response.created":
                                 print("Speech started - pausing mic input")
