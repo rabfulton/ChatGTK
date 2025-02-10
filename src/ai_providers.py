@@ -176,6 +176,7 @@ class OpenAIWebSocketProvider:
 
     async def ensure_connection(self):
         """Ensure we have an active WebSocket connection"""
+        print(f"Ensuring connection")
         if not self.ws or not self.ws.open:
             api_key = os.getenv('OPENAI_API_KEY')
             if not api_key:
@@ -266,8 +267,11 @@ class OpenAIWebSocketProvider:
                     device_idx = i
                     break
             
+            print(f"Found device index: {device_idx}")
+            
             # If selected microphone not found, use default
             if device_idx is None:
+                print("Using default input device")  # Add this debug print
                 device_idx = sd.default.device[0]
             
             # Query device capabilities
@@ -303,20 +307,7 @@ class OpenAIWebSocketProvider:
                             if "event_id" in response:
                                 self.last_event_id = response["event_id"]
                             
-                            if response.get("type") == "conversation.item.created":
-                                print("Send response configuration")
-                                response_config = {
-                                    'event_id': self.last_event_id,
-                                    "type": "response.create",
-                                    "response": {
-                                        "modalities": ["audio", "text"],
-                                        "voice": "alloy",
-                                        "instructions": self.system_message,
-                                        "output_audio_format": "pcm16"
-                                    }
-                                }
-                                await self.ws.send(json.dumps(response_config))
-                            
+                    
                             # Track AI speech state
                             if response.get("type") == "response.created":
                                 print("Speech started - pausing mic input")
@@ -468,6 +459,7 @@ class OpenAIWebSocketProvider:
 
     def start_streaming(self, callback, microphone=None, system_message=None, temperature=None):
         """Start streaming audio in a background task"""
+        print(f"Starting streaming")
         # Store the configuration
         self.microphone = microphone
         self.system_message = system_message or "You are a helpful assistant."
@@ -475,6 +467,21 @@ class OpenAIWebSocketProvider:
         
         self.start_loop()
         
+        # Create and run the audio stream in the event loop
+        future = asyncio.run_coroutine_threadsafe(
+            self.start_audio_stream(callback),
+            self.loop
+        )
+        
+        # Add error handling for the future
+        def handle_future(fut):
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"Error in audio stream: {e}")
+            
+        future.add_done_callback(handle_future)
+
     def stop_streaming(self):
         """Stop audio streaming"""
         print("Stopping audio stream...")
