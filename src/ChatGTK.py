@@ -1032,6 +1032,24 @@ class OpenAIGTKClient(Gtk.Window):
         if not question:
             return
 
+        # Check if this is a one off image generation request
+        if question.lower().startswith("img:"):
+            # Remove the "img:" prefix from the prompt
+            print(f"Image generation request: {question}")
+            question = question[4:].strip()
+            print(f"Image generation prompt: {question}")
+            self.append_message('user', question)
+            self.conversation_history.append({"role": "user", "content": question})
+            self.entry_question.set_text("")
+            self.show_thinking_animation()
+            # Switch to dall-e-3 model for image generation
+            threading.Thread(
+                target=self.call_openai_api,
+                args=(api_key, "dall-e-3"),
+                daemon=True
+            ).start()
+            return
+
         # Check if we're in realtime mode
         if "realtime" in self.combo_model.get_active_text().lower():
             if not hasattr(self, 'ws_provider'):

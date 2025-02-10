@@ -34,7 +34,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - LaTeX formula rendering
 - Customizable settings
 - Conversation history management
-- Image generation using Dall-e-3 model
+- Image generation using Dall-e-3 model, use the "img:" prefix to quickly access the model.
 - Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
 
 ## Screenshots
