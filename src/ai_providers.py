@@ -131,6 +131,7 @@ class OpenAIWebSocketProvider:
         self.is_recording = False
         self.audio_buffer = bytearray()
         self.is_ai_speaking = False  # New flag to track AI speech state
+        self.last_event_id = None  # Track event ID for responses
         
         # Audio configuration
         self.input_sample_rate = 48000  # Input from mic
@@ -138,6 +139,9 @@ class OpenAIWebSocketProvider:
         self.channels = 1
         self.dtype = np.int16
         self.min_audio_ms = 100
+        
+        self.output_stream = None
+        self.message_lock = asyncio.Lock()  # Add lock for message handling
         
     async def ensure_connection(self):
         """Ensure we have an active WebSocket connection"""
@@ -197,6 +201,7 @@ class OpenAIWebSocketProvider:
                 if isinstance(response, str):
                     data = json.loads(response)
                     if data.get("type") == "session.updated":
+                        self.last_event_id = data.get("event_id")  # Store the event ID
                         print("Session configuration confirmed")
                         break
             
@@ -257,6 +262,24 @@ class OpenAIWebSocketProvider:
                         message = await self.ws.recv()
                         if isinstance(message, str):
                             response = json.loads(message)
+                            
+                            # Update event ID from responses
+                            if "event_id" in response:
+                                self.last_event_id = response["event_id"]
+                            
+                            if response.get("type") == "conversation.item.created":
+                                print("Send response configuration")
+                                response_config = {
+                                    'event_id': self.last_event_id,
+                                    "type": "response.create",
+                                    "response": {
+                                        "modalities": ["audio", "text"],
+                                        "voice": "alloy",
+                                        "instructions": self.system_message,
+                                        "output_audio_format": "pcm16"
+                                    }
+                                }
+                                await self.ws.send(json.dumps(response_config))
                             
                             # Track AI speech state
                             if response.get("type") == "response.created":
@@ -458,6 +481,142 @@ class OpenAIWebSocketProvider:
                 print(f"Error stopping loop: {e}")
             self.loop = None
             
+        self.ws = None
+
+    async def send_text_message(self, text):
+        """Send a text message through the realtime connection"""
+        try:
+            if not self.ws or not self.ws.open:
+                await self.ensure_connection()
+            
+            # Initialize audio output stream if needed
+            if self.output_stream is None:
+                self.output_stream = sd.OutputStream(
+                    channels=1,
+                    samplerate=self.output_sample_rate,
+                    dtype=np.int16,
+                    blocksize=4800,
+                    latency='low'
+                )
+                self.output_stream.start()
+            
+            async with self.message_lock:  # Use lock for message handling
+                # Create and send the text message
+                text_message = {
+                    'event_id': self.last_event_id,
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": text}]
+                    }
+                }
+                await self.ws.send(json.dumps(text_message))
+                print(f"Sent text message: {text}")
+                
+                # Process responses including audio
+                while True:
+                    response = await self.ws.recv()
+                    if isinstance(response, str):
+                        data = json.loads(response)
+                        
+                        if data.get("type") == "conversation.item.created":
+                            # Send response configuration
+                            response_config = {
+                                'event_id': data.get('event_id'),
+                                "type": "response.create",
+                                "response": {
+                                    "modalities": ["audio", "text"],
+                                    "voice": "alloy",
+                                    "instructions": self.system_message,
+                                    "output_audio_format": "pcm16"
+                                }
+                            }
+                            await self.ws.send(json.dumps(response_config))
+                            print("Sent response configuration")
+                        
+                        elif data.get("type") == "response.audio.delta":
+                            try:
+                                audio_bytes = base64.b64decode(data["delta"])
+                                print(f"Received audio delta: {len(audio_bytes)} bytes")
+                                
+                                audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                                if audio_data.ndim == 1:
+                                    audio_data = audio_data.reshape(-1, 1)
+                                
+                                self.output_stream.write(audio_data)
+                            except Exception as e:
+                                print(f"Error playing audio delta: {e}")
+                        
+                        elif data.get("type") == "response.done":
+                            break
+                
+        except Exception as e:
+            print(f"Error sending text message: {e}")
+            if self.output_stream:
+                self.output_stream.stop()
+                self.output_stream.close()
+                self.output_stream = None
+
+    def send_text(self, text, callback):
+        """Send text message from main thread"""
+        if self.loop:
+            asyncio.run_coroutine_threadsafe(
+                self.send_text_message(text),
+                self.loop
+            )
+
+    def connect(self, model=None, system_message=None, temperature=None):
+        """Initialize WebSocket connection without starting audio stream"""
+        # Store the configuration
+        self.model = model or 'gpt-4o-realtime-preview'
+        self.system_message = system_message or "You are a helpful assistant."
+        self.temperature = temperature or 0.7
+        
+        if self.loop is None:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+        
+        # Create and start the event loop in a separate thread
+        def run_loop():
+            self.loop.run_forever()
+        
+        threading.Thread(target=run_loop, daemon=True).start()
+        
+        # Ensure connection is established
+        future = asyncio.run_coroutine_threadsafe(
+            self.ensure_connection(),
+            self.loop
+        )
+        try:
+            future.result(timeout=10.0)  # Wait up to 10 seconds for connection
+            print("WebSocket connection established")
+            return True
+        except Exception as e:
+            print(f"Error connecting to WebSocket server: {e}")
+            return False
+
+    def disconnect(self):
+        """Close the WebSocket connection and cleanup"""
+        if self.output_stream:
+            self.output_stream.stop()
+            self.output_stream.close()
+            self.output_stream = None
+            
+        if self.ws and self.ws.open:
+            future = asyncio.run_coroutine_threadsafe(
+                self.ws.close(),
+                self.loop
+            )
+            try:
+                future.result(timeout=5.0)
+            except Exception as e:
+                print(f"Error during cleanup: {e}")
+        
+        if self.loop:
+            self.loop.stop()
+            self.loop = None
+        
         self.ws = None
 
 # Factory function to get the appropriate provider

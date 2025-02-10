@@ -1023,12 +1023,26 @@ class OpenAIGTKClient(Gtk.Window):
         if not question:
             return
 
-        api_key = self.entry_api.get_text().strip()
-        if not api_key:
-            self.append_message('ai', "** Error: Please enter your API key. **")
+        # Check if we're in realtime mode
+        if "realtime" in self.combo_model.get_active_text().lower():
+            if not hasattr(self, 'ws_provider'):
+                self.ws_provider = OpenAIWebSocketProvider()
+                # Connect to WebSocket server
+                success = self.ws_provider.connect(
+                    model=self.combo_model.get_active_text(),
+                    system_message=self.system_message,
+                    temperature=self.temperament
+                )
+                if not success:
+                    self.display_error("Failed to connect to WebSocket server")
+                    return
+                
+            self.ws_provider.send_text(question, self.on_stream_content_received)
+            self.append_message('user', question)
+            self.entry_question.set_text("")
             return
-
-        model = self.combo_model.get_active_text()
+        
+        # ... existing non-realtime code ...
         # Use new method to append user message
         self.append_message('user', question)
         # Store user message in the chat history
