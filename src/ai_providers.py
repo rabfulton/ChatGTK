@@ -127,7 +127,7 @@ class OpenAIWebSocketProvider:
     def __init__(self):
         self.ws = None
         self.loop = None
-        self.current_task = None
+        self.thread = None
         self.is_recording = False
         self.audio_buffer = bytearray()
         self.is_ai_speaking = False  # New flag to track AI speech state
@@ -142,7 +142,38 @@ class OpenAIWebSocketProvider:
         
         self.output_stream = None
         self.message_lock = asyncio.Lock()  # Add lock for message handling
+        self._lock = threading.Lock()
         
+    def start_loop(self):
+        """Start the event loop in a new thread if not already running"""
+        with self._lock:
+            if self.thread is None or not self.thread.is_alive():
+                self.loop = asyncio.new_event_loop()
+                self.thread = threading.Thread(target=self.run_loop, daemon=True)
+                self.thread.start()
+
+    def run_loop(self):
+        """Run the event loop"""
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def stop_loop(self):
+        """Safely stop the event loop"""
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            if self.thread and self.thread.is_alive():
+                self.thread.join()
+            self.loop.close()
+            self.loop = None
+            self.thread = None
+
+    def __del__(self):
+        """Cleanup when the object is destroyed"""
+        self.stop_loop()
+        if self.output_stream:
+            self.output_stream.stop()
+            self.output_stream.close()
+
     async def ensure_connection(self):
         """Ensure we have an active WebSocket connection"""
         if not self.ws or not self.ws.open:
@@ -205,14 +236,9 @@ class OpenAIWebSocketProvider:
                         print("Session configuration confirmed")
                         break
             
-    async def start_audio_stream(self, callback):
-        """Start streaming audio to the API"""
-        try:
-            await self.ensure_connection()
-            
-            self.is_recording = True
-            
-            # Initialize audio output stream with proper settings
+    def _initialize_output_stream(self):
+        """Initialize audio output stream if needed"""
+        if self.output_stream is None:
             self.output_stream = sd.OutputStream(
                 channels=1,
                 samplerate=self.output_sample_rate,
@@ -221,6 +247,16 @@ class OpenAIWebSocketProvider:
                 latency='low'
             )
             self.output_stream.start()
+        
+    async def start_audio_stream(self, callback):
+        """Start streaming audio to the API"""
+        try:
+            await self.ensure_connection()
+            
+            self.is_recording = True
+            
+            # Initialize audio output stream
+            self._initialize_output_stream()
             
             # Find the device index for the selected microphone
             devices = sd.query_devices()
@@ -437,23 +473,8 @@ class OpenAIWebSocketProvider:
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature or 0.7
         
-        if self.loop is None:
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            
-        if self.current_task:
-            self.current_task.cancel()
-            
-        self.current_task = self.loop.create_task(
-            self.start_audio_stream(callback)
-        )
+        self.start_loop()
         
-        # Run the event loop in a separate thread
-        def run_loop():
-            self.loop.run_forever()
-            
-        threading.Thread(target=run_loop, daemon=True).start()
-
     def stop_streaming(self):
         """Stop audio streaming"""
         print("Stopping audio stream...")
@@ -470,17 +491,8 @@ class OpenAIWebSocketProvider:
             except Exception as e:
                 print(f"Error during cleanup: {e}")
         
-        if self.current_task:
-            self.current_task.cancel()
-            self.current_task = None
-            
-        if self.loop:
-            try:
-                self.loop.stop()
-            except Exception as e:
-                print(f"Error stopping loop: {e}")
-            self.loop = None
-            
+        self.stop_loop()
+        
         self.ws = None
 
     async def send_text_message(self, text):
@@ -489,16 +501,8 @@ class OpenAIWebSocketProvider:
             if not self.ws or not self.ws.open:
                 await self.ensure_connection()
             
-            # Initialize audio output stream if needed
-            if self.output_stream is None:
-                self.output_stream = sd.OutputStream(
-                    channels=1,
-                    samplerate=self.output_sample_rate,
-                    dtype=np.int16,
-                    blocksize=4800,
-                    latency='low'
-                )
-                self.output_stream.start()
+            # Initialize audio output stream
+            self._initialize_output_stream()
             
             async with self.message_lock:  # Use lock for message handling
                 # Create and send the text message
@@ -573,15 +577,7 @@ class OpenAIWebSocketProvider:
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature or 0.7
         
-        if self.loop is None:
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-        
-        # Create and start the event loop in a separate thread
-        def run_loop():
-            self.loop.run_forever()
-        
-        threading.Thread(target=run_loop, daemon=True).start()
+        self.start_loop()
         
         # Ensure connection is established
         future = asyncio.run_coroutine_threadsafe(
@@ -613,9 +609,7 @@ class OpenAIWebSocketProvider:
             except Exception as e:
                 print(f"Error during cleanup: {e}")
         
-        if self.loop:
-            self.loop.stop()
-            self.loop = None
+        self.stop_loop()
         
         self.ws = None
 

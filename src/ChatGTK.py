@@ -1111,47 +1111,49 @@ class OpenAIGTKClient(Gtk.Window):
         finally:
             GLib.idle_add(self.hide_thinking_animation)
 
-    def record_audio(self, duration=5, sample_rate=24000):
-        """Record audio for specified duration."""
+    def record_audio(self):
+        """Record audio from microphone."""
         try:
-            # Force use of PulseAudio
+            recorded_chunks = []  # Store audio chunks here
+            
             os.environ['AUDIODEV'] = 'pulse'  # Force use of PulseAudio
             
-            # Find the device index for the selected microphone
-            devices = sd.query_devices()
-            device_idx = None
-            for i, device in enumerate(devices):
-                if device['name'] == self.microphone and device['max_input_channels'] > 0:
-                    device_idx = i
-                    break
+            # Get device info for the selected microphone
+            device_info = sd.query_devices(self.microphone, 'input')
+            if device_info is None:
+                print(f"Warning: Could not find microphone '{self.microphone}', using default")
+                device_info = sd.query_devices(sd.default.device[0], 'input')
             
-            # If selected microphone not found, use default
-            if device_idx is None:
-                device_idx = sd.default.device[0]
+            # Use the device's supported sample rate
+            supported_sample_rate = int(device_info['default_samplerate'])
             
-            # Query device capabilities
-            device_info = sd.query_devices(device_idx, 'input')
-            if device_info is not None:
-                # Use the device's supported sample rate
-                supported_sample_rate = int(device_info['default_samplerate'])
-            else:
-                supported_sample_rate = 24000  # fallback
+            # Callback to store audio chunks
+            def audio_callback(indata, frames, time, status):
+                if status:
+                    print(f'Status: {status}')
+                recorded_chunks.append(indata.copy())
             
-            # Record audio
-            recording = sd.rec(
-                int(duration * supported_sample_rate),
-                samplerate=supported_sample_rate,
+            # Create input stream
+            stream = sd.InputStream(
+                device=self.microphone,
                 channels=1,
-                dtype=np.float32,
-                device=device_idx,
-                blocking=True  # Make sure recording is complete before continuing
+                samplerate=supported_sample_rate,
+                callback=audio_callback,
+                dtype=np.float32
             )
             
-            if recording is None or len(recording) == 0:
-                print("Error: No audio data recorded")
-                return None, None
-                
-            return recording, supported_sample_rate
+            # Start recording
+            with stream:
+                print(f"Recording started at {supported_sample_rate} Hz")
+                while self.recording:
+                    sd.sleep(100)  # Sleep between checks
+            
+            # Concatenate all recorded chunks
+            if recorded_chunks:
+                recording = np.concatenate(recorded_chunks, axis=0)
+                return recording, supported_sample_rate
+            
+            return None, None
             
         except Exception as e:
             print(f"Error recording audio: {e}")
@@ -1159,14 +1161,16 @@ class OpenAIGTKClient(Gtk.Window):
     
     def audio_transcription(self, widget):
         """Handle audio transcription."""
+        print("Audio transcription...")
         if not self.recording:
             try:
                 # Check if audio system is available
-                sd.check_output_settings()
+                #sd.check_output_settings()
                 
                 # Start recording
                 self.recording = True
                 self.btn_voice.set_label("Recording... Click to Stop")
+                print("Recording started")
                 
                 def record_thread():
                     try:
@@ -1177,7 +1181,7 @@ class OpenAIGTKClient(Gtk.Window):
                         # Set a timeout for recording (e.g., 30 seconds)
                         recording = None
                         try:
-                            recording, sample_rate = self.record_audio(sample_rate=24000)
+                            recording, sample_rate = self.record_audio()
                         except Exception as e:
                             GLib.idle_add(self.append_message, 'ai', f"Recording failed: {str(e)}")
                             return
@@ -1252,19 +1256,31 @@ class OpenAIGTKClient(Gtk.Window):
                     # Check if audio system is available
                     sd.check_output_settings()
                     
-                    # Start recording
-                    self.recording = True
-                    self.btn_voice.set_label("Recording... Click to Stop")
-                    
                     # Initialize WebSocket provider if needed
                     if not hasattr(self, 'ws_provider'):
                         self.ws_provider = OpenAIWebSocketProvider()
                         self.ws_provider.microphone = self.microphone  # Pass selected microphone
                     
-                    # def stream_callback(content):
-                    #     """Handle incoming transcription/response"""
-                    #     print(f"Received stream content: {content}")
-                    #     #self.append_ai_message(content)
+                    # Connect to WebSocket before starting stream
+                    api_key = self.entry_api.get_text().strip()
+                    if not api_key:
+                        self.show_error_dialog("Please enter your OpenAI API key")
+                        return False
+                    
+                    os.environ['OPENAI_API_KEY'] = api_key
+                    
+                    # Connect with the current model
+                    if not self.ws_provider.connect(
+                        model=current_model,
+                        system_message=self.system_message,
+                        temperature=self.temperament
+                    ):
+                        self.show_error_dialog("Failed to connect to OpenAI realtime service")
+                        return False
+                    
+                    # Start recording
+                    self.recording = True
+                    self.btn_voice.set_label("Recording... Click to Stop")
                     
                     self.ws_provider.start_streaming(
                         callback=self.on_stream_content_received,
