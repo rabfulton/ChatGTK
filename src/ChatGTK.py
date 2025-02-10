@@ -1018,7 +1018,16 @@ class OpenAIGTKClient(Gtk.Window):
         else:
             self.append_ai_message(message_text)
 
-    def on_submit(self, widget):
+    def on_submit(self, widget, event=None):
+        # Get the API key from the entry field
+        api_key = self.entry_api.get_text().strip()
+        if not api_key:
+            self.show_error_dialog("Please enter your OpenAI API key")
+            return False
+        
+        # Set the API key in environment for the websocket provider
+        os.environ['OPENAI_API_KEY'] = api_key
+        
         question = self.entry_question.get_text().strip()
         if not question:
             return
@@ -1057,7 +1066,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Call OpenAI API in a separate thread
         threading.Thread(
             target=self.call_openai_api,
-            args=(api_key, model),
+            args=(api_key, self.combo_model.get_active_text()),
             daemon=True
         ).start()
 
