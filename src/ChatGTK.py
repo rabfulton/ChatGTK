@@ -1274,7 +1274,6 @@ class OpenAIGTKClient(Gtk.Window):
                 self.btn_voice.set_label("Start Voice Input")
                 return False  # Prevent signal propagation
 
-
     def on_clear_clicked(self, widget):
         """Clear the current chat and its associated files."""
         # Clear the display
@@ -1622,8 +1621,11 @@ class OpenAIGTKClient(Gtk.Window):
                     custom_title = get_chat_title(history_row.filename)
                     title = f"Chat Export - {custom_title[:50]}"
                     
+                    # Get the chat ID from the filename
+                    chat_id = history_row.filename
+                    
                     try:
-                        success = export_chat_to_pdf(history, filename, title)
+                        success = export_chat_to_pdf(history, filename, title, chat_id)
                         
                         if success:
                             info_dialog = Gtk.MessageDialog(
@@ -1725,20 +1727,28 @@ class OpenAIGTKClient(Gtk.Window):
 
     def create_speech_button(self, full_text):
         """
-        Create a play/stop button for TTS playback of the provided full_text.
+        Create a play/stop button for TTS playback or audio file replay.
         """
         btn_speak = Gtk.Button()
-        # Calculate button size based on font size
         button_size = self.font_size * 2
         btn_speak.set_size_request(button_size, button_size)
         
-        # Create images for play and stop icons
         icon_play = Gtk.Image.new_from_icon_name("media-playback-start", Gtk.IconSize.SMALL_TOOLBAR)
         icon_stop = Gtk.Image.new_from_icon_name("media-playback-stop", Gtk.IconSize.SMALL_TOOLBAR)
         btn_speak.set_image(icon_play)
         btn_speak.set_tooltip_text("Play response")
         
-        is_playing = False  # Local variable to track playback state
+        is_playing = False
+        
+        # Convert list to string if necessary
+        if isinstance(full_text, list):
+            text_content = " ".join(full_text)
+        else:
+            text_content = str(full_text)
+        
+        # Check if this is a stored audio response
+        audio_file_match = re.search(r'<audio_file>(.*?)</audio_file>', text_content)
+        audio_file_path = audio_file_match.group(1) if audio_file_match else None
         
         def on_speak_clicked(widget):
             nonlocal is_playing
@@ -1750,44 +1760,47 @@ class OpenAIGTKClient(Gtk.Window):
                 def speak_thread():
                     nonlocal is_playing
                     try:
-                        temp_dir = Path(tempfile.gettempdir())
-                        temp_file = temp_dir / "ai_speech.mp3"
-                        
-                        # Generate speech with proper streaming
-                        with ai_provider.audio.speech.with_streaming_response.create(
-                            model="tts-1",
-                            voice=self.tts_voice,
-                            input=" ".join(full_text)
-                        ) as response:
-                            # Save to file
-                            with open(temp_file, 'wb') as f:
-                                for chunk in response.iter_bytes():
-                                    f.write(chunk)
-                        
-                        # Start playback
-                        self.current_playback_process = subprocess.Popen(['paplay', str(temp_file)])
-                        self.current_playback_process.wait()
-                        
-                        def cleanup():
-                            nonlocal is_playing
-                            time.sleep(0.5)  # Allow a brief delay for file release
+                        if audio_file_path and Path(audio_file_path).exists():
+                            # Play stored audio file
+                            self.current_playback_process = subprocess.Popen(['paplay', str(audio_file_path)])
+                            self.current_playback_process.wait()
+                        else:
+                            # Generate new TTS audio
+                            temp_dir = Path(tempfile.gettempdir())
+                            temp_file = temp_dir / "ai_speech.mp3"
+                            
+                            # Remove audio file tag from text if present
+                            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text_content).strip()
+                            
+                            with ai_provider.audio.speech.with_streaming_response.create(
+                                model="tts-1",
+                                voice=self.tts_voice,
+                                input=clean_text
+                            ) as response:
+                                with open(temp_file, 'wb') as f:
+                                    for chunk in response.iter_bytes():
+                                        f.write(chunk)
+                            
+                            self.current_playback_process = subprocess.Popen(['paplay', str(temp_file)])
+                            self.current_playback_process.wait()
+                            
+                            # Clean up temp file
                             temp_file.unlink(missing_ok=True)
-                            if is_playing:
-                                GLib.idle_add(btn_speak.set_image, icon_play)
-                                GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
-                                is_playing = False
                         
-                        threading.Thread(target=cleanup, daemon=True).start()
-                    
+                        if is_playing:
+                            GLib.idle_add(btn_speak.set_image, icon_play)
+                            GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
+                            is_playing = False
+                        
                     except Exception as e:
-                        GLib.idle_add(self.append_message, 'ai', f"Error generating speech: {str(e)}")
+                        GLib.idle_add(self.append_message, 'ai', f"Error playing audio: {str(e)}")
                         GLib.idle_add(btn_speak.set_image, icon_play)
                         GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
                         is_playing = False
                 
                 threading.Thread(target=speak_thread, daemon=True).start()
             else:
-                # Stop playback if already playing
+                # Stop playback
                 is_playing = False
                 if hasattr(self, 'current_playback_process'):
                     self.current_playback_process.terminate()

@@ -356,25 +356,36 @@ def escape_latex_text(text):
     
     return result
 
-def process_image_path(src):
+def process_image_path(src, chat_id=None):
     """Convert a source path to a full path in the images directory."""
     try:
         # Extract the image filename from the src
         image_filename = Path(src).name
-        # Construct the correct path in history/temp/images
-        image_path = str(Path('history/temp/images') / image_filename)
-        return str(Path(image_path).resolve())
+        
+        if chat_id:
+            # Construct the path in the chat-specific images directory
+            image_path = Path('history') / chat_id.replace('.json', '') / 'images' / image_filename
+        else:
+            # Fallback to temp directory if no chat_id provided
+            image_path = Path('history/temp/images') / image_filename
+            
+        # Escape underscores in the path for LaTeX
+        latex_path = str(image_path.resolve()).replace('_', r'\_')
+        return latex_path
     except Exception as e:
         print(f"DEBUG: Failed to process image path: {e}")
         return None
 
-def format_message_content(content: str) -> str:
+def format_message_content(content: str, chat_id=None) -> str:
     """
     Process a message content through markdown-like formatting for LaTeX export.
     Converts code blocks with triple backticks to raw LaTeX lstlisting blocks,
     preserving line breaks and avoiding further inline markdown processing.
     """
     import re, sys
+
+    # Remove audio tags before processing
+    content = re.sub(r'<audio_file>.*?</audio_file>', r'\\textit{[Audio message]}', content)
 
     # --- Step 1: Tokenize code blocks so that inline processing does not affect them.
     code_blocks = []
@@ -413,7 +424,7 @@ def format_message_content(content: str) -> str:
         content = content.replace(f"@@CODEBLOCK_{i}@@", block)
 
     # --- Step 5: Process HTML image tags.
-    content = process_html_image_tags(content)
+    content = process_html_image_tags(content, chat_id)
     
     # --- Final Step: Escape stray '#' characters.
     content = escape_unprotected_hashes(content)
@@ -539,10 +550,10 @@ def insert_forced_newlines(text):
             new_parts.append("\n".join(processed_lines))
     return ''.join(new_parts)
 
-def format_chat_message(message):
+def format_chat_message(message, chat_id=None):
     """Format a single chat message for LaTeX."""
     role = message["role"].upper()
-    content = format_message_content(message["content"])
+    content = format_message_content(message["content"], chat_id)
     color = 'usercolor' if role == 'USER' else 'assistantcolor'
     
     # Ensure role is properly escaped
@@ -557,7 +568,7 @@ def format_chat_message(message):
 \bigskip
 """ % (color, role, content)
 
-def export_chat_to_pdf(conversation, filename, title=None):
+def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
     """Export a chat conversation to PDF with image support."""
     try:
         # Format title and date
@@ -579,7 +590,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
         for i, message in enumerate(conversation):
             if message['role'] != 'system':
                 try:
-                    formatted_message = format_chat_message(message)
+                    formatted_message = format_chat_message(message, chat_id)
                     messages_content.append(formatted_message)
                     print(f"DEBUG: Successfully formatted message {i}")
                 except Exception as e:
@@ -747,7 +758,7 @@ def export_chat_to_pdf(conversation, filename, title=None):
         traceback.print_exc()
         return False 
 
-def process_html_image_tags(text):
+def process_html_image_tags(text, chat_id=None):
     """
     Convert HTML <img> tags to proper LaTeX image inclusion commands.
     
@@ -762,7 +773,7 @@ def process_html_image_tags(text):
         src = match.group(1)
         # Optionally resolve the image path. If process_image_path returns None,
         # an "unavailable" notice is inserted.
-        image_path = process_image_path(src)
+        image_path = process_image_path(src, chat_id)
         if image_path:
             return r'\begin{center}\includegraphics[width=\linewidth]{' + image_path + r'}\end{center}'
         else:
