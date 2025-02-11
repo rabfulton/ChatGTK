@@ -106,6 +106,9 @@ def process_text_formatting(text, font_size):
 
 def process_inline_markup(text, font_size):
     """Process text for inline code and other markup."""
+    # First, remove audio tags from display but keep the text content
+    text = re.sub(r'\n?<audio_file>.*?</audio_file>', '', text)
+    
     # First, escape any existing markup
     text = escape_for_pango_markup(text)
     

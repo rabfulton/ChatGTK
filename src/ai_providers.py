@@ -111,14 +111,16 @@ class OpenAIProvider(AIProvider):
         
         if is_audio_model and hasattr(response.choices[0].message, 'audio'):
             try:
+                # Get transcript from audio response
+                transcript = response.choices[0].message.audio.transcript or ""
+                text_content = transcript  # Set the transcript as the main content
+                
                 # Generate unique filename with timestamp
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 
                 # Create audio directory in chat history if it doesn't exist
-                #chat_id = messages[0].get('chat_id', 'default')
                 audio_dir = Path('history') / chat_id.replace('.json', '') / 'audio'
                 audio_dir.mkdir(parents=True, exist_ok=True)
-                print(f"Audio directory: {audio_dir}")
                 
                 # Save audio file with timestamp
                 audio_file = audio_dir / f"response_{timestamp}.wav"

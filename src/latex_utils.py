@@ -384,8 +384,14 @@ def format_message_content(content: str, chat_id=None) -> str:
     """
     import re, sys
 
-    # Remove audio tags before processing
-    content = re.sub(r'<audio_file>.*?</audio_file>', r'\\textit{[Audio message]}', content)
+    # Replace audio tags with transcript text
+    def audio_tag_replacer(match):
+        # Get the text content before the audio tag
+        text_before = content[:match.start()].strip()
+        return text_before
+
+    # Remove audio tags and keep transcript
+    content = re.sub(r'\n?<audio_file>.*?</audio_file>', '', content)
 
     # --- Step 1: Tokenize code blocks so that inline processing does not affect them.
     code_blocks = []
@@ -432,7 +438,7 @@ def format_message_content(content: str, chat_id=None) -> str:
     return content
 
 def process_inline_markup(text):
-    """
+    r"""
     Process inline markdown markup and convert it to raw LaTeX.
     
     This function converts:
