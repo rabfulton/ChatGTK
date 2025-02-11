@@ -5,11 +5,8 @@ from pathlib import Path
 import re
 import gi
 from config import SETTINGS_FILE, HISTORY_DIR
-
-# Specify GTK version before importing
 gi.require_version('Gtk', '3.0')
-gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk
+from gi.repository import Gtk, GdkPixbuf
 
 DEFAULT_SETTINGS = {
     'AI_NAME': 'Sheila',
@@ -239,3 +236,51 @@ def rgb_to_hex(color_str):
             b = int(rgb_match.group(3))
             return f'#{r:02x}{g:02x}{b:02x}'
     return color_str  # Return unchanged if not rgb format
+
+def insert_resized_image(buffer, iter, img_path, text_view=None):
+    """Insert an image into the text buffer with appropriate sizing."""
+    
+    try:
+        # Create a scrolled window to contain the image
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        scroll.set_hexpand(True)
+        scroll.set_vexpand(False)  # Don't expand vertically
+        scroll.set_size_request(100, -1)  # Set minimum width
+        
+        # Load the original image
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file(img_path)
+        
+        # Create the image widget
+        image = Gtk.Image.new_from_pixbuf(pixbuf)
+        image.set_size_request(100, -1)  # Set minimum width for image too
+        image.set_vexpand(False)  # Don't expand vertically
+        
+        def on_size_allocate(widget, allocation):
+            # Get TextView width and ensure it's reasonable
+            width = max(text_view.get_allocated_width() - 20, 100)
+            
+            # Calculate new height maintaining aspect ratio
+            height = int(width * (pixbuf.get_height() / pixbuf.get_width()))
+            
+            # Scale the image
+            scaled = pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+            image.set_from_pixbuf(scaled)
+            
+            # Force the scroll window to request the new size
+            scroll.set_size_request(width, height)
+        
+        text_view.connect('size-allocate', on_size_allocate)
+        
+        # Add image to scrolled window
+        scroll.add(image)
+        
+        # Insert into buffer
+        anchor = buffer.create_child_anchor(iter)
+        text_view.add_child_at_anchor(scroll, anchor)
+        scroll.show_all()
+        
+    except Exception as e:
+        print(f"Error processing image: {e}")
+        import traceback
+        traceback.print_exc()

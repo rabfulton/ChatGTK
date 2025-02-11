@@ -30,7 +30,8 @@ from utils import (
     get_chat_metadata,
     get_chat_title,
     parse_color_to_rgba,
-    rgb_to_hex
+    rgb_to_hex,
+    insert_resized_image
 )
 from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
 from markup_utils import (
@@ -937,6 +938,9 @@ class OpenAIGTKClient(Gtk.Window):
                         text_view.set_wrap_mode(Gtk.WrapMode.WORD)
                         text_view.set_editable(False)
                         text_view.set_cursor_visible(False)
+                        text_view.set_hexpand(True)  # Make it expand horizontally
+                        #text_view.set_vexpand(True)
+                        text_view.set_size_request(100, -1)  # Set minimum width to 10px, natural height
                         css_provider = Gtk.CssProvider()
                         css = f"""
                             textview {{
@@ -958,7 +962,12 @@ class OpenAIGTKClient(Gtk.Window):
                         for part in parts:
                             if part.startswith('<img src="'):
                                 img_path = re.search(r'src="([^"]+)"', part).group(1)
-                                insert_tex_image(buffer, iter, img_path)
+                                # Use resized image insertion for DALL-E images
+                                if 'dalle_' in img_path:
+                                    insert_resized_image(buffer, iter, img_path, text_view)
+                                else:
+                                    # Use regular insertion for other images (like LaTeX)
+                                    insert_tex_image(buffer, iter, img_path)
                             else:
                                 text = process_text_formatting(part, self.font_size)
                                 buffer.insert_markup(iter, text, -1)
