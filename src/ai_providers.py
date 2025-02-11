@@ -53,12 +53,28 @@ class OpenAIProvider(AIProvider):
     def initialize(self, api_key: str):
         self.client = OpenAI(api_key=api_key)
     
-    def get_available_models(self):
+    def get_available_models(self, disable_filter=False):
         import re
         try:
             models = self.client.models.list()
-            # Remove models with specified dates, the non dated ones always point to the latest model
-            filtered_models = [model.id for model in models if not re.search(r'-\d{4}-\d{2}-\d{2}$', model.id)]
+            
+            # Check both parameter and environment variable
+            disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')
+            
+            if disable_filter:
+                # Return all available models when filtering is disabled
+                return sorted([model.id for model in models])
+            
+            # Default filtering behavior
+            allowed_models = {"gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3", 
+                            "gpt-4o-mini-realtime-preview", "o1-mini", "o1-preview", 
+                            "chatgpt-4o-latest", "gpt-4-turbo", "gpt-4-turbo-preview", 
+                            "gpt-4o-mini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview", 
+                            "gpt-4o", "gpt-3.5-turbo-16k", "gpt-3.5-turbo-0125", "gpt-3.5-turbo", 
+                            "gpt-4o-realtime-preview", "gpt-4-0125-preview", "gpt-4", 
+                            "gpt-4-1106-preview"}
+            filtered_models = [model.id for model in models if model.id in allowed_models]
+            print(f"Filtered models: {filtered_models}")
             return sorted(filtered_models)
         except Exception as e:
             print(f"Error fetching models: {e}")
