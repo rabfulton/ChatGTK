@@ -28,14 +28,16 @@ Alternatively you can run the install script to add a desktop entry and set up t
 ## Features
 
 - Clean GTK3 interface
-- Voice input with Whisper API
-- Text-to-Speech output
+- Voice to text input using Whisper API
 - Syntax highlighting for code blocks
 - LaTeX formula rendering
 - Customizable settings
 - Conversation history management
 - Image generation using Dall-e-3 model, use the "img:" prefix to quickly access the model.
 - Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
+- Text-to-Speech output using OpenAI's TTS and TTS-HD models
+- Real-time voice conversation support using gpt-4o-realtime-preview model
+- Text to audio output using gpt-4o-audio-preview model
 
 ## Screenshots
 
