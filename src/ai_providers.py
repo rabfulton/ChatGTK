@@ -12,6 +12,8 @@ import numpy as np
 import sounddevice as sd
 import threading
 import base64
+import tempfile
+import subprocess
 
 class AIProvider(ABC):
     """Abstract base class for AI providers."""
@@ -81,6 +83,9 @@ class OpenAIProvider(AIProvider):
             return sorted(["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3"])
     
     def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None):
+        # Check if this is an audio-capable model
+        is_audio_model = "audio" in model.lower()
+        
         params = {
             'model': model,
             'messages': messages,
@@ -90,8 +95,61 @@ class OpenAIProvider(AIProvider):
         if max_tokens and max_tokens > 0:
             params['max_tokens'] = max_tokens
         
+        if is_audio_model:
+            # Add audio-specific parameters
+            params.update({
+                'modalities': ["text", "audio"],
+                'audio': {
+                    'voice': "alloy",  # Use the current TTS voice setting
+                    'format': "wav"  # Changed from pcm16 to wav for better compatibility
+                }
+            })
+        
         response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content
+        
+        # Ensure we have a valid text response
+        text_content = response.choices[0].message.content or ""
+        
+        if is_audio_model and hasattr(response.choices[0].message, 'audio'):
+            try:
+                # Generate unique filename with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                # Create audio directory in chat history if it doesn't exist
+                chat_id = messages[0].get('chat_id', 'default')
+                audio_dir = Path('history') / chat_id / 'audio'
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Save audio file with timestamp
+                audio_file = audio_dir / f"response_{timestamp}.wav"
+                
+                # Save audio data
+                audio_bytes = base64.b64decode(response.choices[0].message.audio.data)
+                with open(audio_file, 'wb') as f:
+                    f.write(audio_bytes)
+                
+                # Play audio in background
+                def play_audio(file_path):
+                    try:
+                        # Try paplay first
+                        try:
+                            subprocess.run(['paplay', str(file_path)], check=True)
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            # Fallback to aplay if paplay fails
+                            subprocess.run(['aplay', str(file_path)], check=True)
+                    except Exception as e:
+                        print(f"Error playing audio: {e}")
+                
+                # Play the initial audio
+                threading.Thread(target=play_audio, args=(audio_file,), daemon=True).start()
+                
+                # Add audio file path to the response for replay functionality
+                text_content = f"{text_content}\n<audio_file>{audio_file}</audio_file>"
+                
+            except Exception as e:
+                print(f"Error handling audio response: {e}")
+        
+        return text_content
     
     def generate_image(self, prompt, chat_id):
         response = self.client.images.generate(
@@ -138,6 +196,25 @@ class OpenAIProvider(AIProvider):
     @property
     def audio(self):
         return self.client.audio
+
+    def play_audio_file(self, file_path):
+        """Play an audio file from the chat history"""
+        if not Path(file_path).exists():
+            print(f"Audio file not found: {file_path}")
+            return
+        
+        def play_audio():
+            try:
+                # Try paplay first
+                try:
+                    subprocess.run(['paplay', str(file_path)], check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # Fallback to aplay if paplay fails
+                    subprocess.run(['aplay', str(file_path)], check=True)
+            except Exception as e:
+                print(f"Error playing audio: {e}")
+        
+        threading.Thread(target=play_audio, daemon=True).start()
 
 class OpenAIWebSocketProvider:
     def __init__(self):
