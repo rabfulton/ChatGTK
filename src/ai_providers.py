@@ -76,7 +76,6 @@ class OpenAIProvider(AIProvider):
                             "gpt-4o-realtime-preview", "gpt-4-0125-preview", "gpt-4", 
                             "gpt-4-1106-preview"}
             filtered_models = [model.id for model in models if model.id in allowed_models]
-            print(f"Filtered models: {filtered_models}")
             return sorted(filtered_models)
         except Exception as e:
             print(f"Error fetching models: {e}")

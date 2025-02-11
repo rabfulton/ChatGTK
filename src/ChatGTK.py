@@ -1032,13 +1032,10 @@ class OpenAIGTKClient(Gtk.Window):
         if not question:
             return
 
-        print(f"Question: {question}")
         # Check if this is a one off image generation request
         if question.lower().startswith("img:"):
             # Remove the "img:" prefix from the prompt
-            print(f"Image generation request: {question}")
             question = question[4:].strip()
-            print(f"Image generation prompt: {question}")
             self.append_message('user', question)
             self.conversation_history.append({"role": "user", "content": question})
             self.entry_question.set_text("")
@@ -1286,7 +1283,6 @@ class OpenAIGTKClient(Gtk.Window):
             
         # If this was a saved chat, clean up its files
         if self.current_chat_id:
-            # TODO: Add audio files to the cleanup
             # Remove formula cache directory
             chat_dir = Path('history') / self.current_chat_id.replace('.json', '')
             if chat_dir.exists():
