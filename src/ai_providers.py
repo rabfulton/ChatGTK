@@ -269,7 +269,7 @@ class OpenAIWebSocketProvider:
             self.output_stream.stop()
             self.output_stream.close()
 
-    async def ensure_connection(self):
+    async def ensure_connection(self, voice):
         """Ensure we have an active WebSocket connection"""
         print(f"Ensuring connection")
         if not self.ws or not self.ws.open:
@@ -296,7 +296,7 @@ class OpenAIWebSocketProvider:
                     "modalities": ["text", "audio"],
                     "instructions": self.system_message,
                     "temperature": self.temperature,
-                    "voice": "alloy",        # Current voice options are alloy, ash, ballad, coral, echo sage, shimmer and verse
+                    "voice": "alloy",        # Current voice options for realtime models are: alloy, ash, ballad, coral, echo sage, shimmer, verse
                 }
             }
             config_message2 = {
@@ -304,7 +304,7 @@ class OpenAIWebSocketProvider:
                 "session": {
                     "modalities": ["text", "audio"],
                     "instructions": self.system_message,
-                    "voice": "alloy",
+                    "voice": voice,
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
                     "input_audio_transcription": {
@@ -347,7 +347,7 @@ class OpenAIWebSocketProvider:
     async def start_audio_stream(self, callback):
         """Start streaming audio to the API"""
         try:
-            await self.ensure_connection()
+            await self.ensure_connection(self.voice)
             
             self.is_recording = True
             
@@ -468,7 +468,7 @@ class OpenAIWebSocketProvider:
                             break
                         # Try to reconnect
                         try:
-                            await self.ensure_connection()
+                            await self.ensure_connection(self.voice)
                             continue
                         except:
                             break
@@ -551,13 +551,14 @@ class OpenAIWebSocketProvider:
         except Exception as e:
             print(f"Error sending audio data: {e}")
 
-    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None):
+    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None):
         """Start streaming audio in a background task"""
         print(f"Starting streaming")
         # Store the configuration
         self.microphone = microphone
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature or 0.7
+        self.voice = voice or "alloy"
         
         self.start_loop()
         
@@ -600,7 +601,7 @@ class OpenAIWebSocketProvider:
         """Send a text message through the realtime connection"""
         try:
             if not self.ws or not self.ws.open:
-                await self.ensure_connection()
+                await self.ensure_connection(self.voice)
             
             # Initialize audio output stream
             self._initialize_output_stream()
@@ -671,18 +672,19 @@ class OpenAIWebSocketProvider:
                 self.loop
             )
 
-    def connect(self, model=None, system_message=None, temperature=None):
+    def connect(self, model=None, system_message=None, temperature=None, voice=None):
         """Initialize WebSocket connection without starting audio stream"""
         # Store the configuration
         self.model = model or 'gpt-4o-realtime-preview'
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature or 0.7
+        self.voice = voice or "alloy"
         
         self.start_loop()
         
         # Ensure connection is established
         future = asyncio.run_coroutine_threadsafe(
-            self.ensure_connection(),
+            self.ensure_connection(self.voice),
             self.loop
         )
         try:

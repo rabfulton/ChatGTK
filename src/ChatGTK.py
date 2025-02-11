@@ -57,7 +57,7 @@ from gi.repository import Gtk, GLib, Pango, GtkSource
 # SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
 class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, max_tokens, source_theme, latex_dpi, latex_color):
+    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, realtime_voice, max_tokens, source_theme, latex_dpi, latex_color):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 600)  # Made taller to accommodate all content
@@ -73,6 +73,7 @@ class SettingsDialog(Gtk.Dialog):
         self.temperament = temperament
         self.current_microphone = microphone
         self.tts_voice = tts_voice
+        self.realtime_voice = realtime_voice
         self.max_tokens = max_tokens
         self.source_theme = source_theme
         self.latex_dpi = latex_dpi
@@ -231,13 +232,13 @@ class SettingsDialog(Gtk.Dialog):
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="AI Voice", xalign=0)
+        label = Gtk.Label(label="TTS Voice", xalign=0)
         label.set_hexpand(True)
         voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.combo_tts = Gtk.ComboBoxText()
         
         # Available TTS voices
-        tts_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        tts_voices = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "shimmer"]
         for voice in tts_voices:
             self.combo_tts.append_text(voice)
         
@@ -253,6 +254,36 @@ class SettingsDialog(Gtk.Dialog):
         
         voice_box.pack_start(self.combo_tts, True, True, 0)
         voice_box.pack_start(self.btn_preview, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(voice_box, False, True, 0)
+        list_box.add(row)
+
+        # Realtime Voice
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Realtime Voice", xalign=0)
+        label.set_hexpand(True)
+        voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.combo_realtime = Gtk.ComboBoxText()
+        
+        # Available realtime voices
+        realtime_voices = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"]
+        for voice in realtime_voices:
+            self.combo_realtime.append_text(voice)
+        
+        # Set active voice from settings (default to alloy if not set)
+        if self.realtime_voice in realtime_voices:
+            self.combo_realtime.set_active(realtime_voices.index(self.realtime_voice))
+        else:
+            self.combo_realtime.set_active(0)
+        
+        # Preview button for realtime voices
+        self.btn_preview_realtime = Gtk.Button(label="Preview")
+        self.btn_preview_realtime.connect("clicked", self.on_preview_realtime_voice)
+        
+        voice_box.pack_start(self.combo_realtime, True, True, 0)
+        voice_box.pack_start(self.btn_preview_realtime, False, False, 0)
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
@@ -448,11 +479,36 @@ class SettingsDialog(Gtk.Dialog):
             'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
             'tts_voice': self.combo_tts.get_active_text(),
+            'realtime_voice': self.realtime_voice,
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
             'latex_color': latex_color,  
         }
+
+    def on_preview_realtime_voice(self, widget):
+        """Preview the selected realtime voice using prepared WAV files."""
+        selected_voice = self.combo_realtime.get_active_text()
+        preview_file = Path(BASE_DIR) / "preview" / f"{selected_voice}.wav"
+        
+        try:
+            if not preview_file.exists():
+                raise FileNotFoundError(f"Preview file not found: {preview_file}")
+            
+            # Play using system audio
+            subprocess.Popen(['paplay', str(preview_file)])
+            
+        except Exception as e:
+            error_dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Error Preview Voice"
+            )
+            error_dialog.format_secondary_text(str(e))
+            error_dialog.run()
+            error_dialog.destroy()
 
 class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
@@ -480,6 +536,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.temperament = float(loaded['TEMPERAMENT'])
         self.microphone = loaded['MICROPHONE']
         self.tts_voice = loaded['TTS_VOICE']
+        self.realtime_voice = loaded['REALTIME_VOICE']
         self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
         self.max_tokens = int(loaded.get('MAX_TOKENS', '0'))
         self.source_theme = loaded.get('SOURCE_THEME', 'solarized-dark')
@@ -698,6 +755,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['TEMPERAMENT'] = str(self.temperament)
         to_save['MICROPHONE'] = self.microphone
         to_save['TTS_VOICE'] = self.tts_voice
+        to_save['REALTIME_VOICE'] = self.realtime_voice
         to_save['SIDEBAR_WIDTH'] = str(self.current_sidebar_width)
         to_save['SIDEBAR_VISIBLE'] = str(self.sidebar_visible)
         to_save['MAX_TOKENS'] = str(self.max_tokens)
@@ -810,6 +868,7 @@ class OpenAIGTKClient(Gtk.Window):
             temperament=self.temperament,
             microphone=self.microphone,
             tts_voice=self.tts_voice,
+            realtime_voice=self.realtime_voice,
             max_tokens=self.max_tokens,
             source_theme=self.source_theme,
             latex_dpi=self.latex_dpi,
@@ -828,6 +887,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.temperament = new_settings['temperament']
             self.microphone = new_settings['microphone']
             self.tts_voice = new_settings['tts_voice']
+            self.realtime_voice = new_settings['realtime_voice']
             self.max_tokens = new_settings['max_tokens']
             self.source_theme = new_settings['source_theme']
             self.latex_dpi = new_settings['latex_dpi']
@@ -848,6 +908,7 @@ class OpenAIGTKClient(Gtk.Window):
             to_save['TEMPERAMENT'] = str(self.temperament)
             to_save['MICROPHONE'] = self.microphone
             to_save['TTS_VOICE'] = self.tts_voice
+            to_save['REALTIME_VOICE'] = self.realtime_voice
             to_save['MAX_TOKENS'] = str(self.max_tokens)
             to_save['SOURCE_THEME'] = self.source_theme
             to_save['LATEX_DPI'] = str(self.latex_dpi)
@@ -1065,7 +1126,8 @@ class OpenAIGTKClient(Gtk.Window):
                 success = self.ws_provider.connect(
                     model=self.combo_model.get_active_text(),
                     system_message=self.system_message,
-                    temperature=self.temperament
+                    temperature=self.temperament,
+                    voice=self.realtime_voice
                 )
                 if not success:
                     self.display_error("Failed to connect to WebSocket server")
@@ -1252,7 +1314,8 @@ class OpenAIGTKClient(Gtk.Window):
                     if not self.ws_provider.connect(
                         model=current_model,
                         system_message=self.system_message,
-                        temperature=self.temperament
+                        temperature=self.temperament,
+                        voice=self.realtime_voice
                     ):
                         self.show_error_dialog("Failed to connect to OpenAI realtime service")
                         return False

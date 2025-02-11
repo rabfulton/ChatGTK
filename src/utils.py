@@ -7,6 +7,7 @@ import gi
 from config import SETTINGS_FILE, HISTORY_DIR
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GdkPixbuf
+from gi.repository import Gdk
 
 DEFAULT_SETTINGS = {
     'AI_NAME': 'Sheila',
@@ -23,6 +24,7 @@ DEFAULT_SETTINGS = {
     'TEMPERAMENT': '0.7',
     'MICROPHONE': 'default',  # New setting for microphone
     'TTS_VOICE': 'alloy',  # New setting for TTS voice
+    'REALTIME_VOICE': 'alloy',  # Add this new setting
     'SIDEBAR_WIDTH': '200',
     'SIDEBAR_VISIBLE': 'True',  # Add this new setting
     'MAX_TOKENS': '0',  # Add default max_tokens setting (0 = no limit)
