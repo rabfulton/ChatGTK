@@ -57,7 +57,7 @@ from gi.repository import Gtk, GLib, Pango, GtkSource
 # SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
 class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, realtime_voice, max_tokens, source_theme, latex_dpi, latex_color):
+    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, realtime_voice, max_tokens, source_theme, latex_dpi, latex_color, tts_hd):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 600)  # Made taller to accommodate all content
@@ -78,6 +78,7 @@ class SettingsDialog(Gtk.Dialog):
         self.source_theme = source_theme
         self.latex_dpi = latex_dpi
         self.latex_color = latex_color
+        self.tts_hd = tts_hd
 
         # Get the content area
         box = self.get_content_area()
@@ -258,6 +259,18 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
 
+        # HD Voice Toggle
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="TTS HD Voice", xalign=0)
+        label.set_hexpand(True)
+        self.switch_hd = Gtk.Switch()
+        self.switch_hd.set_active(self.tts_hd)  # Set from settings
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_hd, False, True, 0)
+        list_box.add(row)
+
         # Realtime Voice
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -422,7 +435,7 @@ class SettingsDialog(Gtk.Dialog):
             
             # Generate speech with proper streaming
             with ai_provider.audio.speech.with_streaming_response.create(
-                model="tts-1",
+                model="tts-1-hd" if self.tts_hd else "tts-1",
                 voice=selected_voice,
                 input=preview_text
             ) as response:
@@ -484,6 +497,7 @@ class SettingsDialog(Gtk.Dialog):
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
             'latex_color': latex_color,  
+            'tts_hd': self.switch_hd.get_active(),
         }
 
     def on_preview_realtime_voice(self, widget):
@@ -536,6 +550,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.temperament = float(loaded['TEMPERAMENT'])
         self.microphone = loaded['MICROPHONE']
         self.tts_voice = loaded['TTS_VOICE']
+        self.tts_hd = loaded.get('TTS_HD', 'False').lower() == 'true'
         self.realtime_voice = loaded['REALTIME_VOICE']
         self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
         self.max_tokens = int(loaded.get('MAX_TOKENS', '0'))
@@ -551,6 +566,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.latex_color = style_context.get_color(Gtk.StateFlags.NORMAL).to_string()
         
         self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
+        self.tts_hd = loaded.get('TTS_HD', 'False').lower() == 'true'
 
         # Initialize chat state
         self.current_chat_id = None  # None means this is a new, unsaved chat
@@ -762,6 +778,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['SOURCE_THEME'] = self.source_theme
         to_save['LATEX_DPI'] = str(self.latex_dpi)
         to_save['LATEX_COLOR'] = self.latex_color
+        to_save['TTS_HD'] = str(self.tts_hd)  # Add this line
         save_settings(to_save)
         cleanup_temp_files()
         Gtk.main_quit()
@@ -868,6 +885,7 @@ class OpenAIGTKClient(Gtk.Window):
             temperament=self.temperament,
             microphone=self.microphone,
             tts_voice=self.tts_voice,
+            tts_hd=self.tts_hd,
             realtime_voice=self.realtime_voice,
             max_tokens=self.max_tokens,
             source_theme=self.source_theme,
@@ -892,6 +910,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.source_theme = new_settings['source_theme']
             self.latex_dpi = new_settings['latex_dpi']
             self.latex_color = new_settings['latex_color']
+            self.tts_hd = new_settings['tts_hd']  # Add this line
 
             # Re-populate model list so default can be enforced
             self.fetch_models_async()
@@ -913,6 +932,7 @@ class OpenAIGTKClient(Gtk.Window):
             to_save['SOURCE_THEME'] = self.source_theme
             to_save['LATEX_DPI'] = str(self.latex_dpi)
             to_save['LATEX_COLOR'] = self.latex_color
+            to_save['TTS_HD'] = str(self.tts_hd)
             save_settings(to_save)
         dialog.destroy()
 
@@ -1845,7 +1865,7 @@ class OpenAIGTKClient(Gtk.Window):
                             clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text_content).strip()
                             
                             with ai_provider.audio.speech.with_streaming_response.create(
-                                model="tts-1",
+                                model="tts-1-hd" if self.tts_hd else "tts-1",
                                 voice=self.tts_voice,
                                 input=clean_text
                             ) as response:

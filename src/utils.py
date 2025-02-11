@@ -31,6 +31,7 @@ DEFAULT_SETTINGS = {
     'SOURCE_THEME': 'solarized-dark',  # Add default theme setting
     'LATEX_DPI': '200',  # Add this line if it's missing
     'LATEX_COLOR': 'rgb(255,163,72)',  # Add this line if it's missing
+    'TTS_HD': 'False',  # Add this line
 }
 
 def load_settings():
