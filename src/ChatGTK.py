@@ -1032,6 +1032,7 @@ class OpenAIGTKClient(Gtk.Window):
         if not question:
             return
 
+        print(f"Question: {question}")
         # Check if this is a one off image generation request
         if question.lower().startswith("img:"):
             # Remove the "img:" prefix from the prompt
@@ -1074,6 +1075,13 @@ class OpenAIGTKClient(Gtk.Window):
         self.append_message('user', question)
         # Store user message in the chat history
         self.conversation_history.append({"role": "user", "content": question})
+        
+        # Assign a chat ID if none exists
+        if self.current_chat_id is None:
+            # New chat - generate name and save
+            chat_name = generate_chat_name(self.conversation_history[1]['content'])
+            self.current_chat_id = chat_name
+            print(f"New chat ID: {self.current_chat_id}")
 
         # Clear the question input
         self.entry_question.set_text("")
@@ -1111,7 +1119,8 @@ class OpenAIGTKClient(Gtk.Window):
                         messages=self.conversation_history,
                         model=model,
                         temperature=float(self.temperament),
-                        max_tokens=self.max_tokens if self.max_tokens > 0 else None
+                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                        chat_id=self.current_chat_id
                     )
 
             self.conversation_history.append({"role": "assistant", "content": answer})
@@ -1277,6 +1286,7 @@ class OpenAIGTKClient(Gtk.Window):
             
         # If this was a saved chat, clean up its files
         if self.current_chat_id:
+            # TODO: Add audio files to the cleanup
             # Remove formula cache directory
             chat_dir = Path('history') / self.current_chat_id.replace('.json', '')
             if chat_dir.exists():
@@ -1442,6 +1452,7 @@ class OpenAIGTKClient(Gtk.Window):
             if "dall-e" not in current_model.lower() and "tts" not in current_model.lower() and "audio" not in current_model.lower():
                 self.conversation_history[0]["model"] = current_model
 
+            # TODO: This may be reduntant
             if self.current_chat_id is None:
                 # New chat - generate name and save
                 chat_name = generate_chat_name(self.conversation_history[1]['content'])

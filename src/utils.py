@@ -78,9 +78,10 @@ def ensure_history_dir():
 def generate_chat_name(first_message):
     """Generate a filename for the chat based on first message and timestamp."""
     # Truncate first message to 40 chars for filename
-    truncated_msg = first_message[:40].strip()
+    truncated_msg = first_message[:20].strip()
     # Remove any characters that might be problematic in filenames
     safe_msg = re.sub(r'[^\w\s-]', '', truncated_msg)
+    safe_msg = safe_msg.replace(' ', '_')
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{safe_msg}_{timestamp}.json"
 

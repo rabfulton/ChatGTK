@@ -222,7 +222,7 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
             
             # Save to cache if chat_id is provided
             if chat_id and png_data:
-                cache_dir = Path('history') / chat_id / 'formula_cache'
+                cache_dir = Path('history') / chat_id.replace('.json', '') / 'formula_cache'
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 cache_file = cache_dir / f"formula_{formula_hash}.png"
                 cache_file.write_bytes(png_data)

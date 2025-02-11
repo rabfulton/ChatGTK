@@ -82,7 +82,7 @@ class OpenAIProvider(AIProvider):
             print(f"Error fetching models: {e}")
             return sorted(["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3"])
     
-    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None):
+    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None):
         # Check if this is an audio-capable model
         is_audio_model = "audio" in model.lower()
         
@@ -116,9 +116,10 @@ class OpenAIProvider(AIProvider):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 
                 # Create audio directory in chat history if it doesn't exist
-                chat_id = messages[0].get('chat_id', 'default')
-                audio_dir = Path('history') / chat_id / 'audio'
+                #chat_id = messages[0].get('chat_id', 'default')
+                audio_dir = Path('history') / chat_id.replace('.json', '') / 'audio'
                 audio_dir.mkdir(parents=True, exist_ok=True)
+                print(f"Audio directory: {audio_dir}")
                 
                 # Save audio file with timestamp
                 audio_file = audio_dir / f"response_{timestamp}.wav"
