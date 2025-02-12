@@ -31,7 +31,10 @@ from utils import (
     get_chat_title,
     parse_color_to_rgba,
     rgb_to_hex,
-    insert_resized_image
+    insert_resized_image,
+    apply_settings,
+    get_object_settings,
+    convert_settings_for_save
 )
 from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
 from markup_utils import (
@@ -42,7 +45,7 @@ from markup_utils import (
 )
 from gi.repository import Gdk
 from datetime import datetime
-from config import SETTINGS_FILE, HISTORY_DIR, BASE_DIR
+from config import SETTINGS_FILE, HISTORY_DIR, BASE_DIR, SETTINGS_CONFIG
 from audio import record_audio
 # Initialize provider as None
 ai_provider = None
@@ -57,28 +60,12 @@ from gi.repository import Gtk, GLib, Pango, GtkSource
 # SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
 class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_name, font_family, font_size, user_color, ai_color, default_model, system_message, temperament, microphone, tts_voice, realtime_voice, max_tokens, source_theme, latex_dpi, latex_color, tts_hd):
+    def __init__(self, parent, ai_provider=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
+        self.ai_provider = ai_provider  # Store the ai_provider
+        apply_settings(self, settings)
         self.set_modal(True)
         self.set_default_size(500, 600)  # Made taller to accommodate all content
-
-        # Store current values
-        self.ai_name = ai_name
-        self.font_family = font_family
-        self.font_size = font_size
-        self.user_color = user_color
-        self.ai_color = ai_color
-        self.default_model = default_model
-        self.system_message = system_message
-        self.temperament = temperament
-        self.current_microphone = microphone
-        self.tts_voice = tts_voice
-        self.realtime_voice = realtime_voice
-        self.max_tokens = max_tokens
-        self.source_theme = source_theme
-        self.latex_dpi = latex_dpi
-        self.latex_color = latex_color
-        self.tts_hd = tts_hd
 
         # Get the content area
         box = self.get_content_area()
@@ -220,8 +207,8 @@ class SettingsDialog(Gtk.Dialog):
         
         # Set active microphone from settings
         all_devices = [d['name'] for d in devices if d['max_input_channels'] > 0]
-        if self.current_microphone in all_devices:
-            self.combo_mic.set_active(all_devices.index(self.current_microphone))
+        if self.microphone in all_devices:
+            self.combo_mic.set_active(all_devices.index(self.microphone))
         else:
             self.combo_mic.set_active(0)
         
@@ -425,6 +412,19 @@ class SettingsDialog(Gtk.Dialog):
 
     def on_preview_voice(self, widget):
         """Preview the selected TTS voice."""
+        if not self.ai_provider:
+            error_dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Error Preview Voice"
+            )
+            error_dialog.format_secondary_text("AI Provider not initialized. Please check your API key.")
+            error_dialog.run()
+            error_dialog.destroy()
+            return
+
         selected_voice = self.combo_tts.get_active_text()
         preview_text = f"Hello! This is the {selected_voice} voice."
         
@@ -434,7 +434,7 @@ class SettingsDialog(Gtk.Dialog):
             temp_file = temp_dir / "voice_preview.mp3"
             
             # Generate speech with proper streaming
-            with ai_provider.audio.speech.with_streaming_response.create(
+            with self.ai_provider.audio.speech.with_streaming_response.create(
                 model="tts-1-hd" if self.tts_hd else "tts-1",
                 voice=selected_voice,
                 input=preview_text
@@ -470,34 +470,25 @@ class SettingsDialog(Gtk.Dialog):
     def get_settings(self):
         """Return updated settings from dialog."""
         buffer = self.entry_system_message.get_buffer()
-        system_message = buffer.get_text(
-            buffer.get_start_iter(),
-            buffer.get_end_iter(),
-            True
-        )
-        
-        # Get colors from color buttons
-        user_color = self.btn_user_color.get_rgba().to_string()
-        ai_color = self.btn_ai_color.get_rgba().to_string()
-        latex_color = self.btn_latex_color.get_rgba().to_string()
+        system_message = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
         
         return {
             'ai_name': self.entry_ai_name.get_text(),
             'font_family': self.entry_font.get_text(),
             'font_size': int(self.spin_size.get_value()),
-            'user_color': user_color,
-            'ai_color': ai_color,
+            'user_color': self.btn_user_color.get_rgba().to_string(),
+            'ai_color': self.btn_ai_color.get_rgba().to_string(),
             'default_model': self.entry_default_model.get_text(),
             'system_message': system_message,
             'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
             'tts_voice': self.combo_tts.get_active_text(),
-            'realtime_voice': self.realtime_voice,
+            'realtime_voice': self.combo_realtime.get_active_text(),
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
-            'latex_color': latex_color,  
-            'tts_hd': self.switch_hd.get_active(),
+            'latex_color': self.btn_latex_color.get_rgba().to_string(),
+            'tts_hd': self.switch_hd.get_active()
         }
 
     def on_preview_realtime_voice(self, widget):
@@ -536,37 +527,14 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             print(f"Could not load application icon: {e}")
 
+        # Load settings
         loaded = load_settings()
         
-        self.ai_name = loaded['AI_NAME']
-        self.font_family = loaded['FONT_FAMILY']
-        self.font_size = int(loaded['FONT_SIZE'])
-        self.user_color = loaded['USER_COLOR']
-        self.ai_color = loaded['AI_COLOR']
-        self.default_model = loaded['DEFAULT_MODEL']
-        self.window_width = int(loaded['WINDOW_WIDTH'])
-        self.window_height = int(loaded['WINDOW_HEIGHT'])
-        self.system_message = loaded['SYSTEM_MESSAGE']
-        self.temperament = float(loaded['TEMPERAMENT'])
-        self.microphone = loaded['MICROPHONE']
-        self.tts_voice = loaded['TTS_VOICE']
-        self.tts_hd = loaded.get('TTS_HD', 'False').lower() == 'true'
-        self.realtime_voice = loaded['REALTIME_VOICE']
-        self.sidebar_visible = loaded['SIDEBAR_VISIBLE']
-        self.max_tokens = int(loaded.get('MAX_TOKENS', '0'))
-        self.source_theme = loaded.get('SOURCE_THEME', 'solarized-dark')
-        self.latex_dpi = int(loaded.get('LATEX_DPI', '200'))
+        # Apply all settings as attributes
+        apply_settings(self, loaded)
         
-        # Get LaTeX color from settings, only fall back to theme color if not set
-        if 'LATEX_COLOR' in loaded:
-            self.latex_color = loaded['LATEX_COLOR']
-        else:
-            # Get default text color from theme as fallback
-            style_context = self.get_style_context()
-            self.latex_color = style_context.get_color(Gtk.StateFlags.NORMAL).to_string()
-        
-        self.sidebar_visible = loaded.get('SIDEBAR_VISIBLE', 'True').lower() == 'true'
-        self.tts_hd = loaded.get('TTS_HD', 'False').lower() == 'true'
+        # Initialize window
+        self.set_default_size(self.window_width, self.window_height)
 
         # Initialize chat state
         self.current_chat_id = None  # None means this is a new, unsaved chat
@@ -576,9 +544,6 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Remember the current geometry if not maximized
         self.current_geometry = (self.window_width, self.window_height)
-
-        # Set the initial window size
-        self.set_default_size(self.window_width, self.window_height)
 
         # Create main container
         main_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -763,23 +728,10 @@ class OpenAIGTKClient(Gtk.Window):
             self.ws_provider.stop_streaming()
             
         # Save all settings including sidebar width
-        to_save = load_settings()
-        width, height = self.current_geometry
-        to_save['WINDOW_WIDTH'] = str(width)
-        to_save['WINDOW_HEIGHT'] = str(height)
-        to_save['SYSTEM_MESSAGE'] = self.system_message
-        to_save['TEMPERAMENT'] = str(self.temperament)
-        to_save['MICROPHONE'] = self.microphone
-        to_save['TTS_VOICE'] = self.tts_voice
-        to_save['REALTIME_VOICE'] = self.realtime_voice
-        to_save['SIDEBAR_WIDTH'] = str(self.current_sidebar_width)
-        to_save['SIDEBAR_VISIBLE'] = str(self.sidebar_visible)
-        to_save['MAX_TOKENS'] = str(self.max_tokens)
-        to_save['SOURCE_THEME'] = self.source_theme
-        to_save['LATEX_DPI'] = str(self.latex_dpi)
-        to_save['LATEX_COLOR'] = self.latex_color
-        to_save['TTS_HD'] = str(self.tts_hd)  # Add this line
-        save_settings(to_save)
+        to_save = get_object_settings(self)
+        to_save['WINDOW_WIDTH'] = self.current_geometry[0]
+        to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
+        save_settings(convert_settings_for_save(to_save))
         cleanup_temp_files()
         Gtk.main_quit()
 
@@ -873,67 +825,15 @@ class OpenAIGTKClient(Gtk.Window):
         threading.Thread(target=fetch_thread, daemon=True).start()
 
     def on_open_settings(self, widget):
-        dialog = SettingsDialog(
-            self,
-            ai_name=self.ai_name,
-            font_family=self.font_family,
-            font_size=self.font_size,
-            user_color=self.user_color,
-            ai_color=self.ai_color,
-            default_model=self.default_model,
-            system_message=self.system_message,
-            temperament=self.temperament,
-            microphone=self.microphone,
-            tts_voice=self.tts_voice,
-            tts_hd=self.tts_hd,
-            realtime_voice=self.realtime_voice,
-            max_tokens=self.max_tokens,
-            source_theme=self.source_theme,
-            latex_dpi=self.latex_dpi,
-            latex_color=self.latex_color
-        )
+        # Pass ai_provider to the settings dialog
+        dialog = SettingsDialog(self, ai_provider=ai_provider, **{k.lower(): getattr(self, k.lower()) 
+                               for k in SETTINGS_CONFIG.keys()})
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             new_settings = dialog.get_settings()
-            self.ai_name = new_settings['ai_name']
-            self.font_family = new_settings['font_family']
-            self.font_size = new_settings['font_size']
-            self.user_color = new_settings['user_color']
-            self.ai_color = new_settings['ai_color']
-            self.default_model = new_settings['default_model']
-            self.system_message = new_settings['system_message']
-            self.temperament = new_settings['temperament']
-            self.microphone = new_settings['microphone']
-            self.tts_voice = new_settings['tts_voice']
-            self.realtime_voice = new_settings['realtime_voice']
-            self.max_tokens = new_settings['max_tokens']
-            self.source_theme = new_settings['source_theme']
-            self.latex_dpi = new_settings['latex_dpi']
-            self.latex_color = new_settings['latex_color']
-            self.tts_hd = new_settings['tts_hd']  # Add this line
-
-            # Re-populate model list so default can be enforced
+            apply_settings(self, new_settings)
+            save_settings(convert_settings_for_save(get_object_settings(self)))
             self.fetch_models_async()
-
-            # Save to file
-            to_save = load_settings()
-            to_save['AI_NAME'] = self.ai_name
-            to_save['FONT_FAMILY'] = self.font_family
-            to_save['FONT_SIZE'] = str(self.font_size)
-            to_save['USER_COLOR'] = self.user_color
-            to_save['AI_COLOR'] = self.ai_color
-            to_save['DEFAULT_MODEL'] = self.default_model
-            to_save['SYSTEM_MESSAGE'] = self.system_message
-            to_save['TEMPERAMENT'] = str(self.temperament)
-            to_save['MICROPHONE'] = self.microphone
-            to_save['TTS_VOICE'] = self.tts_voice
-            to_save['REALTIME_VOICE'] = self.realtime_voice
-            to_save['MAX_TOKENS'] = str(self.max_tokens)
-            to_save['SOURCE_THEME'] = self.source_theme
-            to_save['LATEX_DPI'] = str(self.latex_dpi)
-            to_save['LATEX_COLOR'] = self.latex_color
-            to_save['TTS_HD'] = str(self.tts_hd)
-            save_settings(to_save)
         dialog.destroy()
 
     def append_user_message(self, text):

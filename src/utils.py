@@ -4,45 +4,43 @@ from datetime import datetime
 from pathlib import Path
 import re
 import gi
-from config import SETTINGS_FILE, HISTORY_DIR
+from config import SETTINGS_FILE, HISTORY_DIR, SETTINGS_CONFIG
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GdkPixbuf
 from gi.repository import Gdk
 
-DEFAULT_SETTINGS = {
-    'AI_NAME': 'Sheila',
-    'FONT_FAMILY': 'Sans',
-    'FONT_SIZE': '12',
-    'USER_COLOR': '#0000FF',
-    'AI_COLOR': '#008000',
-    'DEFAULT_MODEL': 'gpt-4o-mini',  # user-specified default
-    'WINDOW_WIDTH': '900',
-    'WINDOW_HEIGHT': '750',
-    # New setting for system message
-    'SYSTEM_MESSAGE': 'You are a helpful assistant named Sheila.',
-    # New setting for temperature (we'll call it TEMPERAMENT)
-    'TEMPERAMENT': '0.7',
-    'MICROPHONE': 'default',  # New setting for microphone
-    'TTS_VOICE': 'alloy',  # New setting for TTS voice
-    'REALTIME_VOICE': 'alloy',  # Add this new setting
-    'SIDEBAR_WIDTH': '200',
-    'SIDEBAR_VISIBLE': 'True',  # Add this new setting
-    'MAX_TOKENS': '0',  # Add default max_tokens setting (0 = no limit)
-    'SOURCE_THEME': 'solarized-dark',  # Add default theme setting
-    'LATEX_DPI': '200',  # Add this line if it's missing
-    'LATEX_COLOR': 'rgb(255,163,72)',  # Add this line if it's missing
-    'TTS_HD': 'False',  # Add this line
-}
+# Create DEFAULT_SETTINGS from SETTINGS_CONFIG
+DEFAULT_SETTINGS = {key: config['default'] for key, config in SETTINGS_CONFIG.items()}
+
+def apply_settings(obj, settings):
+    """Apply settings to object attributes (converting to lowercase)"""
+    for key, value in settings.items():
+        setattr(obj, key.lower(), value)
+
+def get_object_settings(obj):
+    """Get settings from object attributes (converting to uppercase)"""
+    settings = {}
+    for key in SETTINGS_CONFIG.keys():
+        attr = key.lower()
+        if hasattr(obj, attr):
+            value = getattr(obj, attr)
+            settings[key] = SETTINGS_CONFIG[key]['type'](value) if value is not None else None
+    return settings
+
+def convert_settings_for_save(settings):
+    """Convert settings to strings for saving, with special handling for booleans"""
+    converted = {}
+    for key, value in settings.items():
+        if isinstance(value, bool):
+            converted[key] = str(value).lower()  # Convert True/False to 'true'/'false'
+        else:
+            converted[key] = str(value)
+    return converted
 
 def load_settings():
-    """Load settings from the SETTINGS_FILE if it exists, returning a dict of key-value pairs."""
+    """Load settings with type conversion based on config."""
     settings = DEFAULT_SETTINGS.copy()
     
-    # First check if file exists
-    if not os.path.exists(SETTINGS_FILE):
-        print(f"Settings file not found at: {SETTINGS_FILE}")
-        return settings
-        
     try:
         with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
             for line in f:
@@ -54,12 +52,22 @@ def load_settings():
                     key, value = line.split('=', 1)
                     key = key.strip().upper()
                     value = value.strip()
-                    if key in settings:
-                        settings[key] = value
-            return settings
+                    if key in SETTINGS_CONFIG:
+                        try:
+                            # Special handling for boolean values
+                            if SETTINGS_CONFIG[key]['type'] == bool:
+                                settings[key] = value.lower() == 'true'
+                            else:
+                                settings[key] = SETTINGS_CONFIG[key]['type'](value)
+                        except ValueError:
+                            # If conversion fails, keep default value
+                            pass 
+    except FileNotFoundError:
+        print(f"Settings file not found at: {SETTINGS_FILE}")
     except Exception as e:
         print(f"Error loading settings: {e}")
-        return settings
+    
+    return settings
 
 def save_settings(settings_dict):
     """Save the settings dictionary to the SETTINGS_FILE in a simple key=value format."""
