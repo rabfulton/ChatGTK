@@ -773,34 +773,39 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_model_changed(self, combo):
         """Handle model selection changes."""
-        # Get newly selected model
-        selected_model = combo.get_active_text()
-        if not selected_model:
+        # Check if we're already updating to avoid recursive calls.
+        if getattr(self, '_updating_model', False):
             return
+        self._updating_model = True
+        try:
+            # Get newly selected model
+            selected_model = combo.get_active_text()
+            if not selected_model:
+                return
 
-        # Temporarily block the signal to prevent recursion
-        combo.handler_block_by_func(self.on_model_changed)
+            # Get all models directly from the combo box
+            model_store = combo.get_model()
+            models = []
+            iter = model_store.get_iter_first()
+            while iter:
+                models.append(model_store.get_value(iter, 0))
+                iter = model_store.iter_next(iter)
 
-        # Get all models from the combo box
-        model_store = combo.get_model()
-        models = [model_store[i][0] for i in range(len(model_store))]
+            # Update the list with new order
+            combo.remove_all()
 
-        # Update the list with new order
-        combo.remove_all()
+            # Add the selected model first
+            combo.append_text(selected_model)
 
-        # Add selected model first
-        combo.append_text(selected_model)
+            # Add other models alphabetically, excluding the selected model
+            other_models = sorted(m for m in models if m != selected_model)
+            for model in other_models:
+                combo.append_text(model)
 
-        # Add other models alphabetically, excluding the selected model
-        other_models = sorted(m for m in models if m != selected_model)
-        for model in other_models:
-            combo.append_text(model)
-
-        # Set active to the first item (the selected model)
-        combo.set_active(0)
-
-        # Unblock the signal
-        combo.handler_unblock_by_func(self.on_model_changed)
+            # Set active to the first item (the selected model)
+            combo.set_active(0)
+        finally:
+            self._updating_model = False
 
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
@@ -1069,7 +1074,6 @@ class OpenAIGTKClient(Gtk.Window):
             # New chat - generate name and save
             chat_name = generate_chat_name(self.conversation_history[1]['content'])
             self.current_chat_id = chat_name
-            print(f"New chat ID: {self.current_chat_id}")
 
         # Clear the question input
         self.entry_question.set_text("")
@@ -1738,9 +1742,9 @@ class OpenAIGTKClient(Gtk.Window):
         else:
             text_content = str(full_text)
         
-        # Check if this is a stored audio response
+        # Check if this is a stored audio response from an audio model
         audio_file_match = re.search(r'<audio_file>(.*?)</audio_file>', text_content)
-        audio_file_path = audio_file_match.group(1) if audio_file_match else None
+        initial_audio_path = audio_file_match.group(1) if audio_file_match else None
         
         def on_speak_clicked(widget):
             nonlocal is_playing
@@ -1749,43 +1753,76 @@ class OpenAIGTKClient(Gtk.Window):
                 btn_speak.set_image(icon_stop)
                 btn_speak.set_tooltip_text("Stop playback")
                 
+                # Track if generation/playback was completed
+                generation_completed = False
+                
                 def speak_thread():
-                    nonlocal is_playing
+                    nonlocal is_playing, generation_completed
                     try:
+                        # Reset audio_file_path for each playback attempt
+                        audio_file_path = initial_audio_path
+                        # Remove audio file tag from text if present
+                        clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text_content).strip()
+                        
+                        # Check for existing audio file from "audio model"
                         if audio_file_path and Path(audio_file_path).exists():
-                            # Play stored audio file
+                            # Play existing audio file (from audio model)
                             self.current_playback_process = subprocess.Popen(['paplay', str(audio_file_path)])
                             self.current_playback_process.wait()
-                        else:
-                            # Generate new TTS audio
-                            temp_dir = Path(tempfile.gettempdir())
-                            temp_file = temp_dir / "ai_speech.mp3"
+                            generation_completed = True
+                            return
+                        
+                        # We do not have Audio model, use TTS
+                        if self.current_chat_id:
+                            # Get audio directory
+                            audio_dir = Path('history') / self.current_chat_id.replace('.json', '') / 'audio'
+                            # Generate a hash of the message text for uniqueness
+                            import hashlib
+                            text_hash = hashlib.md5(text_content.encode()).hexdigest()[:8]
+
+                            # Look for file matching the current settings and text hash
+                            current_mode = "ttshd" if self.tts_hd else "tts"
+                            existing_file = audio_dir / f"{current_mode}_{self.tts_voice}_{text_hash}.wav"
                             
-                            # Remove audio file tag from text if present
-                            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text_content).strip()
+                            if existing_file.exists():
+                                # Play existing TTS file
+                                self.current_playback_process = subprocess.Popen(['paplay', str(existing_file)])
+                                self.current_playback_process.wait()
+                                generation_completed = True
+                                return
+                        
+                            # No existing file found, generate new one
+                            audio_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            # Generate filename with timestamp and TTS settings
+                            audio_file = existing_file
                             
                             with ai_provider.audio.speech.with_streaming_response.create(
                                 model="tts-1-hd" if self.tts_hd else "tts-1",
                                 voice=self.tts_voice,
                                 input=clean_text
                             ) as response:
-                                with open(temp_file, 'wb') as f:
+                                with open(audio_file, 'wb') as f:
                                     for chunk in response.iter_bytes():
+                                        if not is_playing:  # Check if stopped
+                                            break
                                         f.write(chunk)
                             
-                            self.current_playback_process = subprocess.Popen(['paplay', str(temp_file)])
-                            self.current_playback_process.wait()
-                            
-                            # Clean up temp file
-                            temp_file.unlink(missing_ok=True)
-                        
-                        if is_playing:
-                            GLib.idle_add(btn_speak.set_image, icon_play)
-                            GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
-                            is_playing = False
-                        
+                            if is_playing:  # Only keep and play if not stopped
+                                # Update audio file path for future playback
+                                audio_file_path = str(audio_file)
+                                
+                                # Play the generated audio
+                                self.current_playback_process = subprocess.Popen(['paplay', str(audio_file)])
+                                self.current_playback_process.wait()
+                                generation_completed = True
+                            else:
+                                # Clean up partial file if stopped
+                                audio_file.unlink(missing_ok=True)
+                    
                     except Exception as e:
                         GLib.idle_add(self.append_message, 'ai', f"Error playing audio: {str(e)}")
+                    finally:
                         GLib.idle_add(btn_speak.set_image, icon_play)
                         GLib.idle_add(btn_speak.set_tooltip_text, "Play response")
                         is_playing = False
