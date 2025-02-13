@@ -84,12 +84,38 @@ class OpenAIProvider(AIProvider):
     def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None):
         # Check if this is an audio-capable model
         is_audio_model = "audio" in model.lower()
+        is_reasoning_model = "o1-mini" in model.lower() or "o1-preview" in model.lower()
         
-        params = {
-            'model': model,
-            'messages': messages,
-            'temperature': temperature
-        }
+        params = {}
+        
+        if is_reasoning_model:
+            # Format messages with the correct content structure, skipping system messages
+            formatted_messages = []
+            for msg in messages:
+                if msg["role"] != "system":  # Skip system messages
+                    formatted_messages.append({
+                        "role": msg["role"],
+                        "content": [{
+                            "type": "text",
+                            "text": msg["content"]
+                        }]
+                    })
+            
+            params.update({
+                'model': model,
+                'messages': formatted_messages,
+                # TODO developer messages and reasoning_effort do not seem to be working here. Revisit this in the future.
+                #'reasoning_effort': 'low',  # Can be 'low', 'medium', or 'high'
+                'response_format': {
+                    'type': 'text'
+                }
+            })
+        else:
+            params.update({
+                'model': model,
+                'messages': messages,
+                'temperature': temperature
+            })
         
         if max_tokens and max_tokens > 0:
             params['max_tokens'] = max_tokens
@@ -99,10 +125,11 @@ class OpenAIProvider(AIProvider):
             params.update({
                 'modalities': ["text", "audio"],
                 'audio': {
-                    'voice': "alloy",  # Use the current TTS voice setting
-                    'format': "wav"  # Changed from pcm16 to wav for better compatibility
+                    'voice': "alloy",
+                    'format': "wav"
                 }
             })
+        print(f"Params: {params}")
         
         response = self.client.chat.completions.create(**params)
         
