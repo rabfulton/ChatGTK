@@ -196,17 +196,22 @@ class SettingsDialog(Gtk.Dialog):
         self.combo_mic = Gtk.ComboBoxText()
         
         # Get list of available microphones
+        devices = []
+        all_devices = []
         try:
             devices = sd.query_devices()
             for device in devices:
                 if device['max_input_channels'] > 0:  # Only input devices
-                    self.combo_mic.append_text(f"{device['name']}")
+                    self.combo_mic.append_text(device['name'])
+                    all_devices.append(device['name'])
+            if not all_devices:
+                self.combo_mic.append_text("default")
         except Exception as e:
             print("Error getting audio devices:", e)
             self.combo_mic.append_text("default")
-        
+            all_devices = []
+
         # Set active microphone from settings
-        all_devices = [d['name'] for d in devices if d['max_input_channels'] > 0]
         if self.microphone in all_devices:
             self.combo_mic.set_active(all_devices.index(self.microphone))
         else:
