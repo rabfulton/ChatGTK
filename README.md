@@ -38,6 +38,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - Text-to-Speech output using OpenAI's TTS and TTS-HD models
 - Real-time voice conversation support using gpt-4o-realtime-preview model
 - Text to audio output using gpt-4o-audio-preview model
+- Reasoning support for OpenAI's o3 models
 
 ## Screenshots
 
