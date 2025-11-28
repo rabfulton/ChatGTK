@@ -62,19 +62,18 @@ class OpenAIProvider(AIProvider):
             
             # Check both parameter and environment variable
             disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')
-            
+            #disable_filter = 1 
             if disable_filter:
                 # Return all available models when filtering is disabled
                 return sorted([model.id for model in models])
             
             # Default filtering behavior
-            allowed_models = {"gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3",
+            allowed_models = {"gpt-3.5-turbo", "gpt-4", "dall-e-3",
                             "gpt-4o-mini-realtime-preview", "o1-mini", "o1-preview",
-                            "chatgpt-4o-latest", "gpt-4-turbo", "gpt-4-turbo-preview",
+                            "chatgpt-4o-latest", "gpt-4-turbo", "gpt-4.1",
                             "gpt-4o-mini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview",
-                            "gpt-4o", "gpt-3.5-turbo-16k", "gpt-3.5-turbo-0125", "gpt-3.5-turbo",
-                            "gpt-4o-realtime-preview", "gpt-4-0125-preview", "gpt-4",
-                            "gpt-4-1106-preview", "o3", "o3-mini"}
+                            "gpt-4o","gpt-4o-realtime-preview", "gpt-4",
+                            "o3", "o3-mini", "gpt-5.1", "gpt-5.1-chat-latest", "gpt-5-pro"}
             filtered_models = [model.id for model in models if model.id in allowed_models]
             return sorted(filtered_models)
         except Exception as e:
@@ -83,9 +82,11 @@ class OpenAIProvider(AIProvider):
 
     def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None):
         # Check if this is an audio-capable model
-        is_audio_model = "audio" in model.lower()
+        model_lower = model.lower()
+        is_audio_model = "audio" in model_lower
         reasoning_models = ["o1-mini", "o1-preview", "o3", "o3-mini"]
-        is_reasoning_model = any(r in model.lower() for r in reasoning_models)
+        is_reasoning_model = any(r in model_lower for r in reasoning_models)
+        is_gpt5_model = model_lower.startswith("gpt-5")
         
         params = {}
         
@@ -115,8 +116,9 @@ class OpenAIProvider(AIProvider):
             params.update({
                 'model': model,
                 'messages': messages,
-                'temperature': temperature
             })
+            if not is_gpt5_model:
+                params['temperature'] = temperature
         
         if max_tokens and max_tokens > 0:
             params['max_tokens'] = max_tokens
