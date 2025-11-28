@@ -1893,6 +1893,90 @@ class OpenAIGTKClient(Gtk.Window):
             alignments = alignments[:column_count]
         return alignments
 
+    def _get_widget_alignment(self, value):
+        """Map numeric alignment to Gtk.Align."""
+        if value >= 0.9:
+            return Gtk.Align.END
+        if value >= 0.4:
+            return Gtk.Align.CENTER
+        return Gtk.Align.START
+
+    def _get_justification(self, value):
+        """Map numeric alignment to Gtk.Justification."""
+        if value >= 0.9:
+            return Gtk.Justification.RIGHT
+        if value >= 0.4:
+            return Gtk.Justification.CENTER
+        return Gtk.Justification.LEFT
+
+    def _create_table_cell_widget(self, text, alignment=0.0, bold=False):
+        """Create a widget for a single table cell with markup/LaTeX support."""
+        processed_text = process_tex_markup(
+            text,
+            self.latex_color,
+            self.current_chat_id,
+            self.source_theme,
+            self.latex_dpi
+        )
+
+        css = (
+            f"label {{ color: {self.ai_color}; font-family: {self.font_family}; "
+            f"font-size: {self.font_size}pt; }}"
+        )
+
+        if "<img" in processed_text:
+            text_view = Gtk.TextView()
+            text_view.set_wrap_mode(Gtk.WrapMode.WORD)
+            text_view.set_editable(False)
+            text_view.set_cursor_visible(False)
+            text_view.set_hexpand(True)
+            text_view.set_vexpand(False)
+            text_view.set_halign(Gtk.Align.FILL)
+            text_view.set_justification(self._get_justification(alignment))
+            css_provider = Gtk.CssProvider()
+            css_text = f"""
+                textview {{
+                    font-family: {self.font_family};
+                    font-size: {self.font_size}pt;
+                }}
+                textview text {{
+                    color: {self.ai_color};
+                }}
+            """
+            css_provider.load_from_data(css_text.encode())
+            text_view.get_style_context().add_provider(
+                css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+            buffer = text_view.get_buffer()
+            parts = re.split(r'(<img src="[^"]+"/>)', processed_text)
+            iter_ = buffer.get_start_iter()
+            for part in parts:
+                if part.startswith('<img src="'):
+                    img_path = re.search(r'src="([^"]+)"', part).group(1)
+                    if 'dalle_' in img_path:
+                        insert_resized_image(buffer, iter_, img_path, text_view)
+                    else:
+                        insert_tex_image(buffer, iter_, img_path)
+                else:
+                    markup = process_text_formatting(part, self.font_size)
+                    buffer.insert_markup(iter_, markup, -1)
+            return text_view
+
+        markup = process_inline_markup(processed_text, self.font_size)
+        if bold and markup.strip():
+            markup = f"<b>{markup}</b>"
+
+        lbl = Gtk.Label()
+        lbl.set_use_markup(True)
+        lbl.set_line_wrap(True)
+        lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
+        lbl.set_xalign(alignment)
+        lbl.set_halign(self._get_widget_alignment(alignment))
+        self.apply_css(lbl, css)
+        lbl.set_markup(markup or ' ')
+        return lbl
+
     def create_table_widget(self, table_text):
         """Convert markdown table text to a GTK grid widget."""
         if not table_text:
@@ -1921,14 +2005,9 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Header row
         for col, header in enumerate(header_cells):
-            header_markup = process_inline_markup(header, self.font_size)
-            lbl = Gtk.Label()
-            lbl.set_use_markup(True)
-            lbl.set_line_wrap(True)
-            lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
-            lbl.set_xalign(alignments[col] if col < len(alignments) else 0)
-            lbl.set_markup(f'<b>{header_markup}</b>')
-            grid.attach(lbl, col, 0, 1, 1)
+            alignment = alignments[col] if col < len(alignments) else 0
+            widget = self._create_table_cell_widget(header, alignment, bold=True)
+            grid.attach(widget, col, 0, 1, 1)
 
         # Data rows
         for row_idx, line in enumerate(data_lines, start=1):
@@ -1941,14 +2020,9 @@ class OpenAIGTKClient(Gtk.Window):
                 cells = cells[:len(header_cells)]
 
             for col, cell in enumerate(cells):
-                cell_markup = process_inline_markup(cell, self.font_size)
-                lbl = Gtk.Label()
-                lbl.set_use_markup(True)
-                lbl.set_line_wrap(True)
-                lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
-                lbl.set_xalign(alignments[col] if col < len(alignments) else 0)
-                lbl.set_markup(cell_markup or ' ')
-                grid.attach(lbl, col, row_idx, 1, 1)
+                alignment = alignments[col] if col < len(alignments) else 0
+                widget = self._create_table_cell_widget(cell, alignment)
+                grid.attach(widget, col, row_idx, 1, 1)
 
         frame = Gtk.Frame()
         frame.set_shadow_type(Gtk.ShadowType.IN)
