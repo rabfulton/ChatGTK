@@ -601,13 +601,14 @@ class OpenAIGTKClient(Gtk.Window):
         self.paned.pack2(vbox_main, True, False)
 
         # Track sidebar width in memory
-        self.current_sidebar_width = int(loaded.get('SIDEBAR_WIDTH', '200'))
+        self.current_sidebar_width = int(getattr(self, 'sidebar_width', 200))
         self.paned.set_position(self.current_sidebar_width)
 
         # Update memory value without saving to file
         def on_paned_position_changed(paned, param):
             if not self.is_maximized():
                 self.current_sidebar_width = paned.get_position()
+                self.sidebar_width = self.current_sidebar_width
 
         self.paned.connect('notify::position', on_paned_position_changed)
 
@@ -736,6 +737,7 @@ class OpenAIGTKClient(Gtk.Window):
         to_save = get_object_settings(self)
         to_save['WINDOW_WIDTH'] = self.current_geometry[0]
         to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
+        to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
         save_settings(convert_settings_for_save(to_save))
         cleanup_temp_files()
         Gtk.main_quit()
