@@ -13,6 +13,13 @@ else
     api_key="$OPENAI_API_KEY"
 fi
 
+if [ -z "$GEMINI_API_KEY" ]; then
+    echo "Optional: enter your Gemini API key (starts with 'AI'):"
+    read -r gemini_key
+else
+    gemini_key="$GEMINI_API_KEY"
+fi
+
 echo "Setting up ChatGTK desktop integration..."
 # Get the absolute path to the current directory
 INSTALL_DIR=$(pwd)
@@ -22,6 +29,7 @@ echo "Creating launcher script..."
 cat << EOF > chatgtk-launcher.sh
 #!/bin/bash
 export OPENAI_API_KEY="${api_key}"
+export GEMINI_API_KEY="${gemini_key}"
 cd "${INSTALL_DIR}"
 exec python3 src/ChatGTK.py
 EOF

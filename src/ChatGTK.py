@@ -546,6 +546,9 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_history = [
             {"role": "system", "content": self.system_message}
         ]
+        self.providers = {}
+        self.model_provider_map = {}
+        self.api_keys = {'openai': '', 'gemini': ''}
 
         # Remember the current geometry if not maximized
         self.current_geometry = (self.window_width, self.window_height)
@@ -623,35 +626,53 @@ class OpenAIGTKClient(Gtk.Window):
         self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
         hbox_top.pack_start(self.sidebar_button, False, False, 0)
 
-        # API Key input with focus-out handler
-        lbl_api = Gtk.Label(label="API Key:")
-        self.entry_api = Gtk.Entry()
-        self.entry_api.set_visibility(False)  # Hide API key text
-        self.entry_api.connect("focus-out-event", self.on_api_key_changed)
+        # API key inputs for OpenAI and Gemini
+        api_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        
+        openai_row = Gtk.Box(spacing=6)
+        lbl_openai_api = Gtk.Label(label="OpenAI:")
+        lbl_openai_api.set_xalign(0)
+        self.entry_openai_api = Gtk.Entry()
+        self.entry_openai_api.set_visibility(False)
+        self.entry_openai_api.set_placeholder_text("sk-...")
+        self.entry_openai_api.connect("focus-out-event", self.on_openai_api_key_changed)
+        openai_row.pack_start(lbl_openai_api, False, False, 0)
+        openai_row.pack_start(self.entry_openai_api, True, True, 0)
+        api_box.pack_start(openai_row, True, True, 0)
+
+        gemini_row = Gtk.Box(spacing=6)
+        lbl_gemini_api = Gtk.Label(label="Gemini:")
+        lbl_gemini_api.set_xalign(0)
+        self.entry_gemini_api = Gtk.Entry()
+        self.entry_gemini_api.set_visibility(False)
+        self.entry_gemini_api.set_placeholder_text("AI...")  # Gemini keys start with AI
+        self.entry_gemini_api.connect("focus-out-event", self.on_gemini_api_key_changed)
+        gemini_row.pack_start(lbl_gemini_api, False, False, 0)
+        gemini_row.pack_start(self.entry_gemini_api, True, True, 0)
+        api_box.pack_start(gemini_row, True, True, 0)
+        
+        hbox_top.pack_start(api_box, True, True, 0)
 
         # Initialize model combo before trying to use it
         self.combo_model = Gtk.ComboBoxText()
+        self.combo_model.connect('changed', self.on_model_changed)
         
-        # Check for API key in environment variable and pre-populate if exists
-        env_api_key = os.environ.get('OPENAI_API_KEY', '')
-        if env_api_key:
-            global ai_provider
-            self.entry_api.set_text(env_api_key)
-            ai_provider = get_ai_provider('openai')
-            ai_provider.initialize(env_api_key)
+        # Check for API keys in environment variables and pre-populate if they exist
+        env_openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+        env_gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
+        if env_openai_key:
+            self.entry_openai_api.set_text(env_openai_key)
+            self.initialize_provider('openai', env_openai_key)
+        if env_gemini_key:
+            self.entry_gemini_api.set_text(env_gemini_key)
+            self.initialize_provider('gemini', env_gemini_key)
+        
+        if self.providers:
             self.fetch_models_async()
         else:
-            # Set some default models without fetching
-            default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
-            for model in default_models:
-                self.combo_model.append_text(model)
-            if self.default_model in default_models:
-                self.combo_model.set_active(default_models.index(self.default_model))
-            else:
-                self.combo_model.set_active(0)
-
-        hbox_top.pack_start(lbl_api, False, False, 0)
-        hbox_top.pack_start(self.entry_api, True, True, 0)
+            default_models = self._default_models_for_provider('openai')
+            self.model_provider_map = {model: 'openai' for model in default_models}
+            self.update_model_list(default_models, self.default_model)
 
         hbox_top.pack_start(self.combo_model, False, False, 0)
 
@@ -749,33 +770,28 @@ class OpenAIGTKClient(Gtk.Window):
             self.current_geometry = (width, height)
         return False
 
-    def update_model_list(self, models):
+    def update_model_list(self, models, current_model=None):
         """Update the model combo box with fetched models."""
-        # Clear existing items
-        self.combo_model.remove_all()
+        if not models:
+            models = self._default_models_for_provider('openai')
+            self.model_provider_map = {model: 'openai' for model in models}
         
-        # Get currently selected model
-        current_model = self.default_model
+        active_model = current_model or self.combo_model.get_active_text()
+        if not active_model or active_model not in models:
+            preferred_default = self.default_model if self.default_model in models else None
+            active_model = preferred_default or models[0]
         
-        # Sort models alphabetically, excluding the current model
-        other_models = sorted([m for m in models if m != current_model])
-        
-        # Add current model first if it exists in the list
-        if current_model in models:
-            self.combo_model.append_text(current_model)
-        
-        # Add remaining models
-        for model in other_models:
-            self.combo_model.append_text(model)
-        
-        # Set active model
-        if current_model in models:
-            self.combo_model.set_active(0)  # Current model is always first
-        else:
-            self.combo_model.set_active(0)  # Default to first model if current not found
-
-        # Connect the changed signal handler
-        self.combo_model.connect('changed', self.on_model_changed)
+        self._updating_model = True
+        try:
+            self.combo_model.remove_all()
+            if active_model in models:
+                self.combo_model.append_text(active_model)
+            other_models = sorted([m for m in models if m != active_model])
+            for model in other_models:
+                self.combo_model.append_text(model)
+            self.combo_model.set_active(0)
+        finally:
+            self._updating_model = False
         return False
 
     def on_model_changed(self, combo):
@@ -817,24 +833,68 @@ class OpenAIGTKClient(Gtk.Window):
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
         def fetch_thread():
-            global ai_provider
-            if not ai_provider:
-                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
-                GLib.idle_add(self.update_model_list, default_models)
+            if not self.providers:
+                default_models = self._default_models_for_provider('openai')
+                mapping = {model: 'openai' for model in default_models}
+                GLib.idle_add(self.apply_model_fetch_results, default_models, mapping)
                 return
 
-            try:
-                model_names = ai_provider.get_available_models()
-                # Update GUI from main thread
-                GLib.idle_add(self.update_model_list, model_names)
-            except Exception as e:
-                print(f"Error fetching models: {e}")
-                # If fetch fails, ensure we have some default models
-                default_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
-                GLib.idle_add(self.update_model_list, default_models)
+            collected_models = []
+            mapping = {}
+            for name, provider in self.providers.items():
+                try:
+                    provider_models = provider.get_available_models()
+                except Exception as e:
+                    print(f"Error fetching models for {name}: {e}")
+                    provider_models = self._default_models_for_provider(name)
+                for model in provider_models:
+                    mapping[model] = name
+                    collected_models.append(model)
+            
+            if not collected_models:
+                collected_models = self._default_models_for_provider('openai')
+                mapping = {model: 'openai' for model in collected_models}
+            
+            unique_models = sorted(dict.fromkeys(collected_models))
+            GLib.idle_add(self.apply_model_fetch_results, unique_models, mapping)
 
         # Start fetch in background
         threading.Thread(target=fetch_thread, daemon=True).start()
+
+    def _default_models_for_provider(self, provider_name):
+        if provider_name == 'gemini':
+            return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-3-pro-preview"]
+        return ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
+
+    def initialize_provider(self, provider_name, api_key):
+        """Initialize and cache providers when keys change."""
+        global ai_provider
+        api_key = (api_key or "").strip()
+        self.api_keys[provider_name] = api_key
+        if not api_key:
+            self.providers.pop(provider_name, None)
+            if provider_name == 'openai':
+                ai_provider = None
+            return None
+
+        provider = get_ai_provider(provider_name)
+        provider.initialize(api_key)
+        self.providers[provider_name] = provider
+        if provider_name == 'openai':
+            ai_provider = provider
+        return provider
+
+    def get_provider_name_for_model(self, model_name):
+        if not model_name:
+            return 'openai'
+        return self.model_provider_map.get(model_name, 'openai')
+
+    def apply_model_fetch_results(self, models, mapping):
+        if mapping:
+            self.model_provider_map = mapping
+        current_model = self.combo_model.get_active_text() or self.default_model
+        self.update_model_list(models, current_model)
+        return False
 
     def on_open_settings(self, widget):
         # Pass ai_provider to the settings dialog
@@ -1038,42 +1098,64 @@ class OpenAIGTKClient(Gtk.Window):
             self.append_ai_message(message_text)
 
     def on_submit(self, widget, event=None):
-        # Get the API key from the entry field
-        api_key = self.entry_api.get_text().strip()
-        if not api_key:
-            self.show_error_dialog("Please enter your OpenAI API key")
-            return False
-        
-        # Set the API key in environment for the websocket provider
-        os.environ['OPENAI_API_KEY'] = api_key
-        
         question = self.entry_question.get_text().strip()
         if not question:
             return
 
-        # Check if this is a one off image generation request
-        if question.lower().startswith("img:"):
-            # Remove the "img:" prefix from the prompt
+        selected_model = self.combo_model.get_active_text()
+        if not selected_model:
+            self.show_error_dialog("Please select a model before sending a message")
+            return False
+
+        quick_image_request = question.lower().startswith("img:")
+        if quick_image_request:
             question = question[4:].strip()
+            target_model = "dall-e-3"
+            provider_name = 'openai'
+            self.model_provider_map.setdefault(target_model, 'openai')
+        else:
+            target_model = selected_model
+            provider_name = self.get_provider_name_for_model(target_model)
+
+        if provider_name == 'gemini':
+            api_entry = self.entry_gemini_api
+            env_var = 'GEMINI_API_KEY'
+            provider_label = "Gemini"
+        else:
+            api_entry = self.entry_openai_api
+            env_var = 'OPENAI_API_KEY'
+            provider_label = "OpenAI"
+
+        api_key = api_entry.get_text().strip()
+        if not api_key:
+            self.show_error_dialog(f"Please enter your {provider_label} API key")
+            return False
+
+        os.environ[env_var] = api_key
+        provider = self.initialize_provider(provider_name, api_key)
+        if not provider:
+            self.show_error_dialog(f"Unable to initialize the {provider_label} provider")
+            return False
+
+        if quick_image_request:
             self.append_message('user', question)
             self.conversation_history.append({"role": "user", "content": question})
             self.entry_question.set_text("")
             self.show_thinking_animation()
-            # Switch to dall-e-3 model for image generation
             threading.Thread(
-                target=self.call_openai_api,
-                args=(api_key, "dall-e-3"),
+                target=self.call_ai_api,
+                args=(target_model,),
                 daemon=True
             ).start()
             return
 
         # Check if we're in realtime mode
-        if "realtime" in self.combo_model.get_active_text().lower():
+        if "realtime" in target_model.lower():
             if not hasattr(self, 'ws_provider'):
                 self.ws_provider = OpenAIWebSocketProvider()
                 # Connect to WebSocket server
                 success = self.ws_provider.connect(
-                    model=self.combo_model.get_active_text(),
+                    model=target_model,
                     system_message=self.system_message,
                     temperature=self.temperament,
                     voice=self.realtime_voice
@@ -1105,37 +1187,51 @@ class OpenAIGTKClient(Gtk.Window):
         # Show thinking animation before API call
         self.show_thinking_animation()
         
-        # Call OpenAI API in a separate thread
+        # Call provider API in a separate thread
         threading.Thread(
-            target=self.call_openai_api,
-            args=(api_key, self.combo_model.get_active_text()),
+            target=self.call_ai_api,
+            args=(target_model,),
             daemon=True
         ).start()
 
-    def call_openai_api(self, api_key, model):
+    def call_ai_api(self, model):
         try:
             # Ensure we have a valid model
             if not model:
                 model = "gpt-3.5-turbo"  # Default fallback
                 print(f"No model selected, falling back to {model}")
+            provider_name = self.get_provider_name_for_model(model)
+            provider = self.providers.get(provider_name)
+            if not provider:
+                api_key = self.api_keys.get(provider_name, "").strip()
+                if not api_key:
+                    entry = self.entry_gemini_api if provider_name == 'gemini' else self.entry_openai_api
+                    api_key = entry.get_text().strip()
+                provider = self.initialize_provider(provider_name, api_key)
+                if not provider:
+                    raise ValueError(f"{provider_name.title()} provider is not initialized")
             
-            match model:
-                case "dall-e-3":
-                    # Get the last user message as the prompt
+            if provider_name == 'openai':
+                match model:
+                    case "dall-e-3" | "gpt-image-1":
+                        prompt = self.conversation_history[-1]["content"]
+                        answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
+                    case _ if "realtime" in model.lower():
+                        return
+                    case _:
+                        answer = provider.generate_chat_completion(
+                            messages=self.conversation_history,
+                            model=model,
+                            temperature=float(self.temperament),
+                            max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                            chat_id=self.current_chat_id
+                        )
+            else:
+                if "image" in model:
                     prompt = self.conversation_history[-1]["content"]
-                    answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp", model)
-                case "gpt-image-1":
-                    # Get the last user message as the prompt
-                    prompt = self.conversation_history[-1]["content"]
-                    answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp", model)
-                case "gpt-4o-realtime-preview":
-                    # Realtime audio model using websockets
-                    return
-                case "gpt-4o-mini-realtime-preview":
-                    # Realtime audio model using websockets
-                    return
-                case _:
-                    answer = ai_provider.generate_chat_completion(
+                    answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
+                else:
+                    answer = provider.generate_chat_completion(
                         messages=self.conversation_history,
                         model=model,
                         temperature=float(self.temperament),
@@ -1162,6 +1258,16 @@ class OpenAIGTKClient(Gtk.Window):
     def audio_transcription(self, widget):
         """Handle audio transcription."""
         print("Audio transcription...")
+        openai_provider = self.providers.get('openai')
+        if not openai_provider:
+            api_key = self.entry_openai_api.get_text().strip()
+            if api_key:
+                os.environ['OPENAI_API_KEY'] = api_key
+                openai_provider = self.initialize_provider('openai', api_key)
+        if not openai_provider:
+            self.show_error_dialog("Audio transcription requires an OpenAI API key")
+            return
+        
         if not self.recording:
             try:
                 # Create an Event for controlling recording
@@ -1193,7 +1299,7 @@ class OpenAIGTKClient(Gtk.Window):
                                 # Transcribe with Whisper
                                 try:
                                     with open(temp_file, "rb") as audio_file:
-                                        transcript = ai_provider.transcribe_audio(audio_file)
+                                        transcript = openai_provider.transcribe_audio(audio_file)
                                         
                                     # Add transcribed text to input
                                     GLib.idle_add(self.entry_question.set_text, transcript)
@@ -1258,10 +1364,12 @@ class OpenAIGTKClient(Gtk.Window):
                         self.ws_provider.microphone = self.microphone  # Pass selected microphone
                     
                     # Connect to WebSocket before starting stream
-                    api_key = self.entry_api.get_text().strip()
+                    api_key = self.entry_openai_api.get_text().strip()
                     if not api_key:
                         self.show_error_dialog("Please enter your OpenAI API key")
                         return False
+                    os.environ['OPENAI_API_KEY'] = api_key
+                    self.initialize_provider('openai', api_key)
 
                     # Connect with the current model
                     if not self.ws_provider.connect(
@@ -1327,14 +1435,26 @@ class OpenAIGTKClient(Gtk.Window):
         # Refresh the history list
         self.refresh_history_list()
 
-    def on_api_key_changed(self, widget, event):
-        """Handle API key changes and update model list if needed."""
-        global ai_provider
-        api_key = self.entry_api.get_text().strip()
-        if api_key:  # Only update if we have a key
-            ai_provider = get_ai_provider('openai')
-            ai_provider.initialize(api_key)
-            self.fetch_models_async()
+    def on_openai_api_key_changed(self, widget, event):
+        """Handle OpenAI API key changes and update model list if needed."""
+        api_key = self.entry_openai_api.get_text().strip()
+        if api_key:
+            os.environ['OPENAI_API_KEY'] = api_key
+        else:
+            os.environ.pop('OPENAI_API_KEY', None)
+        self.initialize_provider('openai', api_key)
+        self.fetch_models_async()
+        return False
+
+    def on_gemini_api_key_changed(self, widget, event):
+        """Handle Gemini API key changes."""
+        api_key = self.entry_gemini_api.get_text().strip()
+        if api_key:
+            os.environ['GEMINI_API_KEY'] = api_key
+        else:
+            os.environ.pop('GEMINI_API_KEY', None)
+        self.initialize_provider('gemini', api_key)
+        self.fetch_models_async()
         return False
 
     def on_sidebar_toggle(self, button):

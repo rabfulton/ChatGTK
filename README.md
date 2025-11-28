@@ -14,7 +14,7 @@ pip install -r requirements.txt
 Or use your package manager to install the dependencies. The application when launched from the terminal will complain about which dependencies are missing.
 
 ## Usage
-The application looks for an enviroment variable: $OPENAI_API_KEY
+The application looks for environment variables: `$OPENAI_API_KEY` (required for OpenAI models) and `$GEMINI_API_KEY` (optional, used for Google Gemini models).
 
 You can get API credits by signing up at [OpenAI's platform](https://platform.openai.com/signup). Credits can be purchased from your [OpenAI account page](https://platform.openai.com/account/billing/overview). Credits are very cheap compared to a subscription to the ChatGTP application. You need to create an API key to use the application.
 
@@ -40,6 +40,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - Text to audio output using gpt-4o-audio-preview model
 - Reasoning support for OpenAI's o3 models
 - "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
+- Dual API key support for Google Gemini 3 series models alongside OpenAI endpoints.
 
 ## Screenshots
 

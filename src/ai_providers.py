@@ -254,6 +254,176 @@ class OpenAIProvider(AIProvider):
         
         threading.Thread(target=play_audio, daemon=True).start()
 
+
+class GeminiProvider(AIProvider):
+    """AI provider implementation for Google's Gemini API."""
+    
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    
+    def __init__(self):
+        self.api_key = None
+    
+    def initialize(self, api_key: str):
+        self.api_key = api_key
+    
+    def _require_key(self):
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY environment variable not set")
+    
+    def _headers(self):
+        self._require_key()
+        return {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key
+        }
+    
+    def _convert_messages(self, messages):
+        contents = []
+        system_instruction = None
+        for msg in messages:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if not text:
+                continue
+            if role == "system":
+                system_instruction = text
+                continue
+            gemini_role = "user" if role == "user" else "model"
+            contents.append({
+                "role": gemini_role,
+                "parts": [{"text": text}]
+            })
+        return contents, system_instruction
+    
+    def _extract_text(self, response_json):
+        candidates = response_json.get("candidates", [])
+        if not candidates:
+            return ""
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text_segments = []
+        for part in parts:
+            if "text" in part:
+                text_segments.append(part["text"])
+        return "".join(text_segments).strip()
+    
+    def get_available_models(self, disable_filter=False):
+        self._require_key()
+        try:
+            resp = requests.get(
+                f"{self.BASE_URL}/models",
+                headers=self._headers(),
+                params={"pageSize": 50},
+                timeout=30
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            models = []
+            for model in data.get("models", []):
+                name = model.get("name", "")
+                if not name:
+                    continue
+                model_id = name.split("/")[-1]
+                if "generateContent" in model.get("supportedGenerationMethods", []):
+                    models.append(model_id)
+
+            # Check both parameter and environment variable
+            disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')
+            if disable_filter:
+                # Return all available models when filtering is disabled
+                return sorted(models) if models else []
+
+            # Default filtering behavior for Gemini
+            allowed_models = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-image",
+                            "gemini-3-pro-preview", "gemini-pro", "gemini-pro-vision",
+                            "gemini-pro-latest", "gemini-flash-latest", "gemini-3-pro-image-preview"}
+            filtered_models = [model_id for model_id in models if model_id in allowed_models]
+            if filtered_models:
+                return sorted(filtered_models)
+        except Exception as exc:
+            print(f"Error fetching Gemini models: {exc}")
+        return sorted(["gemini-flash-latest", "gemini-pro-latest"])
+    
+    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None):
+        self._require_key()
+        contents, system_instruction = self._convert_messages(messages)
+        payload = {
+            "contents": contents
+        }
+        if system_instruction:
+            payload["system_instruction"] = {
+                "parts": [{"text": system_instruction}]
+            }
+        generation_config = {}
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if max_tokens and max_tokens > 0:
+            generation_config["max_output_tokens"] = max_tokens
+        if generation_config:
+            payload["generation_config"] = generation_config
+        
+        try:
+            resp = requests.post(
+                f"{self.BASE_URL}/models/{model}:generateContent",
+                headers=self._headers(),
+                json=payload,
+                timeout=60
+            )
+            resp.raise_for_status()
+            return self._extract_text(resp.json())
+        except Exception as exc:
+            raise RuntimeError(f"Gemini completion failed: {exc}") from exc
+    
+    def generate_image(self, prompt, chat_id, model="gemini-3-pro-image-preview"):
+        self._require_key()
+        payload = {
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }]
+        }
+        try:
+            resp = requests.post(
+                f"{self.BASE_URL}/models/{model}:generateContent",
+                headers=self._headers(),
+                json=payload,
+                timeout=60
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            raise RuntimeError(f"Gemini image generation failed: {exc}") from exc
+        
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise ValueError("No image returned from Gemini")
+        
+        inline_data = None
+        for candidate in candidates:
+            parts = candidate.get("content", {}).get("parts", [])
+            for part in parts:
+                if "inlineData" in part:
+                    inline_data = part["inlineData"].get("data")
+                    break
+            if inline_data:
+                break
+        
+        if not inline_data:
+            raise ValueError("Gemini response missing inline image data")
+        
+        image_bytes = base64.b64decode(inline_data)
+        images_dir = Path('history') / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
+        images_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_path = images_dir / f"{model.replace('-', '_')}_{timestamp}.png"
+        image_path.write_bytes(image_bytes)
+        return f'<img src="{image_path}"/>'
+    
+    def transcribe_audio(self, audio_file):
+        raise NotImplementedError("Gemini provider does not support audio transcription yet.")
+    
+    def generate_speech(self, text, voice):
+        raise NotImplementedError("Gemini provider does not support TTS yet.")
+
 class OpenAIWebSocketProvider:
     def __init__(self):
         self.ws = None
@@ -756,7 +926,7 @@ class OpenAIWebSocketProvider:
 def get_ai_provider(provider_name: str) -> AIProvider:
     providers = {
         'openai': OpenAIProvider,
-        # Add other providers here as they're implemented
+        'gemini': GeminiProvider,
     }
     
     provider_class = providers.get(provider_name)
