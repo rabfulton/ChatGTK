@@ -29,6 +29,63 @@ def format_code_blocks(text):
     
     return processed
 
+def _is_table_header(line):
+    """Return True if line looks like a markdown table header."""
+    if not line:
+        return False
+    stripped = line.strip()
+    if '|' not in stripped:
+        return False
+    # Ignore lines that are pure separators
+    return not _is_table_separator(stripped)
+
+def _is_table_separator(line):
+    """Return True if the line is a markdown table separator like | --- |."""
+    if not line:
+        return False
+    stripped = line.strip().strip('|')
+    if not stripped:
+        return False
+    pattern = re.compile(r'^(:?-{3,}:?\s*)(\|\s*:?-{3,}:?\s*)*$')
+    return bool(pattern.match(stripped))
+
+def _is_table_row(line):
+    """Return True if the line represents a markdown row (not separator)."""
+    if not line:
+        return False
+    stripped = line.strip()
+    if '|' not in stripped:
+        return False
+    return not _is_table_separator(stripped)
+
+def format_tables(text):
+    """Wrap markdown tables with explicit markers for downstream rendering."""
+    lines = text.split('\n')
+    formatted_lines = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        next_idx = i + 1
+        if (
+            _is_table_header(line)
+            and next_idx < len(lines)
+            and _is_table_separator(lines[next_idx])
+        ):
+            start = i
+            i = next_idx + 1
+            while i < len(lines) and _is_table_row(lines[i]):
+                i += 1
+            table_block = '\n'.join(l for l in lines[start:i] if l.strip())
+            formatted_lines.append('--- Table Start ---')
+            formatted_lines.append(table_block)
+            formatted_lines.append('--- Table End ---')
+        else:
+            formatted_lines.append(line)
+            i += 1
+
+    return '\n'.join(formatted_lines)
+
 def format_bullet_points(text):
     """Replace markdown bullet points with bullet symbols."""
     # Replace lines starting with '-' or '*' with a bullet symbol
@@ -58,6 +115,9 @@ def format_response(text):
     
     # Format code blocks
     text = format_code_blocks(text)
+
+    # Format tables
+    text = format_tables(text)
     
     return text
 

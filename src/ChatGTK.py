@@ -901,7 +901,8 @@ class OpenAIGTKClient(Gtk.Window):
         # Process message_text to add formatted text and (if needed) code blocks.
         full_text = []
         
-        segments = re.split(r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---)', message_text, flags=re.DOTALL)
+        pattern = r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---|--- Table Start ---\n.*?\n--- Table End ---)'
+        segments = re.split(pattern, message_text, flags=re.DOTALL)
         for seg in segments:
             if seg.startswith('--- Code Block Start ('):
                 lang_match = re.search(r'^--- Code Block Start \((.*?)\) ---', seg)
@@ -913,6 +914,22 @@ class OpenAIGTKClient(Gtk.Window):
                 frame.add(source_view)
                 content_container.pack_start(frame, False, False, 5)
                 full_text.append("Code block follows.")
+            elif seg.startswith('--- Table Start ---'):
+                table_content = re.sub(r'^--- Table Start ---\n?', '', seg)
+                table_content = re.sub(r'\n?--- Table End ---$', '', table_content).strip()
+                table_widget = self.create_table_widget(table_content)
+                if table_widget:
+                    content_container.pack_start(table_widget, False, False, 0)
+                else:
+                    fallback_label = Gtk.Label()
+                    fallback_label.set_selectable(True)
+                    fallback_label.set_line_wrap(True)
+                    fallback_label.set_line_wrap_mode(Gtk.WrapMode.WORD)
+                    fallback_label.set_xalign(0)
+                    self.apply_css(fallback_label, css_ai)
+                    fallback_label.set_text(table_content)
+                    content_container.pack_start(fallback_label, False, False, 0)
+                full_text.append(table_content)
             else:
                  # For text segments that follow a code block
                 if seg.startswith('\n'):
@@ -1843,6 +1860,102 @@ class OpenAIGTKClient(Gtk.Window):
         
         btn_speak.connect("clicked", on_speak_clicked)
         return btn_speak
+
+    def _split_table_row(self, line):
+        """Split a markdown table row into cells."""
+        if not line:
+            return []
+        stripped = line.strip()
+        if stripped.startswith('|'):
+            stripped = stripped[1:]
+        if stripped.endswith('|'):
+            stripped = stripped[:-1]
+        return [cell.strip() for cell in stripped.split('|')]
+
+    def _get_table_alignments(self, separator_line, column_count):
+        """Determine alignment for each column from the separator line."""
+        raw_cells = self._split_table_row(separator_line)
+        alignments = []
+        for cell in raw_cells:
+            cell = cell.strip()
+            left = cell.startswith(':')
+            right = cell.endswith(':')
+            if left and right:
+                alignments.append(0.5)
+            elif right:
+                alignments.append(1.0)
+            else:
+                alignments.append(0.0)
+        # Pad or trim to match expected column count
+        if len(alignments) < column_count:
+            alignments.extend([0.0] * (column_count - len(alignments)))
+        elif len(alignments) > column_count:
+            alignments = alignments[:column_count]
+        return alignments
+
+    def create_table_widget(self, table_text):
+        """Convert markdown table text to a GTK grid widget."""
+        if not table_text:
+            return None
+
+        lines = [line for line in table_text.split('\n') if line.strip()]
+        if len(lines) < 2:
+            return None
+
+        header_cells = self._split_table_row(lines[0])
+        if not header_cells:
+            return None
+
+        separator_line = lines[1]
+        alignments = self._get_table_alignments(separator_line, len(header_cells))
+
+        data_lines = lines[2:]
+        grid = Gtk.Grid()
+        grid.set_column_spacing(12)
+        grid.set_row_spacing(6)
+        grid.set_margin_start(6)
+        grid.set_margin_end(6)
+        grid.set_margin_top(6)
+        grid.set_margin_bottom(6)
+        grid.set_hexpand(True)
+
+        # Header row
+        for col, header in enumerate(header_cells):
+            header_markup = process_inline_markup(header, self.font_size)
+            lbl = Gtk.Label()
+            lbl.set_use_markup(True)
+            lbl.set_line_wrap(True)
+            lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
+            lbl.set_xalign(alignments[col] if col < len(alignments) else 0)
+            lbl.set_markup(f'<b>{header_markup}</b>')
+            grid.attach(lbl, col, 0, 1, 1)
+
+        # Data rows
+        for row_idx, line in enumerate(data_lines, start=1):
+            cells = self._split_table_row(line)
+            if not cells:
+                continue
+            if len(cells) < len(header_cells):
+                cells.extend([''] * (len(header_cells) - len(cells)))
+            elif len(cells) > len(header_cells):
+                cells = cells[:len(header_cells)]
+
+            for col, cell in enumerate(cells):
+                cell_markup = process_inline_markup(cell, self.font_size)
+                lbl = Gtk.Label()
+                lbl.set_use_markup(True)
+                lbl.set_line_wrap(True)
+                lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
+                lbl.set_xalign(alignments[col] if col < len(alignments) else 0)
+                lbl.set_markup(cell_markup or ' ')
+                grid.attach(lbl, col, row_idx, 1, 1)
+
+        frame = Gtk.Frame()
+        frame.set_shadow_type(Gtk.ShadowType.IN)
+        frame.set_margin_top(5)
+        frame.set_margin_bottom(5)
+        frame.add(grid)
+        return frame
 
     def on_stream_content_received(self, content):
         """Handle received streaming content."""
