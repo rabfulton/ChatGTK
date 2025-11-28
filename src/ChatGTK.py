@@ -1123,7 +1123,11 @@ class OpenAIGTKClient(Gtk.Window):
                 case "dall-e-3":
                     # Get the last user message as the prompt
                     prompt = self.conversation_history[-1]["content"]
-                    answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp")
+                    answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp", model)
+                case "gpt-image-1":
+                    # Get the last user message as the prompt
+                    prompt = self.conversation_history[-1]["content"]
+                    answer = ai_provider.generate_image(prompt, self.current_chat_id or "temp", model)
                 case "gpt-4o-realtime-preview":
                     # Realtime audio model using websockets
                     return
@@ -1149,7 +1153,8 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as error:
             print(f"\nAPI Call Error: {error}")
             GLib.idle_add(self.hide_thinking_animation)
-            GLib.idle_add(lambda: self.append_message('ai', f"** Error: {str(error)} **"))
+            error_message = f"** Error: {str(error)} **"
+            GLib.idle_add(lambda msg=error_message: self.append_message('ai', msg))
             
         finally:
             GLib.idle_add(self.hide_thinking_animation)

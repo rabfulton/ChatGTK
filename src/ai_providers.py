@@ -34,7 +34,7 @@ class AIProvider(ABC):
         pass
     
     @abstractmethod
-    def generate_image(self, prompt, chat_id):
+    def generate_image(self, prompt, chat_id, model="dall-e-3"):
         """Generate image from prompt."""
         pass
     
@@ -68,7 +68,7 @@ class OpenAIProvider(AIProvider):
                 return sorted([model.id for model in models])
             
             # Default filtering behavior
-            allowed_models = {"gpt-3.5-turbo", "gpt-4", "dall-e-3",
+            allowed_models = {"gpt-3.5-turbo", "gpt-4", "dall-e-3", "gpt-image-1",
                             "gpt-4o-mini-realtime-preview", "o1-mini", "o1-preview",
                             "chatgpt-4o-latest", "gpt-4-turbo", "gpt-4.1",
                             "gpt-4o-mini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview",
@@ -183,29 +183,35 @@ class OpenAIProvider(AIProvider):
         
         return text_content
     
-    def generate_image(self, prompt, chat_id):
+    def generate_image(self, prompt, chat_id, model="dall-e-3"):
         response = self.client.images.generate(
-            model="dall-e-3",
+            model=model,
             prompt=prompt,
             size="1024x1024",
-            quality="standard",
+            #quality="standard",
             n=1,
         )
         
-        # Get the image URL
-        image_url = response.data[0].url
+        image_data = response.data[0]
+        image_bytes = None
         
-        # Download the image
+        if getattr(image_data, "url", None):
+            download_response = requests.get(image_data.url)
+            download_response.raise_for_status()
+            image_bytes = download_response.content
+        elif getattr(image_data, "b64_json", None):
+            image_bytes = base64.b64decode(image_data.b64_json)
+        else:
+            raise ValueError("Image response missing both URL and base64 data")
+        
         images_dir = Path('history') / chat_id.replace('.json', '') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
         
-        # Generate unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        image_path = images_dir / f"dalle_{timestamp}.png"
+        model_prefix = model.replace('-', '_')
+        image_path = images_dir / f"{model_prefix}_{timestamp}.png"
         
-        # Download and save image
-        response = requests.get(image_url)
-        image_path.write_bytes(response.content)
+        image_path.write_bytes(image_bytes)
         
         return f'<img src="{image_path}"/>'
     

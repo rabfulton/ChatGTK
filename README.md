@@ -39,6 +39,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - Real-time voice conversation support using gpt-4o-realtime-preview model
 - Text to audio output using gpt-4o-audio-preview model
 - Reasoning support for OpenAI's o3 models
+- "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
 
 ## Screenshots
 
