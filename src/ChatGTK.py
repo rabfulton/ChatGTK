@@ -56,6 +56,21 @@ gi.require_version("GtkSource", "4")
 
 from gi.repository import Gtk, GLib, Pango, GtkSource 
 
+CHAT_COMPLETION_EXCLUDE_TERMS = ("dall", "image", "realtime", "audio", "tts", "whisper")
+MATH_PROMPT_APPENDIX = (
+    "When writing mathematical equations, do not use the dollar sign ($) as a delimiter. "
+    "Instead, use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
+    "Leave currency amounts as standard dollar signs (e.g., $5.00)."
+)
+
+
+def is_chat_completion_model(model_name: str) -> bool:
+    """Return True if the model behaves like a standard text chat completion model."""
+    if not model_name:
+        return True
+    lower_name = model_name.lower()
+    return not any(term in lower_name for term in CHAT_COMPLETION_EXCLUDE_TERMS)
+
 # Path to settings file (in same directory as this script)
 # SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
 
@@ -883,6 +898,29 @@ class OpenAIGTKClient(Gtk.Window):
         if provider_name == 'openai':
             ai_provider = provider
         return provider
+    
+    def _messages_for_model(self, model_name):
+        """
+        Return the conversation history, appending the math delimiter instruction to
+        the system prompt when using a standard chat completion model.
+        """
+        if not self.conversation_history:
+            return []
+        if not is_chat_completion_model(model_name):
+            return self.conversation_history
+        first_message = self.conversation_history[0]
+        if first_message.get("role") != "system":
+            return self.conversation_history
+        current_prompt = first_message.get("content", "") or ""
+        if MATH_PROMPT_APPENDIX in current_prompt:
+            return self.conversation_history
+        if current_prompt.strip():
+            appended_prompt = f"{current_prompt.rstrip()}\n\n{MATH_PROMPT_APPENDIX}"
+        else:
+            appended_prompt = MATH_PROMPT_APPENDIX
+        messages = [msg.copy() for msg in self.conversation_history]
+        messages[0]["content"] = appended_prompt
+        return messages
 
     def get_provider_name_for_model(self, model_name):
         if not model_name:
@@ -1219,8 +1257,9 @@ class OpenAIGTKClient(Gtk.Window):
                     case _ if "realtime" in model.lower():
                         return
                     case _:
+                        messages_to_send = self._messages_for_model(model)
                         answer = provider.generate_chat_completion(
-                            messages=self.conversation_history,
+                            messages=messages_to_send,
                             model=model,
                             temperature=float(self.temperament),
                             max_tokens=self.max_tokens if self.max_tokens > 0 else None,
@@ -1231,8 +1270,9 @@ class OpenAIGTKClient(Gtk.Window):
                     prompt = self.conversation_history[-1]["content"]
                     answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
                 else:
+                    messages_to_send = self._messages_for_model(model)
                     answer = provider.generate_chat_completion(
-                        messages=self.conversation_history,
+                        messages=messages_to_send,
                         model=model,
                         temperature=float(self.temperament),
                         max_tokens=self.max_tokens if self.max_tokens > 0 else None,
