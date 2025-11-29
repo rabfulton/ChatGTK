@@ -92,7 +92,7 @@ def format_bullet_points(text):
     # Make sure we don't match inside code blocks
     lines = text.split('\n')
     formatted_lines = []
-    
+
     for line in lines:
         # Only format lines that start with - or * followed by a space
         if re.match(r'^\s*[-*]\s+', line):
@@ -101,7 +101,23 @@ def format_bullet_points(text):
             formatted_lines.append(formatted_line)
         else:
             formatted_lines.append(line)
-    
+
+    return '\n'.join(formatted_lines)
+
+def format_horizontal_lines(text):
+    """Replace horizontal rule markers (*** or ---) with special markers for later processing."""
+    lines = text.split('\n')
+    formatted_lines = []
+
+    for line in lines:
+        # Check if line contains only whitespace + (*** or ---) + whitespace
+        stripped = line.strip()
+        if stripped == '***' or stripped == '---':
+            # Replace with special marker that will be processed later
+            formatted_lines.append('---HORIZONTAL-LINE---')
+        else:
+            formatted_lines.append(line)
+
     return '\n'.join(formatted_lines)
 
 def escape_for_pango_markup(text):
@@ -112,13 +128,16 @@ def format_response(text):
     """Apply all formatting to a response."""
     # Format bullet points first
     text = format_bullet_points(text)
-    
+
+    # Format horizontal lines
+    text = format_horizontal_lines(text)
+
     # Format code blocks
     text = format_code_blocks(text)
 
     # Format tables
     text = format_tables(text)
-    
+
     return text
 
 def format_headers(text):
@@ -150,15 +169,15 @@ def process_text_formatting(text, font_size):
     """Process all inline text formatting (bold, italic, etc.)."""
     # First, escape any existing markup
     text = escape_for_pango_markup(text)
-    
+
     # Handle code within bold text
     pattern0 = r'\*\*`([^`]+)`\*\*'
     text = re.sub(pattern0, r'<b><span font_family="monospace" background="#404040" foreground="#ffffff">\1</span></b>', text)
-    
+
     # Handle all bold text
     pattern1 = r'\*\*([^*`]+?)\*\*'
     text = re.sub(pattern1, r'<b>\1</b>', text)
-    
+
     # Apply other formatting and normalize line breaks.
     text = convert_single_asterisks_to_italic(text)
     text = format_headers(text)
@@ -168,7 +187,7 @@ def process_inline_markup(text, font_size):
     """Process text for inline code and other markup."""
     # First, remove audio tags from display but keep the text content
     text = re.sub(r'\n?<audio_file>.*?</audio_file>', '', text)
-    
+
     # First, escape any existing markup
     text = escape_for_pango_markup(text)
     

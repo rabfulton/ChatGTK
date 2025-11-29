@@ -1001,7 +1001,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Process message_text to add formatted text and (if needed) code blocks.
         full_text = []
         
-        pattern = r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---|--- Table Start ---\n.*?\n--- Table End ---)'
+        pattern = r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---|--- Table Start ---\n.*?\n--- Table End ---|---HORIZONTAL-LINE---)'
         segments = re.split(pattern, message_text, flags=re.DOTALL)
         for seg in segments:
             if seg.startswith('--- Code Block Start ('):
@@ -1030,6 +1030,27 @@ class OpenAIGTKClient(Gtk.Window):
                     fallback_label.set_text(table_content)
                     content_container.pack_start(fallback_label, False, False, 0)
                 full_text.append(table_content)
+            elif seg.strip() == '---HORIZONTAL-LINE---':
+                # Create a horizontal separator widget and style it to match text color
+                separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                # CSS to set separator color to match the text color (self.ai_color)
+                separator_css = f"""
+                    separator {{
+                        background-color: {self.ai_color};
+                        color: {self.ai_color};
+                        min-height: 2px;
+                        margin-top: 8px;
+                        margin-bottom: 8px;
+                    }}
+                """
+                css_provider = Gtk.CssProvider()
+                css_provider.load_from_data(separator_css.encode())
+                separator.get_style_context().add_provider(
+                    css_provider, 
+                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                )
+                content_container.pack_start(separator, False, False, 10)  # Add some margin
+                full_text.append("Horizontal line.")
             else:
                  # For text segments that follow a code block
                 if seg.startswith('\n'):
