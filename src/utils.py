@@ -249,8 +249,13 @@ def rgb_to_hex(color_str):
     return color_str  # Return unchanged if not rgb format
 
 def insert_resized_image(buffer, iter, img_path, text_view=None):
-    """Insert an image into the text buffer with appropriate sizing."""
-    
+    """Insert an image into the text buffer with responsive sizing.
+
+    The image will shrink to fit the available width in the TextView while
+    preserving aspect ratio, but it will never be upscaled beyond its
+    original resolution.
+    """
+
     try:
         # Create a scrolled window to contain the image
         scroll = Gtk.ScrolledWindow()
@@ -258,39 +263,58 @@ def insert_resized_image(buffer, iter, img_path, text_view=None):
         scroll.set_hexpand(True)
         scroll.set_vexpand(False)  # Don't expand vertically
         scroll.set_size_request(100, -1)  # Set minimum width
-        
+
         # Load the original image
         pixbuf = GdkPixbuf.Pixbuf.new_from_file(img_path)
-        
+        original_width = pixbuf.get_width()
+        original_height = pixbuf.get_height()
+
         # Create the image widget
         image = Gtk.Image.new_from_pixbuf(pixbuf)
         image.set_size_request(100, -1)  # Set minimum width for image too
         image.set_vexpand(False)  # Don't expand vertically
-        
+
         def on_size_allocate(widget, allocation):
-            # Get TextView width and ensure it's reasonable
-            width = max(text_view.get_allocated_width() - 20, 100)
-            
-            # Calculate new height maintaining aspect ratio
-            height = int(width * (pixbuf.get_height() / pixbuf.get_width()))
-            
-            # Scale the image
-            scaled = pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+            if text_view is None:
+                return
+
+            # Available width inside the TextView
+            allocated_width = text_view.get_allocated_width()
+            if allocated_width <= 0:
+                return
+
+            # Target width: fit within TextView, but never exceed original width
+            target_width = max(min(allocated_width - 20, original_width), 100)
+
+            # If the target width is effectively the same as the original, keep original pixbuf
+            if target_width == original_width:
+                scaled = pixbuf
+            else:
+                # Calculate new height maintaining aspect ratio
+                target_height = int(target_width * (original_height / original_width))
+                scaled = pixbuf.scale_simple(
+                    target_width,
+                    target_height,
+                    GdkPixbuf.InterpType.BILINEAR
+                )
+
             image.set_from_pixbuf(scaled)
-            
+
             # Force the scroll window to request the new size
-            scroll.set_size_request(width, height)
-        
-        text_view.connect('size-allocate', on_size_allocate)
-        
+            scroll.set_size_request(target_width, -1)
+
+        if text_view is not None:
+            text_view.connect('size-allocate', on_size_allocate)
+
         # Add image to scrolled window
         scroll.add(image)
-        
+
         # Insert into buffer
         anchor = buffer.create_child_anchor(iter)
-        text_view.add_child_at_anchor(scroll, anchor)
+        if text_view is not None:
+            text_view.add_child_at_anchor(scroll, anchor)
         scroll.show_all()
-        
+
     except Exception as e:
         print(f"Error processing image: {e}")
         import traceback

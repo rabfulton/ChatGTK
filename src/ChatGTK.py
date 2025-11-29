@@ -397,7 +397,7 @@ class SettingsDialog(Gtk.Dialog):
         # Make sure TextView can receive focus and input
         self.entry_system_message.set_can_focus(True)
         self.entry_system_message.set_accepts_tab(True)
-        
+
         # Make sure parent widgets don't interfere with events
         text_scroll.set_can_focus(False)
         frame.set_can_focus(False)
@@ -1092,12 +1092,12 @@ class OpenAIGTKClient(Gtk.Window):
                         for part in parts:
                             if part.startswith('<img src="'):
                                 img_path = re.search(r'src="([^"]+)"', part).group(1)
-                                # Use resized image insertion for DALL-E images
-                                if 'dalle_' in img_path:
-                                    insert_resized_image(buffer, iter, img_path, text_view)
-                                else:
-                                    # Use regular insertion for other images (like LaTeX)
+                                # LaTeX math images stay at their natural (small) size
+                                if self._is_latex_math_image(img_path):
                                     insert_tex_image(buffer, iter, img_path)
+                                else:
+                                    # Model-generated or other non-math images resize with chat width
+                                    insert_resized_image(buffer, iter, img_path, text_view)
                             else:
                                 text = process_text_formatting(part, self.font_size)
                                 buffer.insert_markup(iter, text, -1)
@@ -2115,6 +2115,19 @@ class OpenAIGTKClient(Gtk.Window):
             return Gtk.Justification.CENTER
         return Gtk.Justification.LEFT
 
+    def _is_latex_math_image(self, img_path: str) -> bool:
+        """
+        Return True if the given image path looks like a LaTeX-generated
+        math image. These are always small and should not be affected by
+        responsive resizing logic for model-generated images.
+        """
+        try:
+            name = os.path.basename(str(img_path))
+        except Exception:
+            return False
+
+        return name.startswith("math_inline_") or name.startswith("math_display_")
+
     def _create_table_cell_widget(self, text, alignment=0.0, bold=False):
         """Create a widget for a single table cell with markup/LaTeX support."""
         processed_text = process_tex_markup(
@@ -2160,10 +2173,12 @@ class OpenAIGTKClient(Gtk.Window):
             for part in parts:
                 if part.startswith('<img src="'):
                     img_path = re.search(r'src="([^"]+)"', part).group(1)
-                    if 'dalle_' in img_path:
-                        insert_resized_image(buffer, iter_, img_path, text_view)
-                    else:
+                    # Keep LaTeX math images at their natural size
+                    if self._is_latex_math_image(img_path):
                         insert_tex_image(buffer, iter_, img_path)
+                    else:
+                        # Make model-generated and other non-math images responsive
+                        insert_resized_image(buffer, iter_, img_path, text_view)
                 else:
                     markup = process_text_formatting(part, self.font_size)
                     buffer.insert_markup(iter_, markup, -1)
