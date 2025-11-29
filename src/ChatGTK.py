@@ -11,6 +11,8 @@ import numpy as np       # For audio processing
 import tempfile         # For temporary files
 from pathlib import Path # For path handling
 import subprocess
+import mimetypes
+import base64
 import time
 from latex_utils import (
     tex_to_png, 
@@ -728,16 +730,17 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Voice input button with recording state
         self.recording = False
+        self.attached_file_path = None
         self.btn_voice = Gtk.Button(label="Start Voice Input")
         self.btn_voice.connect("clicked", self.on_voice_input)
         
         # Add voice button to horizontal box
         button_box.pack_start(self.btn_voice, True, True, 0)
 
-        # Add history button to the same horizontal box
-        self.history_button = Gtk.Button(label="Clear Chat")
-        self.history_button.connect("clicked", self.on_clear_clicked)
-        button_box.pack_start(self.history_button, True, True, 0)
+        # Attach File button
+        self.btn_attach = Gtk.Button(label="Attach File")
+        self.btn_attach.connect("clicked", self.on_attach_file)
+        button_box.pack_start(self.btn_attach, True, True, 0)
 
         vbox_main.pack_start(button_box, False, False, 0)
 
@@ -1159,7 +1162,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_submit(self, widget, event=None):
         question = self.entry_question.get_text().strip()
-        if not question:
+        if not question and not getattr(self, 'attached_file_path', None):
             return
 
         selected_model = self.combo_model.get_active_text()
@@ -1233,11 +1236,44 @@ class OpenAIGTKClient(Gtk.Window):
         
         # ... existing non-realtime code ...
         # Use new method to append user message
-        self.append_message('user', question)
+        
+        # Handle attachment
+        images = []
+        display_text = question
+        
+        if getattr(self, 'attached_file_path', None):
+            try:
+                mime_type, _ = mimetypes.guess_type(self.attached_file_path)
+                if not mime_type:
+                    mime_type = "application/octet-stream"
+                
+                with open(self.attached_file_path, "rb") as f:
+                    file_data = f.read()
+                    encoded = base64.b64encode(file_data).decode('utf-8')
+                    images.append({
+                        "data": encoded,
+                        "mime_type": mime_type
+                    })
+                
+                filename = os.path.basename(self.attached_file_path)
+                display_text = (question + f"\n[Attached: {filename}]") if question else f"[Attached: {filename}]"
+                
+                # Reset attachment
+                self.attached_file_path = None
+                self.btn_attach.set_label("Attach File")
+                
+            except Exception as e:
+                print(f"Error processing file: {e}")
+                display_text = question + f"\n[Error attaching file]"
+
+        self.append_message('user', display_text)
+        
         # Store user message in the chat history
-        self.conversation_history.append(
-            {"role": "user", "content": question, "provider_meta": {}}
-        )
+        user_msg = {"role": "user", "content": question, "provider_meta": {}}
+        if images:
+            user_msg["images"] = images
+            
+        self.conversation_history.append(user_msg)
         
         # Assign a chat ID if none exists
         if self.current_chat_id is None:
@@ -1278,11 +1314,18 @@ class OpenAIGTKClient(Gtk.Window):
             # This will hold any provider-specific metadata for the assistant message
             assistant_provider_meta = None
 
+            last_msg = self.conversation_history[-1]
+            prompt = last_msg.get("content", "")
+            has_attached_images = "images" in last_msg and last_msg["images"]
+
             if provider_name == 'openai':
                 match model:
                     case "dall-e-3" | "gpt-image-1":
-                        prompt = self.conversation_history[-1]["content"]
-                        answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
+                        # For `gpt-image-1`, use attached image (if any) for edits.
+                        image_data = None
+                        if model == "gpt-image-1" and has_attached_images:
+                            image_data = last_msg["images"][0]["data"]
+                        answer = provider.generate_image(prompt, self.current_chat_id or "temp", model, image_data)
                     case _ if "realtime" in model.lower():
                         return
                     case _:
@@ -1295,10 +1338,23 @@ class OpenAIGTKClient(Gtk.Window):
                             chat_id=self.current_chat_id
                         )
             else:
-                if "image" in model:
-                    prompt = self.conversation_history[-1]["content"]
+                # Gemini image models support both text→image and image→image.
+                is_image_model = model in ["gemini-3-pro-image-preview", "gemini-2.5-flash-image"]
+
+                if is_image_model and has_attached_images:
+                    img = last_msg["images"][0]
+                    answer = provider.generate_image(
+                        prompt,
+                        self.current_chat_id or "temp",
+                        model,
+                        image_data=img["data"],
+                        mime_type=img.get("mime_type")
+                    )
+                elif is_image_model:
+                    # Text → image
                     answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
                 else:
+                    # Chat completion (possibly with image input)
                     messages_to_send = self._messages_for_model(model)
                     response_meta = {}
                     answer = provider.generate_chat_completion(
@@ -1417,6 +1473,38 @@ class OpenAIGTKClient(Gtk.Window):
             self.recording = False
             self.btn_voice.set_label("Start Voice Input")
 
+    def on_attach_file(self, widget):
+        """Handle file attachment."""
+        dialog = Gtk.FileChooserDialog(
+            title="Please choose a file",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+        )
+
+        # Add filters
+        filter_any = Gtk.FileFilter()
+        filter_any.set_name("All files")
+        filter_any.add_pattern("*")
+        dialog.add_filter(filter_any)
+        
+        filter_image = Gtk.FileFilter()
+        filter_image.set_name("Images")
+        filter_image.add_mime_type("image/*")
+        dialog.add_filter(filter_image)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            self.attached_file_path = dialog.get_filename()
+            filename = os.path.basename(self.attached_file_path)
+            self.btn_attach.set_label(f"Attached: {filename}")
+            print(f"File selected: {self.attached_file_path}")
+        
+        dialog.destroy()
+
     def on_voice_input(self, widget):
         current_model = self.combo_model.get_active_text()
 
@@ -1486,33 +1574,46 @@ class OpenAIGTKClient(Gtk.Window):
                 self.btn_voice.set_label("Start Voice Input")
                 return False  # Prevent signal propagation
 
-    def on_clear_clicked(self, widget):
-        """Clear the current chat and its associated files."""
-        # Clear the display
-        for child in self.conversation_box.get_children():
-            child.destroy()
-            
-        # If this was a saved chat, clean up its files
-        if self.current_chat_id:
-            # Remove formula cache directory
-            chat_dir = Path('history') / self.current_chat_id.replace('.json', '')
+    def on_delete_chat(self, widget, history_row):
+        """Delete the selected chat history."""
+        filename = history_row.filename
+        
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Delete Chat",
+        )
+        dialog.format_secondary_text("Are you sure you want to delete this chat history?")
+        response = dialog.run()
+        dialog.destroy()
+
+        if response == Gtk.ResponseType.YES:
+            # If we are deleting the currently active chat, clear the display first
+            if self.current_chat_id == filename:
+                # Clear the display
+                for child in self.conversation_box.get_children():
+                    child.destroy()
+                
+                # Reset conversation state
+                self.conversation_history = [
+                    {"role": "system", "content": self.system_message, "provider_meta": {}}
+                ]
+                self.current_chat_id = None
+
+            # Delete files
+            chat_dir = Path('history') / filename.replace('.json', '')
             if chat_dir.exists():
                 import shutil
                 shutil.rmtree(chat_dir)
             
-            # Remove the chat history file
-            history_file = Path('history') / self.current_chat_id
+            history_file = Path('history') / filename
             if history_file.exists():
                 history_file.unlink()
-        
-        # Reset conversation state
-        self.conversation_history = [
-            {"role": "system", "content": self.system_message, "provider_meta": {}}
-        ]
-        self.current_chat_id = None
-        
-        # Refresh the history list
-        self.refresh_history_list()
+            
+            # Refresh the history list
+            self.refresh_history_list()
 
     def on_openai_api_key_changed(self, widget, event):
         """Handle OpenAI API key changes and update model list if needed."""
@@ -1763,6 +1864,11 @@ class OpenAIGTKClient(Gtk.Window):
         export_item = Gtk.MenuItem(label="Export to PDF")
         export_item.connect("activate", self.on_export_chat, history_row)
         menu.append(export_item)
+        
+        # Delete option
+        delete_item = Gtk.MenuItem(label="Delete Chat")
+        delete_item.connect("activate", self.on_delete_chat, history_row)
+        menu.append(delete_item)
         
         menu.show_all()
         menu.popup_at_pointer(None)

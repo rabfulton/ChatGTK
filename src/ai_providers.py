@@ -113,9 +113,34 @@ class OpenAIProvider(AIProvider):
                 }
             })
         else:
+            # Preprocess messages to handle images and clean keys
+            processed_messages = []
+            for msg in messages:
+                content = msg.get("content", "")
+                
+                if "images" in msg and msg["images"]:
+                    content_parts = [{"type": "text", "text": content}]
+                    for img in msg["images"]:
+                        mime_type = img.get("mime_type", "image/jpeg")
+                        content_parts.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{img['data']}",
+                                "detail": "auto"
+                            }
+                        })
+                    processed_messages.append({
+                        "role": msg["role"],
+                        "content": content_parts
+                    })
+                else:
+                    # Keep only valid keys for OpenAI API
+                    clean_msg = {k: v for k, v in msg.items() if k in ("role", "content", "name", "function_call", "tool_calls", "tool_call_id")}
+                    processed_messages.append(clean_msg)
+
             params.update({
                 'model': model,
-                'messages': messages,
+                'messages': processed_messages,
             })
             if not is_gpt5_model:
                 params['temperature'] = temperature
@@ -183,26 +208,54 @@ class OpenAIProvider(AIProvider):
         
         return text_content
     
-    def generate_image(self, prompt, chat_id, model="dall-e-3"):
-        response = self.client.images.generate(
-            model=model,
-            prompt=prompt,
-            size="1024x1024",
-            #quality="standard",
-            n=1,
-        )
-        
-        image_data = response.data[0]
-        image_bytes = None
-        
-        if getattr(image_data, "url", None):
-            download_response = requests.get(image_data.url)
-            download_response.raise_for_status()
-            image_bytes = download_response.content
-        elif getattr(image_data, "b64_json", None):
-            image_bytes = base64.b64decode(image_data.b64_json)
+    def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
+        """
+        Generate or edit an image using OpenAI image models.
+        - For models like `dall-e-3` this performs text → image generation.
+        - For `gpt-image-1` with `image_data` this performs image → image editing.
+        """
+        if model == "gpt-image-1" and image_data:
+            # Image edit: decode the attached image and send it to the images.edit endpoint
+            raw_bytes = base64.b64decode(image_data)
+            
+            # Create a temporary file for the uploaded image
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_img:
+                temp_img.write(raw_bytes)
+                temp_img.flush()
+                
+                # Re‑open as a file handle for the SDK
+                with open(temp_img.name, "rb") as img_file:
+                    response = self.client.images.edit(
+                        model=model,
+                        image=img_file,
+                        prompt=prompt,
+                        n=1,
+                        size="1024x1024",
+                    )
+            
+            image_b64 = response.data[0].b64_json
+            final_image_bytes = base64.b64decode(image_b64)
         else:
-            raise ValueError("Image response missing both URL and base64 data")
+            # Standard image generation (no source image)
+            response = self.client.images.generate(
+                model=model,
+                prompt=prompt,
+                size="1024x1024",
+                #quality="standard",
+                n=1,
+            )
+            
+            data_obj = response.data[0]
+            final_image_bytes = None
+            
+            if getattr(data_obj, "url", None):
+                download_response = requests.get(data_obj.url)
+                download_response.raise_for_status()
+                final_image_bytes = download_response.content
+            elif getattr(data_obj, "b64_json", None):
+                final_image_bytes = base64.b64decode(data_obj.b64_json)
+            else:
+                raise ValueError("Image response missing both URL and base64 data")
         
         images_dir = Path('history') / chat_id.replace('.json', '') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
@@ -211,7 +264,7 @@ class OpenAIProvider(AIProvider):
         model_prefix = model.replace('-', '_')
         image_path = images_dir / f"{model_prefix}_{timestamp}.png"
         
-        image_path.write_bytes(image_bytes)
+        image_path.write_bytes(final_image_bytes)
         
         return f'<img src="{image_path}"/>'
     
@@ -283,15 +336,32 @@ class GeminiProvider(AIProvider):
         for msg in messages:
             role = msg.get("role", "user")
             text = msg.get("content", "")
-            if not text:
-                continue
+            
             if role == "system":
                 system_instruction = text
                 continue
+            
+            if not text and not msg.get("images"):
+                continue
+
             gemini_role = "user" if role == "user" else "model"
+            
+            parts = []
+            if text:
+                parts.append({"text": text})
+            
+            if "images" in msg and msg["images"]:
+                for img in msg["images"]:
+                    parts.append({
+                        "inlineData": {
+                            "mimeType": img.get("mime_type", "image/jpeg"),
+                            "data": img["data"]
+                        }
+                    })
+            
             contents.append({
                 "role": gemini_role,
-                "parts": [{"text": text}]
+                "parts": parts
             })
         return contents, system_instruction
     
@@ -417,12 +487,28 @@ class GeminiProvider(AIProvider):
         except Exception as exc:
             raise RuntimeError(f"Gemini completion failed: {exc}") from exc
     
-    def generate_image(self, prompt, chat_id, model="gemini-3-pro-image-preview"):
+    def generate_image(self, prompt, chat_id, model="gemini-3-pro-image-preview", image_data=None, mime_type=None):
+        """
+        Generate or transform an image using Gemini image models.
+        - When `image_data` is None, this is text → image generation.
+        - When `image_data` is provided, this is image → image with text instructions.
+        """
         self._require_key()
+        parts = []
+        if image_data:
+            parts.append({
+                "inlineData": {
+                    "mimeType": mime_type or "image/png",
+                    "data": image_data
+                }
+            })
+        if prompt:
+            parts.append({"text": prompt})
+
         payload = {
             "contents": [{
                 "role": "user",
-                "parts": [{"text": prompt}]
+                "parts": parts or [{"text": ""}]
             }]
         }
         try:
