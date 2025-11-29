@@ -558,8 +558,9 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Initialize chat state
         self.current_chat_id = None  # None means this is a new, unsaved chat
+        # Each message can carry optional provider-specific metadata in provider_meta.
         self.conversation_history = [
-            {"role": "system", "content": self.system_message}
+            {"role": "system", "content": self.system_message, "provider_meta": {}}
         ]
         self.providers = {}
         self.model_provider_map = {}
@@ -1198,7 +1199,9 @@ class OpenAIGTKClient(Gtk.Window):
 
         if quick_image_request:
             self.append_message('user', question)
-            self.conversation_history.append({"role": "user", "content": question})
+            self.conversation_history.append(
+                {"role": "user", "content": question, "provider_meta": {}}
+            )
             self.entry_question.set_text("")
             self.show_thinking_animation()
             threading.Thread(
@@ -1232,7 +1235,9 @@ class OpenAIGTKClient(Gtk.Window):
         # Use new method to append user message
         self.append_message('user', question)
         # Store user message in the chat history
-        self.conversation_history.append({"role": "user", "content": question})
+        self.conversation_history.append(
+            {"role": "user", "content": question, "provider_meta": {}}
+        )
         
         # Assign a chat ID if none exists
         if self.current_chat_id is None:
@@ -1270,6 +1275,9 @@ class OpenAIGTKClient(Gtk.Window):
                 if not provider:
                     raise ValueError(f"{provider_name.title()} provider is not initialized")
             
+            # This will hold any provider-specific metadata for the assistant message
+            assistant_provider_meta = None
+
             if provider_name == 'openai':
                 match model:
                     case "dall-e-3" | "gpt-image-1":
@@ -1292,15 +1300,25 @@ class OpenAIGTKClient(Gtk.Window):
                     answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
                 else:
                     messages_to_send = self._messages_for_model(model)
+                    response_meta = {}
                     answer = provider.generate_chat_completion(
                         messages=messages_to_send,
                         model=model,
                         temperature=float(self.temperament),
                         max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id
+                        chat_id=self.current_chat_id,
+                        response_meta=response_meta
                     )
+                    assistant_provider_meta = response_meta or None
 
-            self.conversation_history.append({"role": "assistant", "content": answer})
+            assistant_message = {"role": "assistant", "content": answer}
+            if assistant_provider_meta:
+                assistant_message["provider_meta"] = assistant_provider_meta
+            else:
+                # Ensure the key exists for consistency, even if empty.
+                assistant_message["provider_meta"] = {}
+
+            self.conversation_history.append(assistant_message)
 
             # Update UI in main thread
             GLib.idle_add(self.hide_thinking_animation)
@@ -1489,7 +1507,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Reset conversation state
         self.conversation_history = [
-            {"role": "system", "content": self.system_message}
+            {"role": "system", "content": self.system_message, "provider_meta": {}}
         ]
         self.current_chat_id = None
         
@@ -1539,7 +1557,7 @@ class OpenAIGTKClient(Gtk.Window):
         """Start a new chat conversation."""
         # Clear conversation history
         self.conversation_history = [
-            {"role": "system", "content": self.system_message}
+            {"role": "system", "content": self.system_message, "provider_meta": {}}
         ]
         
         # Reset chat ID to indicate this is a new chat

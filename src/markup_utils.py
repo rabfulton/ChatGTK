@@ -150,6 +150,7 @@ def format_headers(text):
         h1_match = re.match(r'^#\s+(.+)$', line)
         h2_match = re.match(r'^##\s+(.+)$', line)
         h3_match = re.match(r'^###\s+(.+)$', line)
+        h4_match = re.match(r'^####\s+(.+)$', line)
         
         if h1_match:
             # Level 1 header - largest
@@ -159,7 +160,10 @@ def format_headers(text):
             formatted_lines.append(f'<span size="x-large"><b>{h2_match.group(1)}</b></span>\n')
         elif h3_match:
             # Level 3 header - smaller
-            formatted_lines.append(f'<span size="large"><b>{h3_match.group(1)}</b></span>')
+            formatted_lines.append(f'<span size="large"><b>{h3_match.group(1)}</b></span>\n')
+        elif h4_match:
+            # Level 4 header - smallest heading style
+            formatted_lines.append(f'<span size="medium"><b>{h4_match.group(1)}</b></span>\n')
         else:
             formatted_lines.append(line)
     

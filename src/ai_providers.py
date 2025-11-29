@@ -305,6 +305,26 @@ class GeminiProvider(AIProvider):
             if "text" in part:
                 text_segments.append(part["text"])
         return "".join(text_segments).strip()
+
+    def _find_thought_signatures(self, obj):
+        """
+        Recursively search a response JSON object for any Gemini thought signature fields.
+        We treat these as opaque provider metadata and simply return the first match.
+        """
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                # Support both snake_case and camelCase just in case.
+                if key in ("thought_signatures", "thoughtSignatures"):
+                    return value
+                found = self._find_thought_signatures(value)
+                if found is not None:
+                    return found
+        elif isinstance(obj, list):
+            for item in obj:
+                found = self._find_thought_signatures(item)
+                if found is not None:
+                    return found
+        return None
     
     def get_available_models(self, disable_filter=False):
         self._require_key()
@@ -343,12 +363,27 @@ class GeminiProvider(AIProvider):
             print(f"Error fetching Gemini models: {exc}")
         return sorted(["gemini-flash-latest", "gemini-pro-latest"])
     
-    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None):
+    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None, response_meta=None):
         self._require_key()
         contents, system_instruction = self._convert_messages(messages)
         payload = {
             "contents": contents
         }
+
+        # Reuse any previously returned thought signatures, if present.
+        # We scan the incoming messages for provider-specific Gemini metadata.
+        thought_sigs = None
+        for msg in messages or []:
+            meta = msg.get("provider_meta") if isinstance(msg, dict) else None
+            if not isinstance(meta, dict):
+                continue
+            gem_meta = meta.get("gemini")
+            if isinstance(gem_meta, dict) and "thought_signatures" in gem_meta:
+                thought_sigs = gem_meta["thought_signatures"]
+        if thought_sigs is not None:
+            # Attach exactly as stored; Gemini will interpret or ignore as appropriate.
+            payload["thought_signatures"] = thought_sigs
+
         if system_instruction:
             payload["system_instruction"] = {
                 "parts": [{"text": system_instruction}]
@@ -369,7 +404,16 @@ class GeminiProvider(AIProvider):
                 timeout=60
             )
             resp.raise_for_status()
-            return self._extract_text(resp.json())
+            data = resp.json()
+
+            # Capture any thought signatures as opaque provider metadata for the caller.
+            if response_meta is not None:
+                thought_sigs = self._find_thought_signatures(data)
+                if thought_sigs is not None:
+                    gemini_meta = response_meta.setdefault("gemini", {})
+                    gemini_meta["thought_signatures"] = thought_sigs
+
+            return self._extract_text(data)
         except Exception as exc:
             raise RuntimeError(f"Gemini completion failed: {exc}") from exc
     
