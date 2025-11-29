@@ -652,6 +652,16 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 \DeclareUnicodeCharacter{2202}{\ensuremath{\partial}}    % ∂
 \DeclareUnicodeCharacter{2207}{\ensuremath{\nabla}}     % ∇
 \DeclareUnicodeCharacter{00B0}{\ensuremath{^{\circ}}}   % °
+\DeclareUnicodeCharacter{2070}{\ensuremath{^{0}}}     % ⁰
+\DeclareUnicodeCharacter{00B9}{\ensuremath{^{1}}}     % ¹
+\DeclareUnicodeCharacter{00B2}{\ensuremath{^{2}}}     % ²
+\DeclareUnicodeCharacter{00B3}{\ensuremath{^{3}}}     % ³
+\DeclareUnicodeCharacter{2074}{\ensuremath{^{4}}}     % ⁴
+\DeclareUnicodeCharacter{2075}{\ensuremath{^{5}}}     % ⁵
+\DeclareUnicodeCharacter{2076}{\ensuremath{^{6}}}     % ⁶
+\DeclareUnicodeCharacter{2077}{\ensuremath{^{7}}}     % ⁷
+\DeclareUnicodeCharacter{2078}{\ensuremath{^{8}}}     % ⁸
+\DeclareUnicodeCharacter{2079}{\ensuremath{^{9}}}     % ⁹
 
 % Define a robust custom macro for inline code using listings' inline code command.
 \DeclareRobustCommand{\inlinecode}[1]{\lstinline!#1!}
