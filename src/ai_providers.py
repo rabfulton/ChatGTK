@@ -720,7 +720,16 @@ class GeminiProvider(AIProvider):
             print(f"Error fetching Gemini models: {exc}")
         return sorted(["gemini-flash-latest", "gemini-pro-latest"])
     
-    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None, response_meta=None):
+    def generate_chat_completion(
+        self,
+        messages,
+        model,
+        temperature=0.7,
+        max_tokens=None,
+        chat_id=None,
+        response_meta=None,
+        image_tool_handler=None,
+    ):
         self._require_key()
         contents, system_instruction = self._convert_messages(messages)
         payload = {
@@ -752,6 +761,39 @@ class GeminiProvider(AIProvider):
             generation_config["max_output_tokens"] = max_tokens
         if generation_config:
             payload["generation_config"] = generation_config
+
+        # When an image tool handler is provided, expose a generate_image
+        # function to Gemini using its functionDeclarations schema, mirroring
+        # the documented pattern in the Gemini function calling guide:
+        # https://ai.google.dev/gemini-api/docs/function-calling?example=meeting
+        if image_tool_handler is not None:
+            payload.setdefault("tools", []).append(
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": "generate_image",
+                            "description": (
+                                "Generate an image for the user based on a textual description. "
+                                "Use this when the user explicitly asks for an image or when an "
+                                "image would significantly help them understand something."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "description": (
+                                            "A concise but detailed description of the image to generate, "
+                                            "in natural language."
+                                        ),
+                                    },
+                                },
+                                "required": ["prompt"],
+                            },
+                        }
+                    ]
+                }
+            )
         
         try:
             resp = requests.post(
@@ -770,7 +812,48 @@ class GeminiProvider(AIProvider):
                     gemini_meta = response_meta.setdefault("gemini", {})
                     gemini_meta["thought_signatures"] = thought_sigs
 
-            return self._extract_text(data)
+            # If no image tool handler is supplied, fall back to the existing
+            # simple text-extraction behavior.
+            if image_tool_handler is None:
+                return self._extract_text(data)
+
+            # With an image tool handler, inspect the response for any
+            # functionCall parts targeting generate_image, invoke the handler,
+            # and append the resulting <img> tags (and a short caption) to the
+            # text we return so the UI can render the images.
+            base_text = self._extract_text(data)
+            tool_segments = []
+
+            for candidate in data.get("candidates", []) or []:
+                parts = candidate.get("content", {}).get("parts", []) or []
+                for part in parts:
+                    fn = part.get("functionCall")
+                    if not fn:
+                        continue
+                    if fn.get("name") != "generate_image":
+                        continue
+
+                    args = fn.get("args") or {}
+                    prompt_arg = args.get("prompt", "")
+                    try:
+                        tool_output = image_tool_handler(prompt_arg)
+                    except Exception as e:
+                        print(f"Error in Gemini image_tool_handler: {e}")
+                        tool_output = f"Error generating image: {e}"
+
+                    if tool_output:
+                        # Prefix with a small caption so there is some textual
+                        # context even if the model did not emit any text.
+                        caption = f"Generated image for prompt: {prompt_arg}".strip()
+                        segment = f"{caption}\n{tool_output}" if caption else tool_output
+                        tool_segments.append(segment)
+
+            if not tool_segments:
+                return base_text
+
+            if base_text:
+                return base_text + "\n\n" + "\n\n".join(tool_segments)
+            return "\n\n".join(tool_segments)
         except Exception as exc:
             raise RuntimeError(f"Gemini completion failed: {exc}") from exc
     

@@ -1124,17 +1124,18 @@ class OpenAIGTKClient(Gtk.Window):
     def _supports_image_tools(self, model_name):
         """
         Return True if the given model should be offered the image-generation
-        tool. Currently this is limited to non-realtime OpenAI GPT chat models.
+        tool. Currently this is limited to non-realtime OpenAI GPT chat models
+        and compatible Gemini chat models.
         """
         if not model_name:
             return False
 
-         # Respect the user setting that globally enables/disables the image tool.
+        # Respect the user setting that globally enables/disables the image tool.
         if not bool(getattr(self, "image_tool_enabled", True)):
             return False
 
         provider = self.get_provider_name_for_model(model_name)
-        if provider != 'openai':
+        if provider not in ('openai', 'gemini'):
             return False
 
         lower = model_name.lower()
@@ -1144,7 +1145,20 @@ class OpenAIGTKClient(Gtk.Window):
         if self._is_image_model_for_provider(model_name, provider):
             return False
 
-        return lower.startswith("gpt-")
+        # OpenAI GPT chat models.
+        if provider == 'openai':
+            return lower.startswith("gpt-")
+
+        # Gemini chat models that support function calling (non-image variants).
+        if provider == 'gemini':
+            return (
+                lower.startswith("gemini-2.5")
+                or lower.startswith("gemini-3-pro")
+                or lower.startswith("gemini-pro")
+                or lower.startswith("gemini-flash")
+            )
+
+        return False
 
     def generate_image_for_model(self, model, prompt, last_msg, chat_id, provider_name, has_attached_images):
         """
@@ -1721,17 +1735,35 @@ class OpenAIGTKClient(Gtk.Window):
                         chat_id=self.current_chat_id,
                     )
             elif provider_name == 'gemini':
-                # Chat completion (possibly with image input)
+                # Chat completion (possibly with image input or tool-based image generation)
                 messages_to_send = self._messages_for_model(model)
                 response_meta = {}
-                answer = provider.generate_chat_completion(
-                    messages=messages_to_send,
-                    model=model,
-                    temperature=float(self.temperament),
-                    max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                    chat_id=self.current_chat_id,
-                    response_meta=response_meta
-                )
+
+                if self._supports_image_tools(model):
+                    last_user_msg = last_msg
+
+                    def image_tool_handler(prompt_arg):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+
+                    answer = provider.generate_chat_completion(
+                        messages=messages_to_send,
+                        model=model,
+                        temperature=float(self.temperament),
+                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                        chat_id=self.current_chat_id,
+                        response_meta=response_meta,
+                        image_tool_handler=image_tool_handler,
+                    )
+                else:
+                    answer = provider.generate_chat_completion(
+                        messages=messages_to_send,
+                        model=model,
+                        temperature=float(self.temperament),
+                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                        chat_id=self.current_chat_id,
+                        response_meta=response_meta,
+                    )
+
                 assistant_provider_meta = response_meta or None
             elif provider_name == 'grok':
                 # Standard chat completion for Grok.
