@@ -537,6 +537,72 @@ class SettingsDialog(Gtk.Dialog):
             error_dialog.run()
             error_dialog.destroy()
 
+
+class APIKeyDialog(Gtk.Dialog):
+    def __init__(self, parent, openai_key='', gemini_key=''):
+        super().__init__(title="API Keys", transient_for=parent, flags=0)
+        self.set_modal(True)
+        self.set_default_size(500, 300)
+
+        # Get the content area
+        box = self.get_content_area()
+        box.set_spacing(6)
+
+        # Create list box
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+
+        # Style the list box
+        list_box.set_margin_top(12)
+        list_box.set_margin_bottom(12)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
+
+        # Add list box to content area
+        box.pack_start(list_box, True, True, 0)
+
+        # OpenAI API Key
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="OpenAI API Key", xalign=0)
+        label.set_hexpand(True)
+        self.entry_openai = Gtk.Entry()
+        self.entry_openai.set_visibility(False)
+        self.entry_openai.set_placeholder_text("sk-...")
+        self.entry_openai.set_text(openai_key)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_openai, False, True, 0)
+        list_box.add(row)
+
+        # Gemini API Key
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Gemini API Key", xalign=0)
+        label.set_hexpand(True)
+        self.entry_gemini = Gtk.Entry()
+        self.entry_gemini.set_visibility(False)
+        self.entry_gemini.set_placeholder_text("AI...")
+        self.entry_gemini.set_text(gemini_key)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_gemini, False, True, 0)
+        list_box.add(row)
+
+        # Add buttons
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("OK", Gtk.ResponseType.OK)
+
+        self.show_all()
+
+    def get_keys(self):
+        """Return the API keys from the dialog."""
+        return {
+            'openai': self.entry_openai.get_text().strip(),
+            'gemini': self.entry_gemini.get_text().strip()
+        }
+
+
 class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
         super().__init__(title="ChatGTK Client")
@@ -644,45 +710,24 @@ class OpenAIGTKClient(Gtk.Window):
         self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
         hbox_top.pack_start(self.sidebar_button, False, False, 0)
 
-        # API key inputs for OpenAI and Gemini
-        api_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-        
-        openai_row = Gtk.Box(spacing=6)
-        lbl_openai_api = Gtk.Label(label="OpenAI:")
-        lbl_openai_api.set_xalign(0)
-        self.entry_openai_api = Gtk.Entry()
-        self.entry_openai_api.set_visibility(False)
-        self.entry_openai_api.set_placeholder_text("sk-...")
-        self.entry_openai_api.connect("focus-out-event", self.on_openai_api_key_changed)
-        openai_row.pack_start(lbl_openai_api, False, False, 0)
-        openai_row.pack_start(self.entry_openai_api, True, True, 0)
-        api_box.pack_start(openai_row, True, True, 0)
-
-        gemini_row = Gtk.Box(spacing=6)
-        lbl_gemini_api = Gtk.Label(label="Gemini:")
-        lbl_gemini_api.set_xalign(0)
-        self.entry_gemini_api = Gtk.Entry()
-        self.entry_gemini_api.set_visibility(False)
-        self.entry_gemini_api.set_placeholder_text("AI...")  # Gemini keys start with AI
-        self.entry_gemini_api.connect("focus-out-event", self.on_gemini_api_key_changed)
-        gemini_row.pack_start(lbl_gemini_api, False, False, 0)
-        gemini_row.pack_start(self.entry_gemini_api, True, True, 0)
-        api_box.pack_start(gemini_row, True, True, 0)
-        
-        hbox_top.pack_start(api_box, True, True, 0)
+        # API keys management button
+        self.api_keys_button = Gtk.Button(label="API Keys")
+        self.api_keys_button.set_tooltip_text("Manage API keys for OpenAI and Gemini")
+        self.api_keys_button.connect("clicked", self.on_api_keys_clicked)
+        hbox_top.pack_start(self.api_keys_button, False, False, 0)
 
         # Initialize model combo before trying to use it
         self.combo_model = Gtk.ComboBoxText()
         self.combo_model.connect('changed', self.on_model_changed)
         
-        # Check for API keys in environment variables and pre-populate if they exist
+        # Check for API keys in environment variables and initialize providers if they exist
         env_openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
         env_gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
         if env_openai_key:
-            self.entry_openai_api.set_text(env_openai_key)
+            self.api_keys['openai'] = env_openai_key
             self.initialize_provider('openai', env_openai_key)
         if env_gemini_key:
-            self.entry_gemini_api.set_text(env_gemini_key)
+            self.api_keys['gemini'] = env_gemini_key
             self.initialize_provider('gemini', env_gemini_key)
         
         if self.providers:
@@ -950,6 +995,37 @@ class OpenAIGTKClient(Gtk.Window):
             self.fetch_models_async()
         dialog.destroy()
 
+    def on_api_keys_clicked(self, widget):
+        """Handle API keys management button click."""
+        # Get current keys from environment or stored values
+        current_openai = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', ''))
+        current_gemini = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', ''))
+
+        dialog = APIKeyDialog(self, openai_key=current_openai, gemini_key=current_gemini)
+        response = dialog.run()
+
+        if response == Gtk.ResponseType.OK:
+            new_keys = dialog.get_keys()
+
+            # Update stored keys
+            self.api_keys['openai'] = new_keys['openai']
+            self.api_keys['gemini'] = new_keys['gemini']
+
+            # Update environment variables
+            if new_keys['openai']:
+                os.environ['OPENAI_API_KEY'] = new_keys['openai']
+                self.initialize_provider('openai', new_keys['openai'])
+            else:
+                os.environ.pop('OPENAI_API_KEY', None)
+
+            if new_keys['gemini']:
+                os.environ['GEMINI_API_KEY'] = new_keys['gemini']
+                self.initialize_provider('gemini', new_keys['gemini'])
+            else:
+                os.environ.pop('GEMINI_API_KEY', None)
+
+        dialog.destroy()
+
     def append_user_message(self, text):
         """Add a user message as a label with user style."""
         lbl = Gtk.Label()
@@ -1181,15 +1257,13 @@ class OpenAIGTKClient(Gtk.Window):
             provider_name = self.get_provider_name_for_model(target_model)
 
         if provider_name == 'gemini':
-            api_entry = self.entry_gemini_api
             env_var = 'GEMINI_API_KEY'
             provider_label = "Gemini"
         else:
-            api_entry = self.entry_openai_api
             env_var = 'OPENAI_API_KEY'
             provider_label = "OpenAI"
 
-        api_key = api_entry.get_text().strip()
+        api_key = os.environ.get(env_var, self.api_keys.get(provider_name, '')).strip()
         if not api_key:
             self.show_error_dialog(f"Please enter your {provider_label} API key")
             return False
@@ -1303,10 +1377,7 @@ class OpenAIGTKClient(Gtk.Window):
             provider_name = self.get_provider_name_for_model(model)
             provider = self.providers.get(provider_name)
             if not provider:
-                api_key = self.api_keys.get(provider_name, "").strip()
-                if not api_key:
-                    entry = self.entry_gemini_api if provider_name == 'gemini' else self.entry_openai_api
-                    api_key = entry.get_text().strip()
+                api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
                 provider = self.initialize_provider(provider_name, api_key)
                 if not provider:
                     raise ValueError(f"{provider_name.title()} provider is not initialized")
@@ -1395,7 +1466,7 @@ class OpenAIGTKClient(Gtk.Window):
         print("Audio transcription...")
         openai_provider = self.providers.get('openai')
         if not openai_provider:
-            api_key = self.entry_openai_api.get_text().strip()
+            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
             if api_key:
                 os.environ['OPENAI_API_KEY'] = api_key
                 openai_provider = self.initialize_provider('openai', api_key)
@@ -1531,7 +1602,7 @@ class OpenAIGTKClient(Gtk.Window):
                         self.ws_provider.microphone = self.microphone  # Pass selected microphone
                     
                     # Connect to WebSocket before starting stream
-                    api_key = self.entry_openai_api.get_text().strip()
+                    api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
                     if not api_key:
                         self.show_error_dialog("Please enter your OpenAI API key")
                         return False
@@ -1615,27 +1686,6 @@ class OpenAIGTKClient(Gtk.Window):
             # Refresh the history list
             self.refresh_history_list()
 
-    def on_openai_api_key_changed(self, widget, event):
-        """Handle OpenAI API key changes and update model list if needed."""
-        api_key = self.entry_openai_api.get_text().strip()
-        if api_key:
-            os.environ['OPENAI_API_KEY'] = api_key
-        else:
-            os.environ.pop('OPENAI_API_KEY', None)
-        self.initialize_provider('openai', api_key)
-        self.fetch_models_async()
-        return False
-
-    def on_gemini_api_key_changed(self, widget, event):
-        """Handle Gemini API key changes."""
-        api_key = self.entry_gemini_api.get_text().strip()
-        if api_key:
-            os.environ['GEMINI_API_KEY'] = api_key
-        else:
-            os.environ.pop('GEMINI_API_KEY', None)
-        self.initialize_provider('gemini', api_key)
-        self.fetch_models_async()
-        return False
 
     def on_sidebar_toggle(self, button):
         """Toggle sidebar visibility."""
