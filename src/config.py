@@ -17,6 +17,12 @@ SETTINGS_CONFIG = {
     'USER_COLOR': {'type': str, 'default': '#2E7D32'},
     'AI_COLOR': {'type': str, 'default': '#0D47A1'},
     'DEFAULT_MODEL': {'type': str, 'default': 'gpt-3.5-turbo'},
+    # Preferred image model for both autonomous tool calls and the `img:` prefix.
+    # This can be any supported image-capable model from OpenAI, Gemini, or Grok.
+    'IMAGE_MODEL': {'type': str, 'default': 'dall-e-3'},
+    # Master switch for exposing the image-generation tool to text models.
+    # When false, models will not be told about the tool and cannot call it.
+    'IMAGE_TOOL_ENABLED': {'type': bool, 'default': True},
     'WINDOW_WIDTH': {'type': int, 'default': 800},
     'WINDOW_HEIGHT': {'type': int, 'default': 600},
     'SYSTEM_MESSAGE': {'type': str, 'default': 'You are a helpful assistant.'},

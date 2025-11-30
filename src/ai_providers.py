@@ -80,7 +80,15 @@ class OpenAIProvider(AIProvider):
             print(f"Error fetching models: {e}")
             return sorted(["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3"])
 
-    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None):
+    def generate_chat_completion(
+        self,
+        messages,
+        model,
+        temperature=0.7,
+        max_tokens=None,
+        chat_id=None,
+        image_tool_handler=None,
+    ):
         # Check if this is an audio-capable model
         model_lower = model.lower()
         is_audio_model = "audio" in model_lower
@@ -144,6 +152,38 @@ class OpenAIProvider(AIProvider):
             })
             if not is_gpt5_model:
                 params['temperature'] = temperature
+
+            # Enable tools for modern OpenAI chat models when an image tool
+            # handler is supplied. We keep this to non-reasoning models for now
+            # to avoid interfering with the special o1/o3 message formats.
+            if image_tool_handler is not None:
+                params['tools'] = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "generate_image",
+                            "description": (
+                                "Generate an image for the user based on a textual description. "
+                                "Use this when the user explicitly asks for an image or when an "
+                                "image would significantly help them understand something."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "description": (
+                                            "A concise but detailed description of the image to generate, "
+                                            "in natural language."
+                                        ),
+                                    },
+                                },
+                                "required": ["prompt"],
+                            },
+                        },
+                    }
+                ]
+                params['tool_choice'] = "auto"
         
         if max_tokens and max_tokens > 0:
             params['max_tokens'] = max_tokens
@@ -158,11 +198,100 @@ class OpenAIProvider(AIProvider):
                 }
             })
         print(f"Params: {params}")
-        
-        response = self.client.chat.completions.create(**params)
-        
-        # Ensure we have a valid text response
-        text_content = response.choices[0].message.content or ""
+
+        # When no tools are involved we can keep the simple one-shot path.
+        if image_tool_handler is None or is_reasoning_model:
+            response = self.client.chat.completions.create(**params)
+            text_content = response.choices[0].message.content or ""
+        else:
+            # Tool-aware flow: allow the model to call the generate_image tool,
+            # route that through the provided handler, then give the results
+            # back to the model before returning the final assistant message.
+            tool_aware_messages = params['messages']
+            max_tool_rounds = 3
+            last_response = None
+            tool_result_snippets = []
+
+            for _ in range(max_tool_rounds):
+                last_response = self.client.chat.completions.create(**{
+                    **params,
+                    'messages': tool_aware_messages,
+                })
+                msg = last_response.choices[0].message
+
+                tool_calls = getattr(msg, "tool_calls", None) or []
+                if not tool_calls:
+                    # No tools requested; this is the final assistant answer.
+                    break
+
+                # Append the assistant message that requested tools.
+                tool_aware_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": msg.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in tool_calls
+                        ],
+                    }
+                )
+
+                # For each tool call, invoke the handler and append a tool result.
+                for tc in tool_calls:
+                    if tc.type != "function" or tc.function.name != "generate_image":
+                        # Unknown tool: return a simple error result so the
+                        # model can recover gracefully.
+                        tool_result_content = "Error: unknown tool requested."
+                    else:
+                        try:
+                            raw_args = tc.function.arguments or "{}"
+                            parsed_args = json.loads(raw_args)
+                            prompt_arg = parsed_args.get("prompt") or ""
+                        except Exception as e:
+                            print(f"Error parsing tool arguments: {e}")
+                            prompt_arg = ""
+
+                        try:
+                            tool_result_content = image_tool_handler(prompt_arg)
+                        except Exception as e:
+                            print(f"Error in image_tool_handler: {e}")
+                            tool_result_content = f"Error generating image: {e}"
+
+                    # Remember the tool output so we can always surface the
+                    # generated <img> tags to the user, even if the model does
+                    # not echo them back explicitly in its final message.
+                    if tool_result_content:
+                        tool_result_snippets.append(tool_result_content)
+
+                    tool_aware_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.function.name,
+                            "content": tool_result_content or "",
+                        }
+                    )
+
+            # After the loop, last_response should contain the most recent model
+            # reply (with or without tools).
+            if last_response is None:
+                raise RuntimeError("No response received from OpenAI chat completion.")
+
+            base_text = last_response.choices[0].message.content or ""
+            if tool_result_snippets:
+                # Append tool outputs (which include <img src=\"...\"/> tags)
+                # so the UI can always render the images, regardless of how
+                # the model phrases its final answer.
+                text_content = base_text + "\n\n" + "\n\n".join(tool_result_snippets)
+            else:
+                text_content = base_text
         
         if is_audio_model and hasattr(response.choices[0].message, 'audio'):
             try:

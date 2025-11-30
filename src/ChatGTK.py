@@ -65,6 +65,14 @@ MATH_PROMPT_APPENDIX = (
     "Leave currency amounts as standard dollar signs (e.g., $5.00)."
 )
 
+IMAGE_TOOL_PROMPT_APPENDIX = (
+    "You have access to a generate_image tool that can create actual images for the user "
+    "from a natural language description. Use this tool when the user explicitly asks for "
+    "an image or when a diagram, illustration, or example image would significantly help "
+    "them understand the answer. After using the tool, describe the generated image in "
+    "your reply so the user knows what it contains."
+)
+
 
 def is_chat_completion_model(model_name: str) -> bool:
     """Return True if the model behaves like a standard text chat completion model."""
@@ -324,6 +332,60 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.spin_max_tokens, False, True, 0)
         list_box.add(row)
 
+        # Preferred Image Model
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Image Model", xalign=0)
+        label.set_hexpand(True)
+        self.combo_image_model = Gtk.ComboBoxText()
+
+        # Known image-capable models across providers. These are merged with any
+        # image models discovered from the APIs at runtime.
+        known_image_models = [
+            # OpenAI
+            "dall-e-3",
+            "gpt-image-1",
+            # Gemini
+            "gemini-3-pro-image-preview",
+            "gemini-2.5-flash-image",
+            # Grok
+            "grok-2-image-1212",
+        ]
+
+        # Start with the known list; any dynamically fetched models that look
+        # like image models will be appended when the main window is created.
+        for model_id in known_image_models:
+            self.combo_image_model.append_text(model_id)
+
+        # Select the current image model from settings, defaulting to dall-e-3.
+        current_image_model = getattr(self, "image_model", "dall-e-3")
+        # Find index of current_image_model, defaulting to first entry.
+        active_index = 0
+        for idx, model_id in enumerate(known_image_models):
+            if model_id == current_image_model:
+                active_index = idx
+                break
+        self.combo_image_model.set_active(active_index)
+
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_image_model, False, True, 0)
+        list_box.add(row)
+
+        # Enable/disable image tool for text models
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Image Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_image_tool = Gtk.Switch()
+        # Default to True when setting is missing.
+        current_image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
+        self.switch_image_tool.set_active(current_image_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_image_tool, False, True, 0)
+        list_box.add(row)
+
         # Add theme selector (before System Message)
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -510,7 +572,9 @@ class SettingsDialog(Gtk.Dialog):
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
             'latex_color': self.btn_latex_color.get_rgba().to_string(),
-            'tts_hd': self.switch_hd.get_active()
+            'tts_hd': self.switch_hd.get_active(),
+            'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
+            'image_tool_enabled': self.switch_image_tool.get_active(),
         }
 
     def on_preview_realtime_voice(self, widget):
@@ -972,37 +1036,228 @@ class OpenAIGTKClient(Gtk.Window):
     
     def _messages_for_model(self, model_name):
         """
-        Return the conversation history, appending the math delimiter instruction to
-        the system prompt when using a standard chat completion model.
+        Return the conversation history, appending additional system guidance for
+        certain models:
+        - MATH_PROMPT_APPENDIX for standard chat completion models.
+        - IMAGE_TOOL_PROMPT_APPENDIX when image tools are available.
         """
         if not self.conversation_history:
             return []
         if not is_chat_completion_model(model_name):
             return self.conversation_history
+
         first_message = self.conversation_history[0]
         if first_message.get("role") != "system":
             return self.conversation_history
+
         current_prompt = first_message.get("content", "") or ""
-        if MATH_PROMPT_APPENDIX in current_prompt:
+        new_prompt = current_prompt or ""
+
+        # Append math guidance if not already present.
+        if MATH_PROMPT_APPENDIX not in new_prompt:
+            if new_prompt.strip():
+                new_prompt = f"{new_prompt.rstrip()}\n\n{MATH_PROMPT_APPENDIX}"
+            else:
+                new_prompt = MATH_PROMPT_APPENDIX
+
+        # Append image tool guidance only for OpenAI chat models that support
+        # tools. We rely on the helper, which in turn checks the provider.
+        try:
+            # Only append the image-tool guidance when the feature is enabled
+            # and the model is capable of using tools.
+            if bool(getattr(self, "image_tool_enabled", True)) and self._supports_image_tools(model_name):
+                if IMAGE_TOOL_PROMPT_APPENDIX not in new_prompt:
+                    new_prompt = f"{new_prompt.rstrip()}\n\n{IMAGE_TOOL_PROMPT_APPENDIX}"
+        except Exception as e:
+            # Prompt shaping should never break the call path.
+            print(f"Error while appending image tool prompt: {e}")
+
+        # If nothing changed, return the original history.
+        if new_prompt == current_prompt:
             return self.conversation_history
-        if current_prompt.strip():
-            appended_prompt = f"{current_prompt.rstrip()}\n\n{MATH_PROMPT_APPENDIX}"
-        else:
-            appended_prompt = MATH_PROMPT_APPENDIX
+
         messages = [msg.copy() for msg in self.conversation_history]
-        messages[0]["content"] = appended_prompt
+        messages[0]["content"] = new_prompt
         return messages
 
     def get_provider_name_for_model(self, model_name):
         if not model_name:
             return 'openai'
-        return self.model_provider_map.get(model_name, 'openai')
+        # If we have an explicit mapping from model fetch, use it.
+        provider = self.model_provider_map.get(model_name)
+        if provider:
+            return provider
+
+        # Fall back to simple heuristics for well-known image and chat models,
+        # so image-only models can be routed correctly even if they are not
+        # present in the main model list.
+        lower = model_name.lower()
+        if lower.startswith("gemini-"):
+            return "gemini"
+        if lower.startswith("grok-"):
+            return "grok"
+
+        return 'openai'
+
+    def _is_image_model_for_provider(self, model_name, provider_name):
+        """
+        Return True if the given model for the specified provider should be
+        treated as an image-generation model.
+        """
+        if not model_name:
+            return False
+        lower = model_name.lower()
+
+        if provider_name == 'openai':
+            return lower in ("dall-e-3", "gpt-image-1")
+
+        if provider_name == 'gemini':
+            # Explicit Gemini image models.
+            return lower in ("gemini-3-pro-image-preview", "gemini-2.5-flash-image")
+
+        if provider_name == 'grok':
+            # Any of the grok-2-image* series are image generators.
+            return lower.startswith("grok-2-image")
+
+        return False
+
+    def _supports_image_tools(self, model_name):
+        """
+        Return True if the given model should be offered the image-generation
+        tool. Currently this is limited to non-realtime OpenAI GPT chat models.
+        """
+        if not model_name:
+            return False
+
+         # Respect the user setting that globally enables/disables the image tool.
+        if not bool(getattr(self, "image_tool_enabled", True)):
+            return False
+
+        provider = self.get_provider_name_for_model(model_name)
+        if provider != 'openai':
+            return False
+
+        lower = model_name.lower()
+        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
+            return False
+        # Exclude explicit image-only models.
+        if self._is_image_model_for_provider(model_name, provider):
+            return False
+
+        return lower.startswith("gpt-")
+
+    def generate_image_for_model(self, model, prompt, last_msg, chat_id, provider_name, has_attached_images):
+        """
+        Central helper to generate an image for any supported provider/model
+        combination, reusing the underlying provider-specific generate_image
+        implementations and attachment semantics.
+        """
+        provider = self.providers.get(provider_name)
+        if not provider:
+            api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
+            provider = self.initialize_provider(provider_name, api_key)
+            if not provider:
+                raise ValueError(f"{provider_name.title()} provider is not initialized")
+
+        # OpenAI image models.
+        if provider_name == 'openai':
+            image_data = None
+            if model == "gpt-image-1" and has_attached_images:
+                image_data = last_msg["images"][0]["data"]
+            return provider.generate_image(prompt, chat_id, model, image_data)
+
+        # Gemini image models support both text→image and image→image.
+        if provider_name == 'gemini':
+            if model in ["gemini-3-pro-image-preview", "gemini-2.5-flash-image"] and has_attached_images:
+                img = last_msg["images"][0]
+                return provider.generate_image(
+                    prompt,
+                    chat_id,
+                    model,
+                    image_data=img["data"],
+                    mime_type=img.get("mime_type")
+                )
+            return provider.generate_image(prompt, chat_id, model)
+
+        # Grok image models are currently text → image only.
+        if provider_name == 'grok':
+            return provider.generate_image(prompt, chat_id, model)
+
+        raise ValueError(f"Image generation not supported for provider: {provider_name}")
+
+    def generate_image_via_preferred_model(self, prompt, last_msg):
+        """
+        Generate an image using the user-configured preferred image model,
+        falling back to a safe OpenAI default if necessary.
+        """
+        preferred_model = getattr(self, "image_model", None) or "dall-e-3"
+        provider_name = self.get_provider_name_for_model(preferred_model)
+
+        # Ensure the preferred model is recognized as an image model; otherwise
+        # fall back to a known-safe default.
+        if not self._is_image_model_for_provider(preferred_model, provider_name):
+            preferred_model = "dall-e-3"
+            provider_name = "openai"
+
+        try:
+            return self.generate_image_for_model(
+                model=preferred_model,
+                prompt=prompt or last_msg.get("content", "") or "",
+                last_msg=last_msg,
+                chat_id=self.current_chat_id or "temp",
+                provider_name=provider_name,
+                has_attached_images="images" in last_msg and last_msg["images"],
+            )
+        except Exception as e:
+            # If the preferred provider/model fails (e.g., missing key), fall
+            # back to OpenAI dall-e-3 as a last resort.
+            print(f"Preferred image model failed ({preferred_model} via {provider_name}): {e}")
+            fallback_model = "dall-e-3"
+            try:
+                return self.generate_image_for_model(
+                    model=fallback_model,
+                    prompt=prompt or last_msg.get("content", "") or "",
+                    last_msg=last_msg,
+                    chat_id=self.current_chat_id or "temp",
+                    provider_name="openai",
+                    has_attached_images=False,
+                )
+            except Exception as inner:
+                raise RuntimeError(f"Image generation failed for both preferred and fallback models: {inner}") from inner
 
     def apply_model_fetch_results(self, models, mapping):
         if mapping:
             self.model_provider_map = mapping
         current_model = self.combo_model.get_active_text() or self.default_model
         self.update_model_list(models, current_model)
+
+        # Also ensure the Image Model dropdown includes any image-capable models
+        # that were discovered dynamically from providers.
+        try:
+            # Only update if combo_image_model exists (i.e., when settings dialog is open)
+            if hasattr(self, 'combo_image_model') and self.combo_image_model is not None:
+                image_like_models = []
+                for model_id in models or []:
+                    lower = model_id.lower()
+                    if any(term in lower for term in ("dall-e", "gpt-image", "image-")):
+                        image_like_models.append(model_id)
+
+                # Collect existing entries to avoid duplicates.
+                existing = []
+                model_store = self.combo_image_model.get_model()
+                if model_store is not None:
+                    it = model_store.get_iter_first()
+                    while it:
+                        existing.append(model_store.get_value(it, 0))
+                        it = model_store.iter_next(it)
+
+                for model_id in image_like_models:
+                    if model_id not in existing:
+                        self.combo_image_model.append_text(model_id)
+        except Exception as e:
+            # Failing to enrich the image model list should never break model loading.
+            print(f"Error updating image model list: {e}")
+
         return False
 
     def on_open_settings(self, widget):
@@ -1279,9 +1534,11 @@ class OpenAIGTKClient(Gtk.Window):
         quick_image_request = question.lower().startswith("img:")
         if quick_image_request:
             question = question[4:].strip()
-            target_model = "dall-e-3"
-            provider_name = 'openai'
-            self.model_provider_map.setdefault(target_model, 'openai')
+            # Use the preferred image model when the user explicitly requests an
+            # image with the img: prefix, falling back to dall-e-3.
+            target_model = getattr(self, "image_model", None) or "dall-e-3"
+            provider_name = self.get_provider_name_for_model(target_model)
+            self.model_provider_map.setdefault(target_model, provider_name)
         else:
             target_model = selected_model
             provider_name = self.get_provider_name_for_model(target_model)
@@ -1422,70 +1679,70 @@ class OpenAIGTKClient(Gtk.Window):
             prompt = last_msg.get("content", "")
             has_attached_images = "images" in last_msg and last_msg["images"]
 
-            if provider_name == 'openai':
-                match model:
-                    case "dall-e-3" | "gpt-image-1":
-                        # For `gpt-image-1`, use attached image (if any) for edits.
-                        image_data = None
-                        if model == "gpt-image-1" and has_attached_images:
-                            image_data = last_msg["images"][0]["data"]
-                        answer = provider.generate_image(prompt, self.current_chat_id or "temp", model, image_data)
-                    case _ if "realtime" in model.lower():
-                        return
-                    case _:
-                        messages_to_send = self._messages_for_model(model)
-                        answer = provider.generate_chat_completion(
-                            messages=messages_to_send,
-                            model=model,
-                            temperature=float(self.temperament),
-                            max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                            chat_id=self.current_chat_id
-                        )
-            elif provider_name == 'gemini':
-                # Gemini image models support both text→image and image→image.
-                is_image_model = model in ["gemini-3-pro-image-preview", "gemini-2.5-flash-image"]
+            # Route image models through a shared helper so that both manual model
+            # selection and tool-based invocations use the same behavior.
+            if self._is_image_model_for_provider(model, provider_name):
+                answer = self.generate_image_for_model(
+                    model=model,
+                    prompt=prompt,
+                    last_msg=last_msg,
+                    chat_id=self.current_chat_id or "temp",
+                    provider_name=provider_name,
+                    has_attached_images=has_attached_images,
+                )
+            elif provider_name == 'openai' and "realtime" in model.lower():
+                # Realtime models are handled elsewhere (WebSocket provider).
+                return
+            elif provider_name == 'openai':
+                messages_to_send = self._messages_for_model(model)
 
-                if is_image_model and has_attached_images:
-                    img = last_msg["images"][0]
-                    answer = provider.generate_image(
-                        prompt,
-                        self.current_chat_id or "temp",
-                        model,
-                        image_data=img["data"],
-                        mime_type=img.get("mime_type")
-                    )
-                elif is_image_model:
-                    # Text → image
-                    answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
-                else:
-                    # Chat completion (possibly with image input)
-                    messages_to_send = self._messages_for_model(model)
-                    response_meta = {}
+                # Provide a handler so OpenAI models can call the image tool
+                # autonomously when they decide it is helpful.
+                if self._supports_image_tools(model):
+                    last_user_msg = last_msg
+
+                    def image_tool_handler(prompt_arg):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+
                     answer = provider.generate_chat_completion(
                         messages=messages_to_send,
                         model=model,
                         temperature=float(self.temperament),
                         max_tokens=self.max_tokens if self.max_tokens > 0 else None,
                         chat_id=self.current_chat_id,
-                        response_meta=response_meta
+                        image_tool_handler=image_tool_handler,
                     )
-                    assistant_provider_meta = response_meta or None
-            elif provider_name == 'grok':
-                # Grok image model(s) – treat any grok-2-image* as image generation.
-                is_image_model = model.startswith("grok-2-image")
-                if is_image_model:
-                    # Currently only text → image is supported.
-                    answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
                 else:
-                    # Standard chat completion.
-                    messages_to_send = self._messages_for_model(model)
                     answer = provider.generate_chat_completion(
                         messages=messages_to_send,
                         model=model,
                         temperature=float(self.temperament),
                         max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id
+                        chat_id=self.current_chat_id,
                     )
+            elif provider_name == 'gemini':
+                # Chat completion (possibly with image input)
+                messages_to_send = self._messages_for_model(model)
+                response_meta = {}
+                answer = provider.generate_chat_completion(
+                    messages=messages_to_send,
+                    model=model,
+                    temperature=float(self.temperament),
+                    max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                    chat_id=self.current_chat_id,
+                    response_meta=response_meta
+                )
+                assistant_provider_meta = response_meta or None
+            elif provider_name == 'grok':
+                # Standard chat completion for Grok.
+                messages_to_send = self._messages_for_model(model)
+                answer = provider.generate_chat_completion(
+                    messages=messages_to_send,
+                    model=model,
+                    temperature=float(self.temperament),
+                    max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                    chat_id=self.current_chat_id
+                )
             else:
                 raise ValueError(f"Unsupported provider: {provider_name}")
 

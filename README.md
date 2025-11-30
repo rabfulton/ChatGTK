@@ -74,6 +74,18 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
 - Multi-provider support for OpenAI, Google Gemini 3 series models, and xAI Grok via separate API keys.
 
+### Image generation via tools
+
+- The **Image Model** setting in the Settings dialog controls which image-capable
+  model is used when:
+  - You use the `img:` prefix (for example, `img: a cat on a surfboard`), and
+  - Supported OpenAI chat models decide to call the internal `generate_image`
+    tool autonomously.
+- Image-capable models can come from OpenAI (e.g. `dall-e-3`, `gpt-image-1`),
+  Google Gemini (e.g. `gemini-3-pro-image-preview`, `gemini-2.5-flash-image`),
+  or Grok (e.g. `grok-2-image-1212`), and the app will route image tool calls
+  to your preferred provider when possible.
+
 ## Screenshots
 
 *Syntax highlighting*
