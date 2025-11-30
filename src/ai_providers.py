@@ -88,6 +88,7 @@ class OpenAIProvider(AIProvider):
         max_tokens=None,
         chat_id=None,
         image_tool_handler=None,
+        music_tool_handler=None,
     ):
         # Check if this is an audio-capable model
         model_lower = model.lower()
@@ -153,11 +154,12 @@ class OpenAIProvider(AIProvider):
             if not is_gpt5_model:
                 params['temperature'] = temperature
 
-            # Enable tools for modern OpenAI chat models when an image tool
-            # handler is supplied. We keep this to non-reasoning models for now
-            # to avoid interfering with the special o1/o3 message formats.
+            # Enable tools for modern OpenAI chat models when handlers are
+            # supplied. We keep this to non-reasoning models for now to avoid
+            # interfering with the special o1/o3 message formats.
+            tools = []
             if image_tool_handler is not None:
-                params['tools'] = [
+                tools.append(
                     {
                         "type": "function",
                         "function": {
@@ -182,8 +184,51 @@ class OpenAIProvider(AIProvider):
                             },
                         },
                     }
-                ]
-                params['tool_choice'] = "auto"
+                )
+            if music_tool_handler is not None:
+                tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "control_music",
+                            "description": (
+                                "Control music playback on the user's computer using the kew "
+                                "terminal music player. Use this when the user asks to play, "
+                                "pause, resume, stop, skip, or adjust the volume of music."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "action": {
+                                        "type": "string",
+                                        "description": (
+                                            "The music control action to perform. One of: "
+                                            "'play', 'pause', 'resume', 'stop', 'next', "
+                                            "'previous', 'volume_up', 'volume_down', 'set_volume'."
+                                        ),
+                                    },
+                                    "keyword": {
+                                        "type": "string",
+                                        "description": (
+                                            "For 'play' actions: a keyword, song title, album name, "
+                                            "or artist name to search for in the user's music library."
+                                        ),
+                                    },
+                                    "volume": {
+                                        "type": "number",
+                                        "description": (
+                                            "For 'set_volume' actions: desired volume level (0–100)."
+                                        ),
+                                    },
+                                },
+                                "required": ["action"],
+                            },
+                        },
+                    }
+                )
+            if tools:
+                params["tools"] = tools
+                params["tool_choice"] = "auto"
         
         if max_tokens and max_tokens > 0:
             params['max_tokens'] = max_tokens
@@ -200,13 +245,13 @@ class OpenAIProvider(AIProvider):
         print(f"Params: {params}")
 
         # When no tools are involved we can keep the simple one-shot path.
-        if image_tool_handler is None or is_reasoning_model:
+        if (image_tool_handler is None and music_tool_handler is None) or is_reasoning_model:
             response = self.client.chat.completions.create(**params)
             text_content = response.choices[0].message.content or ""
         else:
-            # Tool-aware flow: allow the model to call the generate_image tool,
-            # route that through the provided handler, then give the results
-            # back to the model before returning the final assistant message.
+            # Tool-aware flow: allow the model to call tools, route those through
+            # the provided handlers, then give the results back to the model
+            # before returning the final assistant message.
             tool_aware_messages = params['messages']
             max_tool_rounds = 3
             last_response = None
@@ -243,13 +288,11 @@ class OpenAIProvider(AIProvider):
                     }
                 )
 
-                # For each tool call, invoke the handler and append a tool result.
+                # For each tool call, invoke the appropriate handler and append a tool result.
                 for tc in tool_calls:
-                    if tc.type != "function" or tc.function.name != "generate_image":
-                        # Unknown tool: return a simple error result so the
-                        # model can recover gracefully.
+                    if tc.type != "function":
                         tool_result_content = "Error: unknown tool requested."
-                    else:
+                    elif tc.function.name == "generate_image":
                         try:
                             raw_args = tc.function.arguments or "{}"
                             parsed_args = json.loads(raw_args)
@@ -263,6 +306,31 @@ class OpenAIProvider(AIProvider):
                         except Exception as e:
                             print(f"Error in image_tool_handler: {e}")
                             tool_result_content = f"Error generating image: {e}"
+                    elif tc.function.name == "control_music":
+                        if music_tool_handler is None:
+                            tool_result_content = "Error: music tool is not available."
+                        else:
+                            try:
+                                raw_args = tc.function.arguments or "{}"
+                                parsed_args = json.loads(raw_args)
+                                action = parsed_args.get("action") or ""
+                                keyword = parsed_args.get("keyword")
+                                volume = parsed_args.get("volume")
+                            except Exception as e:
+                                print(f"Error parsing music tool arguments: {e}")
+                                action = ""
+                                keyword = None
+                                volume = None
+
+                            try:
+                                tool_result_content = music_tool_handler(action, keyword, volume)
+                            except Exception as e:
+                                print(f"Error in music_tool_handler: {e}")
+                                tool_result_content = f"Error controlling music: {e}"
+                    else:
+                        # Unknown tool: return a simple error result so the
+                        # model can recover gracefully.
+                        tool_result_content = "Error: unknown tool requested."
 
                     # Remember the tool output so we can always surface the
                     # generated <img> tags to the user, even if the model does
@@ -503,6 +571,7 @@ class GrokProvider(AIProvider):
         chat_id=None,
         response_meta=None,
         image_tool_handler=None,
+        music_tool_handler=None,
     ):
         """
         Generate a chat completion using Grok text models.
@@ -555,11 +624,12 @@ class GrokProvider(AIProvider):
         if max_tokens and max_tokens > 0:
             params["max_tokens"] = int(max_tokens)
 
-        # Enable tools for Grok chat models when an image tool handler is
-        # supplied. xAI's API follows the OpenAI tools schema:
+        # Enable tools for Grok chat models when handlers are supplied. xAI's
+        # API follows the OpenAI tools schema:
         # https://docs.x.ai/docs/guides/tools/overview
+        tools = []
         if image_tool_handler is not None:
-            params["tools"] = [
+            tools.append(
                 {
                     "type": "function",
                     "function": {
@@ -584,11 +654,54 @@ class GrokProvider(AIProvider):
                         },
                     },
                 }
-            ]
+            )
+        if music_tool_handler is not None:
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "control_music",
+                        "description": (
+                            "Control music playback on the user's computer using the kew "
+                            "terminal music player. Use this when the user asks to play, "
+                            "pause, resume, stop, skip, or adjust the volume of music."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "description": (
+                                        "The music control action to perform. One of: "
+                                        "'play', 'pause', 'resume', 'stop', 'next', "
+                                        "'previous', 'volume_up', 'volume_down', 'set_volume'."
+                                    ),
+                                },
+                                "keyword": {
+                                    "type": "string",
+                                    "description": (
+                                        "For 'play' actions: a keyword, song title, album name, "
+                                        "or artist name to search for in the user's music library."
+                                    ),
+                                },
+                                "volume": {
+                                    "type": "number",
+                                    "description": (
+                                        "For 'set_volume' actions: desired volume level (0–100)."
+                                    ),
+                                },
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                }
+            )
+        if tools:
+            params["tools"] = tools
             params["tool_choice"] = "auto"
 
         # Simple one-shot path when no tools are involved.
-        if image_tool_handler is None:
+        if image_tool_handler is None and music_tool_handler is None:
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
 
@@ -633,11 +746,11 @@ class GrokProvider(AIProvider):
                 }
             )
 
-            # For each tool call, invoke the handler and append a tool result.
+            # For each tool call, invoke the appropriate handler and append a tool result.
             for tc in tool_calls:
-                if tc.type != "function" or tc.function.name != "generate_image":
+                if tc.type != "function":
                     tool_result_content = "Error: unknown tool requested."
-                else:
+                elif tc.function.name == "generate_image":
                     try:
                         raw_args = tc.function.arguments or "{}"
                         parsed_args = json.loads(raw_args)
@@ -651,6 +764,29 @@ class GrokProvider(AIProvider):
                     except Exception as e:
                         print(f"Error in Grok image_tool_handler: {e}")
                         tool_result_content = f"Error generating image: {e}"
+                elif tc.function.name == "control_music":
+                    if music_tool_handler is None:
+                        tool_result_content = "Error: music tool is not available."
+                    else:
+                        try:
+                            raw_args = tc.function.arguments or "{}"
+                            parsed_args = json.loads(raw_args)
+                            action = parsed_args.get("action") or ""
+                            keyword = parsed_args.get("keyword")
+                            volume = parsed_args.get("volume")
+                        except Exception as e:
+                            print(f"Error parsing Grok music tool arguments: {e}")
+                            action = ""
+                            keyword = None
+                            volume = None
+
+                        try:
+                            tool_result_content = music_tool_handler(action, keyword, volume)
+                        except Exception as e:
+                            print(f"Error in Grok music_tool_handler: {e}")
+                            tool_result_content = f"Error controlling music: {e}"
+                else:
+                    tool_result_content = "Error: unknown tool requested."
 
                 if tool_result_content:
                     tool_result_snippets.append(tool_result_content)
@@ -852,6 +988,7 @@ class GeminiProvider(AIProvider):
         chat_id=None,
         response_meta=None,
         image_tool_handler=None,
+        music_tool_handler=None,
     ):
         self._require_key()
         contents, system_instruction = self._convert_messages(messages)
@@ -885,37 +1022,76 @@ class GeminiProvider(AIProvider):
         if generation_config:
             payload["generation_config"] = generation_config
 
-        # When an image tool handler is provided, expose a generate_image
-        # function to Gemini using its functionDeclarations schema, mirroring
-        # the documented pattern in the Gemini function calling guide:
+        # When tool handlers are provided, expose corresponding function
+        # declarations to Gemini using its functionDeclarations schema,
+        # mirroring the documented pattern in the Gemini function calling guide:
         # https://ai.google.dev/gemini-api/docs/function-calling?example=meeting
+        function_declarations = []
         if image_tool_handler is not None:
-            payload.setdefault("tools", []).append(
+            function_declarations.append(
                 {
-                    "functionDeclarations": [
-                        {
-                            "name": "generate_image",
-                            "description": (
-                                "Generate an image for the user based on a textual description. "
-                                "Use this when the user explicitly asks for an image or when an "
-                                "image would significantly help them understand something."
-                            ),
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "prompt": {
-                                        "type": "string",
-                                        "description": (
-                                            "A concise but detailed description of the image to generate, "
-                                            "in natural language."
-                                        ),
-                                    },
-                                },
-                                "required": ["prompt"],
+                    "name": "generate_image",
+                    "description": (
+                        "Generate an image for the user based on a textual description. "
+                        "Use this when the user explicitly asks for an image or when an "
+                        "image would significantly help them understand something."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": (
+                                    "A concise but detailed description of the image to generate, "
+                                    "in natural language."
+                                ),
                             },
-                        }
-                    ]
+                        },
+                        "required": ["prompt"],
+                    },
                 }
+            )
+        if music_tool_handler is not None:
+            function_declarations.append(
+                {
+                    "name": "control_music",
+                    "description": (
+                        "Control music playback on the user's computer using the kew "
+                        "terminal music player. Use this when the user asks to play, "
+                        "pause, resume, stop, skip, or adjust the volume of music."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "description": (
+                                    "The music control action to perform. One of: "
+                                    "'play', 'pause', 'resume', 'stop', 'next', "
+                                    "'previous', 'volume_up', 'volume_down', 'set_volume'."
+                                ),
+                            },
+                            "keyword": {
+                                "type": "string",
+                                "description": (
+                                    "For 'play' actions: a keyword, song title, album name, "
+                                    "or artist name to search for in the user's music library."
+                                ),
+                            },
+                            "volume": {
+                                "type": "number",
+                                "description": (
+                                    "For 'set_volume' actions: desired volume level (0–100)."
+                                ),
+                            },
+                        },
+                        "required": ["action"],
+                    },
+                }
+            )
+        if function_declarations:
+            payload.setdefault("tools", []).append(
+                {"functionDeclarations": function_declarations}
             )
         
         try:
@@ -935,15 +1111,15 @@ class GeminiProvider(AIProvider):
                     gemini_meta = response_meta.setdefault("gemini", {})
                     gemini_meta["thought_signatures"] = thought_sigs
 
-            # If no image tool handler is supplied, fall back to the existing
+            # If no tool handlers are supplied, fall back to the existing
             # simple text-extraction behavior.
-            if image_tool_handler is None:
+            if image_tool_handler is None and music_tool_handler is None:
                 return self._extract_text(data)
 
-            # With an image tool handler, inspect the response for any
-            # functionCall parts targeting generate_image, invoke the handler,
-            # and append the resulting <img> tags (and a short caption) to the
-            # text we return so the UI can render the images.
+            # With tool handlers, inspect the response for any functionCall
+            # parts, invoke the appropriate handler, and append the results
+            # (and a short caption) to the text we return so the UI can render
+            # images and/or show music control feedback.
             base_text = self._extract_text(data)
             tool_segments = []
 
@@ -953,23 +1129,35 @@ class GeminiProvider(AIProvider):
                     fn = part.get("functionCall")
                     if not fn:
                         continue
-                    if fn.get("name") != "generate_image":
-                        continue
-
+                    name = fn.get("name")
                     args = fn.get("args") or {}
-                    prompt_arg = args.get("prompt", "")
-                    try:
-                        tool_output = image_tool_handler(prompt_arg)
-                    except Exception as e:
-                        print(f"Error in Gemini image_tool_handler: {e}")
-                        tool_output = f"Error generating image: {e}"
 
-                    if tool_output:
-                        # Prefix with a small caption so there is some textual
-                        # context even if the model did not emit any text.
-                        caption = f"Generated image for prompt: {prompt_arg}".strip()
-                        segment = f"{caption}\n{tool_output}" if caption else tool_output
-                        tool_segments.append(segment)
+                    if name == "generate_image" and image_tool_handler is not None:
+                        prompt_arg = args.get("prompt", "")
+                        try:
+                            tool_output = image_tool_handler(prompt_arg)
+                        except Exception as e:
+                            print(f"Error in Gemini image_tool_handler: {e}")
+                            tool_output = f"Error generating image: {e}"
+
+                        if tool_output:
+                            caption = f"Generated image for prompt: {prompt_arg}".strip()
+                            segment = f"{caption}\n{tool_output}" if caption else tool_output
+                            tool_segments.append(segment)
+                    elif name == "control_music" and music_tool_handler is not None:
+                        action = args.get("action") or ""
+                        keyword = args.get("keyword")
+                        volume = args.get("volume")
+                        try:
+                            tool_output = music_tool_handler(action, keyword, volume)
+                        except Exception as e:
+                            print(f"Error in Gemini music_tool_handler: {e}")
+                            tool_output = f"Error controlling music: {e}"
+
+                        if tool_output:
+                            caption = f"Music control result for action: {action}".strip()
+                            segment = f"{caption}\n{tool_output}" if caption else tool_output
+                            tool_segments.append(segment)
 
             if not tool_segments:
                 return base_text

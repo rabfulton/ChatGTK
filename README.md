@@ -74,6 +74,19 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
 - Multi-provider support for OpenAI, Google Gemini 3 series models, and xAI Grok via separate API keys.
 
+### Tools support (images & music)
+
+- **Image tool (`generate_image`)**
+  - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
+  - Uses your preferred **Image Model** from the main **Settings** dialog.
+  - Available to supported OpenAI, Gemini, and Grok chat models via function/tool calling.
+
+- **Music control tool (`control_music`)**
+  - Disabled by default; enable via **Enable Music Tool** in the **Tools** dialog.
+  - Lets the model control your local music playback through the [`kew` terminal music player](https://github.com/ravachol/kew) and MPRIS.
+  - Supported actions: `play` (with a keyword/song/album/artist), `pause`, `resume`, `stop`, `next`, `previous`, `volume_up`, `volume_down`, `set_volume`.
+  - When music is already playing, a new `play` request will stop the current kew playback before starting a new one.
+
 ### Image generation via tools
 
 - The **Image Model** setting in the Settings dialog controls which image-capable
@@ -112,5 +125,8 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - pulseaudio
 - texlive (for LaTeX support)
 - dvipng (for LaTeX rendering)
+ - Optional, for music control tool:
+   - [`kew` terminal music player](https://github.com/ravachol/kew) (must be on `PATH`)
+   - `playerctl` (for MPRIS-based playback control)
 
 <a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>

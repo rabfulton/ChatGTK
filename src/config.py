@@ -23,6 +23,9 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the image-generation tool to text models.
     # When false, models will not be told about the tool and cannot call it.
     'IMAGE_TOOL_ENABLED': {'type': bool, 'default': True},
+    # Master switch for exposing the music control tool (kew + MPRIS) to text models.
+    # When false, models will not be told about the tool and cannot call it.
+    'MUSIC_TOOL_ENABLED': {'type': bool, 'default': False},
     'WINDOW_WIDTH': {'type': int, 'default': 800},
     'WINDOW_HEIGHT': {'type': int, 'default': 600},
     'SYSTEM_MESSAGE': {'type': str, 'default': 'You are a helpful assistant.'},

@@ -73,6 +73,14 @@ IMAGE_TOOL_PROMPT_APPENDIX = (
     "your reply so the user knows what it contains."
 )
 
+MUSIC_TOOL_PROMPT_APPENDIX = (
+    "You have access to a control_music tool that can control music playback for the user "
+    "through their kew terminal music player (which uses the standard MPRIS interface). "
+    "Use this tool when the user asks to play, pause, resume, stop, skip, or adjust the "
+    "volume of their music. For play actions, always provide a concise keyword, song title, "
+    "album name, or artist name describing what to play."
+)
+
 
 def is_chat_completion_model(model_name: str) -> bool:
     """Return True if the model behaves like a standard text chat completion model."""
@@ -372,20 +380,6 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.combo_image_model, False, True, 0)
         list_box.add(row)
 
-        # Enable/disable image tool for text models
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Image Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_image_tool = Gtk.Switch()
-        # Default to True when setting is missing.
-        current_image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
-        self.switch_image_tool.set_active(current_image_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_image_tool, False, True, 0)
-        list_box.add(row)
-
         # Add theme selector (before System Message)
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -574,7 +568,6 @@ class SettingsDialog(Gtk.Dialog):
             'latex_color': self.btn_latex_color.get_rgba().to_string(),
             'tts_hd': self.switch_hd.get_active(),
             'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
-            'image_tool_enabled': self.switch_image_tool.get_active(),
         }
 
     def on_preview_realtime_voice(self, widget):
@@ -600,6 +593,62 @@ class SettingsDialog(Gtk.Dialog):
             error_dialog.format_secondary_text(str(e))
             error_dialog.run()
             error_dialog.destroy()
+
+
+class ToolsDialog(Gtk.Dialog):
+    def __init__(self, parent, **settings):
+        super().__init__(title="Tools", transient_for=parent, flags=0)
+        apply_settings(self, settings)
+        self.set_modal(True)
+        self.set_default_size(400, 200)
+
+        box = self.get_content_area()
+        box.set_spacing(6)
+
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        list_box.set_margin_top(12)
+        list_box.set_margin_bottom(12)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
+        box.pack_start(list_box, True, True, 0)
+
+        # Enable/disable image tool for text models
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Image Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_image_tool = Gtk.Switch()
+        current_image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
+        self.switch_image_tool.set_active(current_image_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_image_tool, False, True, 0)
+        list_box.add(row)
+
+        # Enable/disable music control tool for text models
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Music Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_music_tool = Gtk.Switch()
+        current_music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
+        self.switch_music_tool.set_active(current_music_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_music_tool, False, True, 0)
+        list_box.add(row)
+
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("OK", Gtk.ResponseType.OK)
+
+        self.show_all()
+
+    def get_tool_settings(self):
+        return {
+            "image_tool_enabled": self.switch_image_tool.get_active(),
+            "music_tool_enabled": self.switch_music_tool.get_active(),
+        }
 
 
 class APIKeyDialog(Gtk.Dialog):
@@ -826,6 +875,11 @@ class OpenAIGTKClient(Gtk.Window):
         btn_settings = Gtk.Button(label="Settings")
         btn_settings.connect("clicked", self.on_open_settings)
         hbox_top.pack_start(btn_settings, False, False, 0)
+
+        # Tools button (for configuring model tools such as images and music)
+        btn_tools = Gtk.Button(label="Tools")
+        btn_tools.connect("clicked", self.on_open_tools)
+        hbox_top.pack_start(btn_tools, False, False, 0)
 
         vbox_main.pack_start(hbox_top, False, False, 0)
 
@@ -1060,8 +1114,8 @@ class OpenAIGTKClient(Gtk.Window):
             else:
                 new_prompt = MATH_PROMPT_APPENDIX
 
-        # Append image tool guidance only for OpenAI chat models that support
-        # tools. We rely on the helper, which in turn checks the provider.
+        # Append image tool guidance only for chat models that support tools.
+        # We rely on the helper, which in turn checks the provider.
         try:
             # Only append the image-tool guidance when the feature is enabled
             # and the model is capable of using tools.
@@ -1071,6 +1125,14 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             # Prompt shaping should never break the call path.
             print(f"Error while appending image tool prompt: {e}")
+
+        # Append music tool guidance for chat models that can use the music tool.
+        try:
+            if bool(getattr(self, "music_tool_enabled", False)) and self._supports_music_tools(model_name):
+                if MUSIC_TOOL_PROMPT_APPENDIX not in new_prompt:
+                    new_prompt = f"{new_prompt.rstrip()}\n\n{MUSIC_TOOL_PROMPT_APPENDIX}"
+        except Exception as e:
+            print(f"Error while appending music tool prompt: {e}")
 
         # If nothing changed, return the original history.
         if new_prompt == current_prompt:
@@ -1141,6 +1203,50 @@ class OpenAIGTKClient(Gtk.Window):
         lower = model_name.lower()
         if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
             return False
+        # Exclude explicit image-only models.
+        if self._is_image_model_for_provider(model_name, provider):
+            return False
+
+        # OpenAI GPT chat models.
+        if provider == 'openai':
+            return lower.startswith("gpt-")
+
+        # Gemini chat models that support function calling (non-image variants).
+        if provider == 'gemini':
+            return (
+                lower.startswith("gemini-2.5")
+                or lower.startswith("gemini-3-pro")
+                or lower.startswith("gemini-pro")
+                or lower.startswith("gemini-flash")
+            )
+
+        # Grok chat models (exclude explicit image-only models handled above).
+        if provider == 'grok':
+            return lower.startswith("grok-")
+
+        return False
+
+    def _supports_music_tools(self, model_name):
+        """
+        Return True if the given model should be offered the music-control tool.
+        This mirrors the image tool support logic but is gated by the separate
+        MUSIC_TOOL_ENABLED setting.
+        """
+        if not model_name:
+            return False
+
+        # Respect the user setting that globally enables/disables the music tool.
+        if not bool(getattr(self, "music_tool_enabled", False)):
+            return False
+
+        provider = self.get_provider_name_for_model(model_name)
+        if provider not in ('openai', 'gemini', 'grok'):
+            return False
+
+        lower = model_name.lower()
+        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
+            return False
+
         # Exclude explicit image-only models.
         if self._is_image_model_for_provider(model_name, provider):
             return False
@@ -1279,6 +1385,153 @@ class OpenAIGTKClient(Gtk.Window):
             except Exception as inner:
                 raise RuntimeError(f"Image generation failed for both preferred and fallback models: {inner}") from inner
 
+    def _get_kew_playback_status(self):
+        """Return the current MPRIS playback status for kew, or None if unavailable."""
+        try:
+            result = subprocess.run(
+                ["playerctl", "-p", "kew", "status"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return None
+            status = (result.stdout or "").strip()
+            return status or None
+        except FileNotFoundError:
+            # playerctl is not installed.
+            return None
+        except Exception as e:
+            print(f"Error querying kew playback status via playerctl: {e}")
+            return None
+
+    def _check_kew_playing(self):
+        """Return True if kew is currently reported as Playing via MPRIS."""
+        status = self._get_kew_playback_status()
+        return status == "Playing"
+
+    def _control_music(self, action, keyword=None, volume=None):
+        """
+        Core implementation of the control_music tool, using kew and MPRIS
+        (via playerctl) to control playback.
+        """
+        action = (action or "").strip().lower()
+        if not action:
+            return "Error: music control action is required."
+
+        # Handle play separately: we may need to launch kew.
+        if action == "play":
+            if not keyword or not keyword.strip():
+                return "Error: 'play' action requires a keyword describing what to play."
+
+            # If kew is already playing, stop it first to avoid overlapping music.
+            if self._check_kew_playing():
+                try:
+                    subprocess.run(
+                        ["playerctl", "-p", "kew", "stop"],
+                        capture_output=True,
+                        text=True,
+                    )
+                except FileNotFoundError:
+                    # If playerctl is not available, we still proceed to start kew.
+                    pass
+                except Exception as e:
+                    print(f"Error stopping existing kew playback: {e}")
+
+            cmd = ["kew"] + keyword.split()
+            try:
+                subprocess.Popen(cmd)
+                return f"Started kew to play music for keyword: {keyword}"
+            except FileNotFoundError:
+                return (
+                    "Error: kew is not installed or not found in PATH. "
+                    "Please install kew (`kew` terminal music player) first."
+                )
+            except Exception as e:
+                print(f"Error launching kew: {e}")
+                return f"Error starting kew: {e}"
+
+        # All other actions require playerctl.
+        try:
+            # Quick check that playerctl exists.
+            subprocess.run(
+                ["playerctl", "--version"],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            return (
+                "Error: playerctl is not installed. Install it via your package manager "
+                "to enable music control via MPRIS."
+            )
+        except Exception as e:
+            print(f"Error checking playerctl availability: {e}")
+
+        base_cmd = ["playerctl", "-p", "kew"]
+
+        if action == "pause":
+            cmd = base_cmd + ["pause"]
+            success_msg = "Paused kew playback."
+        elif action == "resume":
+            cmd = base_cmd + ["play"]
+            success_msg = "Resumed kew playback."
+        elif action == "stop":
+            cmd = base_cmd + ["stop"]
+            success_msg = "Stopped kew playback."
+        elif action == "next":
+            cmd = base_cmd + ["next"]
+            success_msg = "Skipped to the next track in kew."
+        elif action == "previous":
+            cmd = base_cmd + ["previous"]
+            success_msg = "Went back to the previous track in kew."
+        elif action == "volume_up":
+            cmd = base_cmd + ["volume", "0.05+"]
+            success_msg = "Increased kew volume."
+        elif action == "volume_down":
+            cmd = base_cmd + ["volume", "0.05-"]
+            success_msg = "Decreased kew volume."
+        elif action == "set_volume":
+            if volume is None:
+                return "Error: 'set_volume' action requires a numeric volume value (0-100)."
+            try:
+                vol = float(volume)
+            except (TypeError, ValueError):
+                return "Error: volume must be a number between 0 and 100."
+            # Accept either 0–100 or 0–1.0 style inputs; normalize to 0–1.0.
+            if vol > 1.0:
+                vol = vol / 100.0
+            vol = max(0.0, min(1.0, vol))
+            cmd = base_cmd + ["volume", f"{vol:.2f}"]
+            success_msg = f"Set kew volume to approximately {int(vol * 100)}%."
+        else:
+            return f"Error: unsupported music control action '{action}'."
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                stdout = (result.stdout or "").strip()
+                detail = stderr or stdout or "Unknown error from playerctl."
+                return f"Error controlling kew via playerctl: {detail}"
+            return success_msg
+        except FileNotFoundError:
+            return (
+                "Error: playerctl is not installed. Install it via your package manager "
+                "to enable music control via MPRIS."
+            )
+        except Exception as e:
+            print(f"Error running playerctl command {cmd}: {e}")
+            return f"Error controlling kew: {e}"
+
+    def control_music_via_kew(self, action, keyword=None, volume=None):
+        """
+        Public wrapper used by AI provider tool handlers to control music via kew.
+        """
+        return self._control_music(action, keyword=keyword, volume=volume)
+
     def apply_model_fetch_results(self, models, mapping):
         if mapping:
             self.model_provider_map = mapping
@@ -1324,6 +1577,20 @@ class OpenAIGTKClient(Gtk.Window):
             apply_settings(self, new_settings)
             save_settings(convert_settings_for_save(get_object_settings(self)))
             self.fetch_models_async()
+        dialog.destroy()
+
+    def on_open_tools(self, widget):
+        # Open the tools dialog for configuring image/music tools.
+        dialog = ToolsDialog(self, **{k.lower(): getattr(self, k.lower())
+                               for k in SETTINGS_CONFIG.keys()})
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            tool_settings = dialog.get_tool_settings()
+            # Apply the updated tool settings to the main window object.
+            for key, value in tool_settings.items():
+                setattr(self, key, value)
+            # Persist all settings, including the updated tool flags.
+            save_settings(convert_settings_for_save(get_object_settings(self)))
         dialog.destroy()
 
     def on_api_keys_clicked(self, widget):
@@ -1750,87 +2017,98 @@ class OpenAIGTKClient(Gtk.Window):
             elif provider_name == 'openai':
                 messages_to_send = self._messages_for_model(model)
 
-                # Provide a handler so OpenAI models can call the image tool
+                # Provide handlers so OpenAI models can call tools (image/music)
                 # autonomously when they decide it is helpful.
-                if self._supports_image_tools(model):
-                    last_user_msg = last_msg
+                last_user_msg = last_msg
 
+                image_tool_handler = None
+                music_tool_handler = None
+
+                if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
                         return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
 
-                    answer = provider.generate_chat_completion(
-                        messages=messages_to_send,
-                        model=model,
-                        temperature=float(self.temperament),
-                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id,
-                        image_tool_handler=image_tool_handler,
-                    )
-                else:
-                    answer = provider.generate_chat_completion(
-                        messages=messages_to_send,
-                        model=model,
-                        temperature=float(self.temperament),
-                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id,
-                    )
+                if self._supports_music_tools(model):
+                    def music_tool_handler(action, keyword=None, volume=None):
+                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                kwargs = {
+                    "messages": messages_to_send,
+                    "model": model,
+                    "temperature": float(self.temperament),
+                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
+                    "chat_id": self.current_chat_id,
+                }
+                if image_tool_handler is not None:
+                    kwargs["image_tool_handler"] = image_tool_handler
+                if music_tool_handler is not None:
+                    kwargs["music_tool_handler"] = music_tool_handler
+
+                answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'gemini':
                 # Chat completion (possibly with image input or tool-based image generation)
                 messages_to_send = self._messages_for_model(model)
                 response_meta = {}
 
-                if self._supports_image_tools(model):
-                    last_user_msg = last_msg
+                last_user_msg = last_msg
 
+                image_tool_handler = None
+                music_tool_handler = None
+
+                if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
                         return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
 
-                    answer = provider.generate_chat_completion(
-                        messages=messages_to_send,
-                        model=model,
-                        temperature=float(self.temperament),
-                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id,
-                        response_meta=response_meta,
-                        image_tool_handler=image_tool_handler,
-                    )
-                else:
-                    answer = provider.generate_chat_completion(
-                        messages=messages_to_send,
-                        model=model,
-                        temperature=float(self.temperament),
-                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id,
-                        response_meta=response_meta,
-                    )
+                if self._supports_music_tools(model):
+                    def music_tool_handler(action, keyword=None, volume=None):
+                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                kwargs = {
+                    "messages": messages_to_send,
+                    "model": model,
+                    "temperature": float(self.temperament),
+                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
+                    "chat_id": self.current_chat_id,
+                    "response_meta": response_meta,
+                }
+                if image_tool_handler is not None:
+                    kwargs["image_tool_handler"] = image_tool_handler
+                if music_tool_handler is not None:
+                    kwargs["music_tool_handler"] = music_tool_handler
+
+                answer = provider.generate_chat_completion(**kwargs)
 
                 assistant_provider_meta = response_meta or None
             elif provider_name == 'grok':
-                # Standard chat completion for Grok, optionally with image tools.
+                # Standard chat completion for Grok, optionally with tools.
                 messages_to_send = self._messages_for_model(model)
 
-                if self._supports_image_tools(model):
-                    last_user_msg = last_msg
+                last_user_msg = last_msg
 
+                image_tool_handler = None
+                music_tool_handler = None
+
+                if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
                         return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
 
-                    answer = provider.generate_chat_completion(
-                        messages=messages_to_send,
-                        model=model,
-                        temperature=float(self.temperament),
-                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id,
-                        image_tool_handler=image_tool_handler,
-                    )
-                else:
-                    answer = provider.generate_chat_completion(
-                        messages=messages_to_send,
-                        model=model,
-                        temperature=float(self.temperament),
-                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                        chat_id=self.current_chat_id,
-                    )
+                if self._supports_music_tools(model):
+                    def music_tool_handler(action, keyword=None, volume=None):
+                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                kwargs = {
+                    "messages": messages_to_send,
+                    "model": model,
+                    "temperature": float(self.temperament),
+                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
+                    "chat_id": self.current_chat_id,
+                }
+                if image_tool_handler is not None:
+                    kwargs["image_tool_handler"] = image_tool_handler
+                if music_tool_handler is not None:
+                    kwargs["music_tool_handler"] = music_tool_handler
+
+                answer = provider.generate_chat_completion(**kwargs)
             else:
                 raise ValueError(f"Unsupported provider: {provider_name}")
 
