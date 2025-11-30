@@ -87,18 +87,6 @@ Alternatively you can run the install script to add a desktop entry and set up t
   - Supported actions: `play` (with a keyword/song/album/artist), `pause`, `resume`, `stop`, `next`, `previous`, `volume_up`, `volume_down`, `set_volume`.
   - When music is already playing, a new `play` request will stop the current kew playback before starting a new one.
 
-### Image generation via tools
-
-- The **Image Model** setting in the Settings dialog controls which image-capable
-  model is used when:
-  - You use the `img:` prefix (for example, `img: a cat on a surfboard`), and
-  - Supported OpenAI chat models decide to call the internal `generate_image`
-    tool autonomously.
-- Image-capable models can come from OpenAI (e.g. `dall-e-3`, `gpt-image-1`),
-  Google Gemini (e.g. `gemini-3-pro-image-preview`, `gemini-2.5-flash-image`),
-  or Grok (e.g. `grok-2-image-1212`), and the app will route image tool calls
-  to your preferred provider when possible.
-
 ## Screenshots
 
 *Syntax highlighting*
