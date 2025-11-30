@@ -494,7 +494,16 @@ class GrokProvider(AIProvider):
             # Fallback to a reasonable default set.
             return sorted(["grok-2", "grok-2-mini", "grok-2-image-1212"])
 
-    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None, response_meta=None):
+    def generate_chat_completion(
+        self,
+        messages,
+        model,
+        temperature=0.7,
+        max_tokens=None,
+        chat_id=None,
+        response_meta=None,
+        image_tool_handler=None,
+    ):
         """
         Generate a chat completion using Grok text models.
         This intentionally keeps to the standard OpenAI chat.completions schema.
@@ -546,8 +555,122 @@ class GrokProvider(AIProvider):
         if max_tokens and max_tokens > 0:
             params["max_tokens"] = int(max_tokens)
 
-        response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content or ""
+        # Enable tools for Grok chat models when an image tool handler is
+        # supplied. xAI's API follows the OpenAI tools schema:
+        # https://docs.x.ai/docs/guides/tools/overview
+        if image_tool_handler is not None:
+            params["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "generate_image",
+                        "description": (
+                            "Generate an image for the user based on a textual description. "
+                            "Use this when the user explicitly asks for an image or when an "
+                            "image would significantly help them understand something."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {
+                                    "type": "string",
+                                    "description": (
+                                        "A concise but detailed description of the image to generate, "
+                                        "in natural language."
+                                    ),
+                                },
+                            },
+                            "required": ["prompt"],
+                        },
+                    },
+                }
+            ]
+            params["tool_choice"] = "auto"
+
+        # Simple one-shot path when no tools are involved.
+        if image_tool_handler is None:
+            response = self.client.chat.completions.create(**params)
+            return response.choices[0].message.content or ""
+
+        # Tool-aware flow for Grok: let the model call generate_image, route that
+        # through the handler, and then append the resulting <img> tags so the
+        # UI can render images even if the model does not echo them back.
+        tool_aware_messages = params["messages"]
+        max_tool_rounds = 3
+        last_response = None
+        tool_result_snippets = []
+
+        for _ in range(max_tool_rounds):
+            last_response = self.client.chat.completions.create(
+                **{
+                    **params,
+                    "messages": tool_aware_messages,
+                }
+            )
+            msg = last_response.choices[0].message
+
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            if not tool_calls:
+                # No tools requested; this is the final assistant answer.
+                break
+
+            # Append the assistant message that requested tools.
+            tool_aware_messages.append(
+                {
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in tool_calls
+                    ],
+                }
+            )
+
+            # For each tool call, invoke the handler and append a tool result.
+            for tc in tool_calls:
+                if tc.type != "function" or tc.function.name != "generate_image":
+                    tool_result_content = "Error: unknown tool requested."
+                else:
+                    try:
+                        raw_args = tc.function.arguments or "{}"
+                        parsed_args = json.loads(raw_args)
+                        prompt_arg = parsed_args.get("prompt") or ""
+                    except Exception as e:
+                        print(f"Error parsing Grok tool arguments: {e}")
+                        prompt_arg = ""
+
+                    try:
+                        tool_result_content = image_tool_handler(prompt_arg)
+                    except Exception as e:
+                        print(f"Error in Grok image_tool_handler: {e}")
+                        tool_result_content = f"Error generating image: {e}"
+
+                if tool_result_content:
+                    tool_result_snippets.append(tool_result_content)
+
+                tool_aware_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": tc.function.name,
+                        "content": tool_result_content or "",
+                    }
+                )
+
+        if last_response is None:
+            raise RuntimeError("No response received from Grok chat completion.")
+
+        base_text = last_response.choices[0].message.content or ""
+        if tool_result_snippets:
+            return base_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return base_text
 
     def generate_image(self, prompt, chat_id, model="grok-2-image", image_data=None, mime_type=None):
         """

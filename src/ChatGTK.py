@@ -1135,7 +1135,7 @@ class OpenAIGTKClient(Gtk.Window):
             return False
 
         provider = self.get_provider_name_for_model(model_name)
-        if provider not in ('openai', 'gemini'):
+        if provider not in ('openai', 'gemini', 'grok'):
             return False
 
         lower = model_name.lower()
@@ -1158,7 +1158,47 @@ class OpenAIGTKClient(Gtk.Window):
                 or lower.startswith("gemini-flash")
             )
 
+        # Grok chat models (exclude explicit image-only models handled above).
+        if provider == 'grok':
+            return lower.startswith("grok-")
+
         return False
+
+    def _normalize_image_tags(self, text):
+        """
+        Normalize any <img ...> tags emitted by models into the self-closing
+        <img src="..."/> form that the UI expects, stripping any extra
+        attributes like alt= so they are not shown as raw markup. If the same
+        image src appears multiple times, keep only the first occurrence to
+        avoid displaying duplicate images.
+        """
+        if not text:
+            return text
+        import re
+        pattern = re.compile(r'<img\s+src="([^"]+)"[^>]*>', re.IGNORECASE)
+
+        result_parts = []
+        last_end = 0
+        seen_src = set()
+
+        for match in pattern.finditer(text):
+            # Add any text before this tag unchanged.
+            result_parts.append(text[last_end:match.start()])
+            src = match.group(1)
+
+            if src in seen_src:
+                # Skip duplicate image tags for the same src.
+                replacement = ""
+            else:
+                seen_src.add(src)
+                replacement = f'<img src="{src}"/>'
+
+            result_parts.append(replacement)
+            last_end = match.end()
+
+        # Add any remaining text after the last tag.
+        result_parts.append(text[last_end:])
+        return "".join(result_parts)
 
     def generate_image_for_model(self, model, prompt, last_msg, chat_id, provider_name, has_attached_images):
         """
@@ -1766,17 +1806,37 @@ class OpenAIGTKClient(Gtk.Window):
 
                 assistant_provider_meta = response_meta or None
             elif provider_name == 'grok':
-                # Standard chat completion for Grok.
+                # Standard chat completion for Grok, optionally with image tools.
                 messages_to_send = self._messages_for_model(model)
-                answer = provider.generate_chat_completion(
-                    messages=messages_to_send,
-                    model=model,
-                    temperature=float(self.temperament),
-                    max_tokens=self.max_tokens if self.max_tokens > 0 else None,
-                    chat_id=self.current_chat_id
-                )
+
+                if self._supports_image_tools(model):
+                    last_user_msg = last_msg
+
+                    def image_tool_handler(prompt_arg):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+
+                    answer = provider.generate_chat_completion(
+                        messages=messages_to_send,
+                        model=model,
+                        temperature=float(self.temperament),
+                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                        chat_id=self.current_chat_id,
+                        image_tool_handler=image_tool_handler,
+                    )
+                else:
+                    answer = provider.generate_chat_completion(
+                        messages=messages_to_send,
+                        model=model,
+                        temperature=float(self.temperament),
+                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                        chat_id=self.current_chat_id,
+                    )
             else:
                 raise ValueError(f"Unsupported provider: {provider_name}")
+
+            # Normalize any raw <img ...> tags so the UI can render them
+            # consistently without showing stray HTML.
+            answer = self._normalize_image_tags(answer)
 
             assistant_message = {"role": "assistant", "content": answer}
             if assistant_provider_meta:
