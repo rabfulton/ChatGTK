@@ -1,8 +1,8 @@
-# ChatGTK - OpenAI Chat Client
+# ChatGTK - OpenAI / Gemini / Grok Chat Client
 
-A GTK-based Linux desktop client for OpenAI's API, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini).
+A GTK-based Linux desktop client for OpenAI, Google Gemini, and xAI Grok APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
 
-Disclaimer: Written entirely by AI, I accept no resposibility for what happens to your computer if you choose to run this code!
+Disclaimer: Written almost entirely by AI, I accept no responsibility for what happens to your computer if you choose to run this code!
 
 ## Installation
 
@@ -14,14 +14,46 @@ pip install -r requirements.txt
 Or use your package manager to install the dependencies. The application when launched from the terminal will complain about which dependencies are missing.
 
 ## Usage
-The application looks for environment variables: `$OPENAI_API_KEY` (required for OpenAI models) and `$GEMINI_API_KEY` (optional, used for Google Gemini models).
 
-You can get API credits by signing up at [OpenAI's platform](https://platform.openai.com/signup). Credits can be purchased from your [OpenAI account page](https://platform.openai.com/account/billing/overview). Credits are very cheap compared to a subscription to the ChatGTP application. You need to create an API key to use the application.
+The application looks for the following environment variables:
+
+- `OPENAI_API_KEY` (required for OpenAI models)
+- `GEMINI_API_KEY` (optional, used for Google Gemini models)
+- `GROK_API_KEY` (optional, used for xAI Grok models)
+
+You can also manage API keys from within the app via the **API Keys** button in the top bar; any keys set in the environment will be picked up automatically on launch.
+
+### Getting API keys
+
+- **OpenAI API key**  
+  - Sign up or log in at [OpenAI's platform](https://platform.openai.com/signup).  
+  - Go to your [API keys page](https://platform.openai.com/account/api-keys) and create a new key.  
+  - Optionally manage billing/credits from your [billing page](https://platform.openai.com/account/billing/overview).  
+  - Set the key in your shell, for example:
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+- **Google Gemini API key**  
+  - Visit [Google AI Studio](https://aistudio.google.com/).  
+  - Create or select a project and generate an API key from the *API keys* section (often available at `https://aistudio.google.com/app/apikey`).  
+  - Set the key:
+    ```bash
+    export GEMINI_API_KEY="your-gemini-key"
+    ```
+
+- **Grok (xAI) API key**  
+  - Sign up or log in at [xAI](https://x.ai/) and open the developer console (e.g. `https://console.x.ai`).  
+  - Create a new API key for the Grok models.  
+  - Set the key:
+    ```bash
+    export GROK_API_KEY="your-grok-key"
+    ```
 
 ```bash
 ./chatgtk.sh
 ```
-Alternatively you can run the install script to add a desktop entry and set up the environment variable.
+Alternatively you can run the install script to add a desktop entry and set up the environment.
 ```bash
 ./install.sh
 ```
@@ -40,7 +72,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - Text to audio output using gpt-4o-audio-preview model
 - Reasoning support for OpenAI's o3 models
 - "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
-- Dual API key support for Google Gemini 3 series models alongside OpenAI endpoints.
+- Multi-provider support for OpenAI, Google Gemini 3 series models, and xAI Grok via separate API keys.
 
 ## Screenshots
 

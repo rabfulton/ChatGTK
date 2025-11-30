@@ -308,6 +308,132 @@ class OpenAIProvider(AIProvider):
         threading.Thread(target=play_audio, daemon=True).start()
 
 
+class GrokProvider(AIProvider):
+    """
+    AI provider implementation for xAI's Grok models.
+    Uses the OpenAI-compatible HTTP API at https://api.x.ai/v1.
+    """
+
+    BASE_URL = "https://api.x.ai/v1"
+
+    def __init__(self):
+        self.client = None
+
+    def initialize(self, api_key: str):
+        # Reuse the OpenAI client with a different base_url.
+        self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
+
+    def get_available_models(self, disable_filter: bool = False):
+        """
+        Return Grok models. If the xAI models.list endpoint is available,
+        use it; otherwise, fall back to a small, curated set.
+        """
+        try:
+            models = self.client.models.list()
+            model_ids = [model.id for model in models]
+            print(f"[GrokProvider] models returned: {model_ids}")
+
+            # Allow disabling filtering via parameter or env var.
+            disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')
+            if disable_filter:
+                return sorted(model_ids)
+
+            # Prefer commonly used Grok chat and image models.
+            allowed_models = {
+                "grok-2-1212",
+                "grok-2-vision-1212",
+                "grok-3",
+                "grok-3-mini",
+                "grok-4-0709",
+                "grok-4-1-fast-non-reasoning",
+                "grok-4-1-fast-reasoning",
+                "grok-4-fast-non-reasoning",
+                "grok-4-fast-reasoning",
+                "grok-code-fast-1",
+            }
+            filtered = [m for m in model_ids if m in allowed_models]
+            return sorted(filtered or model_ids)
+        except Exception as exc:
+            print(f"Error fetching Grok models: {exc}")
+            # Fallback to a reasonable default set.
+            return sorted(["grok-2", "grok-2-mini", "grok-2-image-1212"])
+
+    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None, chat_id=None, response_meta=None):
+        """
+        Generate a chat completion using Grok text models.
+        This intentionally keeps to the standard OpenAI chat.completions schema.
+        """
+        if not self.client:
+            raise RuntimeError("Grok client not initialized")
+
+        # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
+        processed_messages = []
+        for msg in messages:
+            clean_msg = {
+                k: v
+                for k, v in msg.items()
+                if k in ("role", "content", "name")
+            }
+            processed_messages.append(clean_msg)
+
+        params = {
+            "model": model,
+            "messages": processed_messages,
+        }
+        if temperature is not None:
+            params["temperature"] = float(temperature)
+        if max_tokens and max_tokens > 0:
+            params["max_tokens"] = int(max_tokens)
+
+        response = self.client.chat.completions.create(**params)
+        return response.choices[0].message.content or ""
+
+    def generate_image(self, prompt, chat_id, model="grok-2-image", image_data=None, mime_type=None):
+        """
+        Generate an image using Grok image models (e.g. grok-2-image-1212).
+        Currently supports text → image generation.
+        """
+        if not self.client:
+            raise RuntimeError("Grok client not initialized")
+
+        # xAI's API is OpenAI-compatible for images.generate.
+        response = self.client.images.generate(
+            model=model,
+            prompt=prompt,
+            size="1024x1024",
+            n=1,
+        )
+
+        data_obj = response.data[0]
+        final_image_bytes = None
+
+        if getattr(data_obj, "url", None):
+            download_response = requests.get(data_obj.url)
+            download_response.raise_for_status()
+            final_image_bytes = download_response.content
+        elif getattr(data_obj, "b64_json", None):
+            final_image_bytes = base64.b64decode(data_obj.b64_json)
+        else:
+            raise ValueError("Grok image response missing both URL and base64 data")
+
+        images_dir = Path('history') / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_prefix = model.replace('-', '_')
+        image_path = images_dir / f"{model_prefix}_{timestamp}.png"
+
+        image_path.write_bytes(final_image_bytes)
+
+        return f'<img src="{image_path}"/>'
+
+    def transcribe_audio(self, audio_file):
+        raise NotImplementedError("Grok provider does not support audio transcription yet.")
+
+    def generate_speech(self, text, voice):
+        raise NotImplementedError("Grok provider does not support TTS yet.")
+
+
 class GeminiProvider(AIProvider):
     """AI provider implementation for Google's Gemini API."""
     
@@ -1057,6 +1183,7 @@ def get_ai_provider(provider_name: str) -> AIProvider:
     providers = {
         'openai': OpenAIProvider,
         'gemini': GeminiProvider,
+        'grok': GrokProvider,
     }
     
     provider_class = providers.get(provider_name)

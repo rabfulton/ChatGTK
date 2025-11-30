@@ -539,7 +539,7 @@ class SettingsDialog(Gtk.Dialog):
 
 
 class APIKeyDialog(Gtk.Dialog):
-    def __init__(self, parent, openai_key='', gemini_key=''):
+    def __init__(self, parent, openai_key='', gemini_key='', grok_key=''):
         super().__init__(title="API Keys", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 300)
@@ -589,6 +589,20 @@ class APIKeyDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_gemini, False, True, 0)
         list_box.add(row)
 
+        # Grok API Key
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Grok API Key", xalign=0)
+        label.set_hexpand(True)
+        self.entry_grok = Gtk.Entry()
+        self.entry_grok.set_visibility(False)
+        self.entry_grok.set_placeholder_text("gsk-...")
+        self.entry_grok.set_text(grok_key)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_grok, False, True, 0)
+        list_box.add(row)
+
         # Add buttons
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
@@ -599,7 +613,8 @@ class APIKeyDialog(Gtk.Dialog):
         """Return the API keys from the dialog."""
         return {
             'openai': self.entry_openai.get_text().strip(),
-            'gemini': self.entry_gemini.get_text().strip()
+            'gemini': self.entry_gemini.get_text().strip(),
+            'grok': self.entry_grok.get_text().strip()
         }
 
 
@@ -632,7 +647,7 @@ class OpenAIGTKClient(Gtk.Window):
         ]
         self.providers = {}
         self.model_provider_map = {}
-        self.api_keys = {'openai': '', 'gemini': ''}
+        self.api_keys = {'openai': '', 'gemini': '', 'grok': ''}
 
         # Remember the current geometry if not maximized
         self.current_geometry = (self.window_width, self.window_height)
@@ -723,12 +738,16 @@ class OpenAIGTKClient(Gtk.Window):
         # Check for API keys in environment variables and initialize providers if they exist
         env_openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
         env_gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
+        env_grok_key = os.environ.get('GROK_API_KEY', '').strip()
         if env_openai_key:
             self.api_keys['openai'] = env_openai_key
             self.initialize_provider('openai', env_openai_key)
         if env_gemini_key:
             self.api_keys['gemini'] = env_gemini_key
             self.initialize_provider('gemini', env_gemini_key)
+        if env_grok_key:
+            self.api_keys['grok'] = env_grok_key
+            self.initialize_provider('grok', env_grok_key)
         
         if self.providers:
             self.fetch_models_async()
@@ -928,6 +947,9 @@ class OpenAIGTKClient(Gtk.Window):
     def _default_models_for_provider(self, provider_name):
         if provider_name == 'gemini':
             return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-3-pro-preview"]
+        if provider_name == 'grok':
+            # Basic Grok chat and image models
+            return ["grok-2", "grok-2-mini", "grok-2-image-1212"]
         return ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
 
     def initialize_provider(self, provider_name, api_key):
@@ -1000,8 +1022,9 @@ class OpenAIGTKClient(Gtk.Window):
         # Get current keys from environment or stored values
         current_openai = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', ''))
         current_gemini = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', ''))
+        current_grok = os.environ.get('GROK_API_KEY', self.api_keys.get('grok', ''))
 
-        dialog = APIKeyDialog(self, openai_key=current_openai, gemini_key=current_gemini)
+        dialog = APIKeyDialog(self, openai_key=current_openai, gemini_key=current_gemini, grok_key=current_grok)
         response = dialog.run()
 
         if response == Gtk.ResponseType.OK:
@@ -1010,6 +1033,7 @@ class OpenAIGTKClient(Gtk.Window):
             # Update stored keys
             self.api_keys['openai'] = new_keys['openai']
             self.api_keys['gemini'] = new_keys['gemini']
+            self.api_keys['grok'] = new_keys['grok']
 
             # Update environment variables
             if new_keys['openai']:
@@ -1023,6 +1047,12 @@ class OpenAIGTKClient(Gtk.Window):
                 self.initialize_provider('gemini', new_keys['gemini'])
             else:
                 os.environ.pop('GEMINI_API_KEY', None)
+
+            if new_keys['grok']:
+                os.environ['GROK_API_KEY'] = new_keys['grok']
+                self.initialize_provider('grok', new_keys['grok'])
+            else:
+                os.environ.pop('GROK_API_KEY', None)
 
         dialog.destroy()
 
@@ -1259,6 +1289,9 @@ class OpenAIGTKClient(Gtk.Window):
         if provider_name == 'gemini':
             env_var = 'GEMINI_API_KEY'
             provider_label = "Gemini"
+        elif provider_name == 'grok':
+            env_var = 'GROK_API_KEY'
+            provider_label = "Grok"
         else:
             env_var = 'OPENAI_API_KEY'
             provider_label = "OpenAI"
@@ -1408,7 +1441,7 @@ class OpenAIGTKClient(Gtk.Window):
                             max_tokens=self.max_tokens if self.max_tokens > 0 else None,
                             chat_id=self.current_chat_id
                         )
-            else:
+            elif provider_name == 'gemini':
                 # Gemini image models support both text→image and image→image.
                 is_image_model = model in ["gemini-3-pro-image-preview", "gemini-2.5-flash-image"]
 
@@ -1437,6 +1470,24 @@ class OpenAIGTKClient(Gtk.Window):
                         response_meta=response_meta
                     )
                     assistant_provider_meta = response_meta or None
+            elif provider_name == 'grok':
+                # Grok image model(s) – treat any grok-2-image* as image generation.
+                is_image_model = model.startswith("grok-2-image")
+                if is_image_model:
+                    # Currently only text → image is supported.
+                    answer = provider.generate_image(prompt, self.current_chat_id or "temp", model)
+                else:
+                    # Standard chat completion.
+                    messages_to_send = self._messages_for_model(model)
+                    answer = provider.generate_chat_completion(
+                        messages=messages_to_send,
+                        model=model,
+                        temperature=float(self.temperament),
+                        max_tokens=self.max_tokens if self.max_tokens > 0 else None,
+                        chat_id=self.current_chat_id
+                    )
+            else:
+                raise ValueError(f"Unsupported provider: {provider_name}")
 
             assistant_message = {"role": "assistant", "content": answer}
             if assistant_provider_meta:
