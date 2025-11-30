@@ -20,6 +20,13 @@ else
     gemini_key="$GEMINI_API_KEY"
 fi
 
+if [ -z "$GROK_API_KEY" ]; then
+    echo "Optional: enter your Grok API key (starts with 'xai-'):"
+    read -r grok_key
+else
+    grok_key="$GROK_API_KEY"
+fi
+
 echo "Setting up ChatGTK desktop integration..."
 # Get the absolute path to the current directory
 INSTALL_DIR=$(pwd)
@@ -30,6 +37,7 @@ cat << EOF > chatgtk-launcher.sh
 #!/bin/bash
 export OPENAI_API_KEY="${api_key}"
 export GEMINI_API_KEY="${gemini_key}"
+export GROK_API_KEY="${grok_key}"
 cd "${INSTALL_DIR}"
 exec python3 src/ChatGTK.py
 EOF
