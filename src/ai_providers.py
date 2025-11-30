@@ -374,14 +374,39 @@ class GrokProvider(AIProvider):
             raise RuntimeError("Grok client not initialized")
 
         # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
+        # Also support image input using the same structure as OpenAI vision models.
         processed_messages = []
         for msg in messages:
-            clean_msg = {
-                k: v
-                for k, v in msg.items()
-                if k in ("role", "content", "name")
-            }
-            processed_messages.append(clean_msg)
+            content = msg.get("content", "")
+
+            # If the message has attached images, convert them to image_url parts.
+            if "images" in msg and msg["images"]:
+                content_parts = []
+                if content:
+                    content_parts.append({
+                        "type": "text",
+                        "text": content
+                    })
+                for img in msg["images"]:
+                    mime_type = img.get("mime_type", "image/jpeg")
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{img['data']}",
+                            "detail": "auto"
+                        }
+                    })
+                processed_messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": content_parts
+                })
+            else:
+                clean_msg = {
+                    k: v
+                    for k, v in msg.items()
+                    if k in ("role", "content", "name")
+                }
+                processed_messages.append(clean_msg)
 
         params = {
             "model": model,
