@@ -333,8 +333,15 @@ class GrokProvider(AIProvider):
             model_ids = [model.id for model in models]
             print(f"[GrokProvider] models returned: {model_ids}")
 
+            # Hardcode the primary image model so it's always available for testing,
+            # even if it is not listed by the API.
+            image_model_id = "grok-2-image-1212"
+            if image_model_id not in model_ids:
+                model_ids.append(image_model_id)
+
             # Allow disabling filtering via parameter or env var.
-            disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')
+            env_val = os.getenv('DISABLE_MODEL_FILTER', '')
+            disable_filter = disable_filter or env_val.strip().lower() in ('true', '1', 'yes')
             if disable_filter:
                 return sorted(model_ids)
 
@@ -342,9 +349,9 @@ class GrokProvider(AIProvider):
             allowed_models = {
                 "grok-2-1212",
                 "grok-2-vision-1212",
+                "grok-2-image-1212",
                 "grok-3",
                 "grok-3-mini",
-                "grok-4-0709",
                 "grok-4-1-fast-non-reasoning",
                 "grok-4-1-fast-reasoning",
                 "grok-4-fast-non-reasoning",
@@ -396,11 +403,11 @@ class GrokProvider(AIProvider):
         if not self.client:
             raise RuntimeError("Grok client not initialized")
 
-        # xAI's API is OpenAI-compatible for images.generate.
+        # xAI's API currently does not support the OpenAI-style `size` argument,
+        # so we omit it and let the API choose defaults.
         response = self.client.images.generate(
             model=model,
             prompt=prompt,
-            size="1024x1024",
             n=1,
         )
 
