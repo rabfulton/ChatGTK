@@ -31,6 +31,8 @@ from utils import (
     list_chat_histories,
     get_chat_metadata,
     get_chat_title,
+    get_chat_dir,
+    delete_chat_history,
     parse_color_to_rgba,
     rgb_to_hex,
     insert_resized_image,
@@ -47,8 +49,24 @@ from markup_utils import (
 )
 from gi.repository import Gdk
 from datetime import datetime
-from config import SETTINGS_FILE, HISTORY_DIR, BASE_DIR, SETTINGS_CONFIG
+from config import BASE_DIR, SETTINGS_CONFIG
 from audio import record_audio
+from tools import (
+    ToolManager,
+    is_chat_completion_model,
+    append_tool_guidance,
+    CHAT_COMPLETION_EXCLUDE_TERMS,
+    MATH_PROMPT_APPENDIX,
+    IMAGE_TOOL_PROMPT_APPENDIX,
+    MUSIC_TOOL_PROMPT_APPENDIX,
+)
+from dialogs import SettingsDialog, ToolsDialog, APIKeyDialog
+from conversation import (
+    create_system_message,
+    create_user_message,
+    create_assistant_message,
+    get_first_user_content,
+)
 # Initialize provider as None
 ai_provider = None
 
@@ -56,680 +74,7 @@ gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GLib, Pango, GtkSource 
-
-CHAT_COMPLETION_EXCLUDE_TERMS = ("dall", "image", "realtime", "audio", "tts", "whisper")
-MATH_PROMPT_APPENDIX = (
-    "When writing mathematical equations, do not use the dollar sign ($) as a delimiter. "
-    "Instead, use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
-    "Leave currency amounts as standard dollar signs (e.g., $5.00)."
-)
-
-IMAGE_TOOL_PROMPT_APPENDIX = (
-    "You have access to a generate_image tool that can create actual images for the user "
-    "from a natural language description. Use this tool when the user explicitly asks for "
-    "an image or when a diagram, illustration, or example image would significantly help "
-    "them understand the answer. After using the tool, describe the generated image in "
-    "your reply so the user knows what it contains."
-)
-
-MUSIC_TOOL_PROMPT_APPENDIX = (
-    "You have access to a control_music tool that can control music playback for the user "
-    "through their kew terminal music player (which uses the standard MPRIS interface). "
-    "Use this tool when the user asks to play, pause, resume, stop, skip, or adjust the "
-    "volume of their music. For play actions, always provide a concise keyword, song title, "
-    "album name, or artist name describing what to play."
-)
-
-
-def is_chat_completion_model(model_name: str) -> bool:
-    """Return True if the model behaves like a standard text chat completion model."""
-    if not model_name:
-        return True
-    lower_name = model_name.lower()
-    return not any(term in lower_name for term in CHAT_COMPLETION_EXCLUDE_TERMS)
-
-# Path to settings file (in same directory as this script)
-# SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.cfg")
-
-class SettingsDialog(Gtk.Dialog):
-    def __init__(self, parent, ai_provider=None, **settings):
-        super().__init__(title="Settings", transient_for=parent, flags=0)
-        self.ai_provider = ai_provider  # Store the ai_provider
-        apply_settings(self, settings)
-        self.set_modal(True)
-        self.set_default_size(500, 600)  # Made taller to accommodate all content
-
-        # Get the content area
-        box = self.get_content_area()
-        box.set_spacing(6)  # Add some spacing between elements
-
-        # Create list box directly (no scrolled window)
-        list_box = Gtk.ListBox()
-        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        
-        # Style the list box
-        list_box.set_margin_top(12)
-        list_box.set_margin_bottom(12)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
-
-        # Add list box directly to the content area
-        box.pack_start(list_box, True, True, 0)
-
-        # AI Name
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="AI Name", xalign=0)
-        label.set_hexpand(True)
-        self.entry_ai_name = Gtk.Entry()
-        self.entry_ai_name.set_text(self.ai_name)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_ai_name, False, True, 0)
-        list_box.add(row)
-
-        # Font Family
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Font Family", xalign=0)
-        label.set_hexpand(True)
-        self.entry_font = Gtk.Entry()
-        self.entry_font.set_text(self.font_family)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_font, False, True, 0)
-        list_box.add(row)
-
-        # Font Size
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Font Size", xalign=0)
-        label.set_hexpand(True)
-        self.spin_size = Gtk.SpinButton()
-        self.spin_size.set_range(6, 72)
-        self.spin_size.set_increments(1, 2)
-        self.spin_size.set_value(float(self.font_size))
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.spin_size, False, True, 0)
-        list_box.add(row)
-
-        # User Color
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="User Color", xalign=0)
-        label.set_hexpand(True)
-        self.btn_user_color = Gtk.ColorButton()
-        rgba = parse_color_to_rgba(self.user_color)
-        self.btn_user_color.set_rgba(rgba)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.btn_user_color, False, True, 0)
-        list_box.add(row)
-
-        # AI Color
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="AI Color", xalign=0)
-        label.set_hexpand(True)
-        self.btn_ai_color = Gtk.ColorButton()
-        rgba = parse_color_to_rgba(self.ai_color)
-        self.btn_ai_color.set_rgba(rgba)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.btn_ai_color, False, True, 0)
-        list_box.add(row)
-
-        # LaTeX Color picker
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Math Color", xalign=0)
-        label.set_hexpand(True)
-        self.btn_latex_color = Gtk.ColorButton()
-        rgba = parse_color_to_rgba(self.latex_color)
-        self.btn_latex_color.set_rgba(rgba)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.btn_latex_color, False, True, 0)
-        list_box.add(row)
-
-        # Default Model
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Default Model", xalign=0)
-        label.set_hexpand(True)
-        self.entry_default_model = Gtk.Entry()
-        self.entry_default_model.set_text(self.default_model)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_default_model, False, True, 0)
-        list_box.add(row)
-
-        # Temperament
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Temperament", xalign=0)
-        label.set_hexpand(True)
-        self.scale_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
-        self.scale_temp.set_size_request(200, -1)  # Set a reasonable width for the scale
-        self.scale_temp.set_value(float(self.temperament))
-        self.scale_temp.set_digits(2)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.scale_temp, False, True, 0)
-        list_box.add(row)
-
-        # Microphone
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Microphone", xalign=0)
-        label.set_hexpand(True)
-        self.combo_mic = Gtk.ComboBoxText()
-        
-        # Get list of available microphones
-        devices = []
-        all_devices = []
-        try:
-            devices = sd.query_devices()
-            for device in devices:
-                if device['max_input_channels'] > 0:  # Only input devices
-                    self.combo_mic.append_text(device['name'])
-                    all_devices.append(device['name'])
-            if not all_devices:
-                self.combo_mic.append_text("default")
-        except Exception as e:
-            print("Error getting audio devices:", e)
-            self.combo_mic.append_text("default")
-            all_devices = []
-
-        # Set active microphone from settings
-        if self.microphone in all_devices:
-            self.combo_mic.set_active(all_devices.index(self.microphone))
-        else:
-            self.combo_mic.set_active(0)
-        
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.combo_mic, False, True, 0)
-        list_box.add(row)
-
-        # TTS Voice
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="TTS Voice", xalign=0)
-        label.set_hexpand(True)
-        voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.combo_tts = Gtk.ComboBoxText()
-        
-        # Available TTS voices
-        tts_voices = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "shimmer"]
-        for voice in tts_voices:
-            self.combo_tts.append_text(voice)
-        
-        # Set active voice from settings
-        if self.tts_voice in tts_voices:
-            self.combo_tts.set_active(tts_voices.index(self.tts_voice))
-        else:
-            self.combo_tts.set_active(0)
-        
-        # Preview button
-        self.btn_preview = Gtk.Button(label="Preview")
-        self.btn_preview.connect("clicked", self.on_preview_voice)
-        
-        voice_box.pack_start(self.combo_tts, True, True, 0)
-        voice_box.pack_start(self.btn_preview, False, False, 0)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(voice_box, False, True, 0)
-        list_box.add(row)
-
-        # HD Voice Toggle
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="TTS HD Voice", xalign=0)
-        label.set_hexpand(True)
-        self.switch_hd = Gtk.Switch()
-        self.switch_hd.set_active(self.tts_hd)  # Set from settings
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_hd, False, True, 0)
-        list_box.add(row)
-
-        # Realtime Voice
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Realtime Voice", xalign=0)
-        label.set_hexpand(True)
-        voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.combo_realtime = Gtk.ComboBoxText()
-        
-        # Available realtime voices
-        realtime_voices = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"]
-        for voice in realtime_voices:
-            self.combo_realtime.append_text(voice)
-        
-        # Set active voice from settings (default to alloy if not set)
-        if self.realtime_voice in realtime_voices:
-            self.combo_realtime.set_active(realtime_voices.index(self.realtime_voice))
-        else:
-            self.combo_realtime.set_active(0)
-        
-        # Preview button for realtime voices
-        self.btn_preview_realtime = Gtk.Button(label="Preview")
-        self.btn_preview_realtime.connect("clicked", self.on_preview_realtime_voice)
-        
-        voice_box.pack_start(self.combo_realtime, True, True, 0)
-        voice_box.pack_start(self.btn_preview_realtime, False, False, 0)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(voice_box, False, True, 0)
-        list_box.add(row)
-
-        # Max Tokens
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Max Tokens (0 = no limit)", xalign=0)
-        label.set_hexpand(True)
-        self.spin_max_tokens = Gtk.SpinButton()
-        self.spin_max_tokens.set_range(0, 32000)  # OpenAI's maximum is 32k for some models
-        self.spin_max_tokens.set_increments(100, 1000)
-        self.spin_max_tokens.set_value(float(self.max_tokens))
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.spin_max_tokens, False, True, 0)
-        list_box.add(row)
-
-        # Preferred Image Model
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Image Model", xalign=0)
-        label.set_hexpand(True)
-        self.combo_image_model = Gtk.ComboBoxText()
-
-        # Known image-capable models across providers. These are merged with any
-        # image models discovered from the APIs at runtime.
-        known_image_models = [
-            # OpenAI
-            "dall-e-3",
-            "gpt-image-1",
-            # Gemini
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-            # Grok
-            "grok-2-image-1212",
-        ]
-
-        # Start with the known list; any dynamically fetched models that look
-        # like image models will be appended when the main window is created.
-        for model_id in known_image_models:
-            self.combo_image_model.append_text(model_id)
-
-        # Select the current image model from settings, defaulting to dall-e-3.
-        current_image_model = getattr(self, "image_model", "dall-e-3")
-        # Find index of current_image_model, defaulting to first entry.
-        active_index = 0
-        for idx, model_id in enumerate(known_image_models):
-            if model_id == current_image_model:
-                active_index = idx
-                break
-        self.combo_image_model.set_active(active_index)
-
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.combo_image_model, False, True, 0)
-        list_box.add(row)
-
-        # Add theme selector (before System Message)
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Code Theme", xalign=0)
-        label.set_hexpand(True)
-        self.combo_theme = Gtk.ComboBoxText()
-        
-        # Get available themes
-        scheme_manager = GtkSource.StyleSchemeManager.get_default()
-        themes = scheme_manager.get_scheme_ids()
-        
-        # Get current theme from settings
-        settings = load_settings()
-        current_theme = settings.get('SOURCE_THEME', 'solarized-dark')
-        
-        # Add themes to combo box
-        current_idx = 0
-        for idx, theme_id in enumerate(sorted(themes)):
-            self.combo_theme.append_text(theme_id)
-            if theme_id == current_theme:
-                current_idx = idx
-        
-        self.combo_theme.set_active(current_idx)
-        
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.combo_theme, False, True, 0)
-        list_box.add(row)
-
-        # LaTeX DPI
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Math DPI", xalign=0)
-        label.set_hexpand(True)
-        self.spin_latex_dpi = Gtk.SpinButton()
-        self.spin_latex_dpi.set_range(72, 600)  # Reasonable DPI range
-        self.spin_latex_dpi.set_increments(1, 10)
-        self.spin_latex_dpi.set_value(float(self.latex_dpi))
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.spin_latex_dpi, False, True, 0)
-        list_box.add(row)
-
-        # System Message (moved to end)
-        row = Gtk.ListBoxRow()
-        row.set_activatable(False)  # Disable row activation
-        row.set_selectable(False)   # Disable row selection
-        
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        row.add(vbox)
-        
-        label = Gtk.Label(label="System Prompt", xalign=0)
-        vbox.pack_start(label, False, False, 0)
-        
-        # Create text view inside a frame for better visual separation
-        frame = Gtk.Frame()
-        frame.set_shadow_type(Gtk.ShadowType.IN)
-        
-        # Create scrolled window specifically for the text view
-        text_scroll = Gtk.ScrolledWindow()
-        text_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        text_scroll.set_size_request(-1, 150)  # Fixed height for the text area
-        
-        self.entry_system_message = Gtk.TextView()
-        self.entry_system_message.set_wrap_mode(Gtk.WrapMode.WORD)
-        self.entry_system_message.set_margin_start(6)
-        self.entry_system_message.set_margin_end(6)
-        self.entry_system_message.set_margin_top(6)
-        self.entry_system_message.set_margin_bottom(6)
-        self.entry_system_message.set_editable(True)
-        self.entry_system_message.set_cursor_visible(True)
-        
-        # Make sure TextView can receive focus and input
-        self.entry_system_message.set_can_focus(True)
-        self.entry_system_message.set_accepts_tab(True)
-
-        # Make sure parent widgets don't interfere with events
-        text_scroll.set_can_focus(False)
-        frame.set_can_focus(False)
-        vbox.set_can_focus(False)
-        row.set_can_focus(False)
-        
-        # Connect focus events
-        def on_focus_in(widget, event):
-            return False  # Allow focus
-            
-        def on_button_press(widget, event):
-            widget.grab_focus()
-            return False  # Allow event propagation
-            
-        self.entry_system_message.connect("focus-in-event", on_focus_in)
-        self.entry_system_message.connect("button-press-event", on_button_press)
-        
-        # Set the text after configuring the TextView
-        self.entry_system_message.get_buffer().set_text(self.system_message)
-        
-        text_scroll.add(self.entry_system_message)
-        frame.add(text_scroll)
-        vbox.pack_start(frame, True, True, 0)
-        
-        list_box.add(row)
-
-        # Add buttons
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        self.add_button("OK", Gtk.ResponseType.OK)
-
-        self.show_all()
-
-    def on_preview_voice(self, widget):
-        """Preview the selected TTS voice."""
-        if not self.ai_provider:
-            error_dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.OK,
-                text="Error Preview Voice"
-            )
-            error_dialog.format_secondary_text("AI Provider not initialized. Please check your API key.")
-            error_dialog.run()
-            error_dialog.destroy()
-            return
-
-        selected_voice = self.combo_tts.get_active_text()
-        preview_text = f"Hello! This is the {selected_voice} voice."
-        
-        try:
-            # Create a temporary file for the speech
-            temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / "voice_preview.mp3"
-            
-            # Generate speech with proper streaming
-            with self.ai_provider.audio.speech.with_streaming_response.create(
-                model="tts-1-hd" if self.tts_hd else "tts-1",
-                voice=selected_voice,
-                input=preview_text
-            ) as response:
-                # Save to file
-                with open(temp_file, 'wb') as f:
-                    for chunk in response.iter_bytes():
-                        f.write(chunk)
-            
-            # Play using system audio
-            os.system(f"paplay {temp_file}")
-            
-            # Clean up after a delay to ensure playback completes
-            def cleanup():
-                import time
-                time.sleep(3)  # Wait for playback to finish
-                temp_file.unlink(missing_ok=True)
-            
-            threading.Thread(target=cleanup, daemon=True).start()
-            
-        except Exception as e:
-            error_dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.OK,
-                text="Error Preview Voice"
-            )
-            error_dialog.format_secondary_text(str(e))
-            error_dialog.run()
-            error_dialog.destroy()
-
-    def get_settings(self):
-        """Return updated settings from dialog."""
-        buffer = self.entry_system_message.get_buffer()
-        system_message = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
-        
-        return {
-            'ai_name': self.entry_ai_name.get_text(),
-            'font_family': self.entry_font.get_text(),
-            'font_size': int(self.spin_size.get_value()),
-            'user_color': self.btn_user_color.get_rgba().to_string(),
-            'ai_color': self.btn_ai_color.get_rgba().to_string(),
-            'default_model': self.entry_default_model.get_text(),
-            'system_message': system_message,
-            'temperament': self.scale_temp.get_value(),
-            'microphone': self.combo_mic.get_active_text() or 'default',
-            'tts_voice': self.combo_tts.get_active_text(),
-            'realtime_voice': self.combo_realtime.get_active_text(),
-            'max_tokens': int(self.spin_max_tokens.get_value()),
-            'source_theme': self.combo_theme.get_active_text(),
-            'latex_dpi': int(self.spin_latex_dpi.get_value()),
-            'latex_color': self.btn_latex_color.get_rgba().to_string(),
-            'tts_hd': self.switch_hd.get_active(),
-            'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
-        }
-
-    def on_preview_realtime_voice(self, widget):
-        """Preview the selected realtime voice using prepared WAV files."""
-        selected_voice = self.combo_realtime.get_active_text()
-        preview_file = Path(BASE_DIR) / "preview" / f"{selected_voice}.wav"
-        
-        try:
-            if not preview_file.exists():
-                raise FileNotFoundError(f"Preview file not found: {preview_file}")
-            
-            # Play using system audio
-            subprocess.Popen(['paplay', str(preview_file)])
-            
-        except Exception as e:
-            error_dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.OK,
-                text="Error Preview Voice"
-            )
-            error_dialog.format_secondary_text(str(e))
-            error_dialog.run()
-            error_dialog.destroy()
-
-
-class ToolsDialog(Gtk.Dialog):
-    def __init__(self, parent, **settings):
-        super().__init__(title="Tools", transient_for=parent, flags=0)
-        apply_settings(self, settings)
-        self.set_modal(True)
-        self.set_default_size(400, 200)
-
-        box = self.get_content_area()
-        box.set_spacing(6)
-
-        list_box = Gtk.ListBox()
-        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(12)
-        list_box.set_margin_bottom(12)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
-        box.pack_start(list_box, True, True, 0)
-
-        # Enable/disable image tool for text models
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Image Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_image_tool = Gtk.Switch()
-        current_image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
-        self.switch_image_tool.set_active(current_image_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_image_tool, False, True, 0)
-        list_box.add(row)
-
-        # Enable/disable music control tool for text models
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Music Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_music_tool = Gtk.Switch()
-        current_music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
-        self.switch_music_tool.set_active(current_music_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_music_tool, False, True, 0)
-        list_box.add(row)
-
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        self.add_button("OK", Gtk.ResponseType.OK)
-
-        self.show_all()
-
-    def get_tool_settings(self):
-        return {
-            "image_tool_enabled": self.switch_image_tool.get_active(),
-            "music_tool_enabled": self.switch_music_tool.get_active(),
-        }
-
-
-class APIKeyDialog(Gtk.Dialog):
-    def __init__(self, parent, openai_key='', gemini_key='', grok_key=''):
-        super().__init__(title="API Keys", transient_for=parent, flags=0)
-        self.set_modal(True)
-        self.set_default_size(500, 300)
-
-        # Get the content area
-        box = self.get_content_area()
-        box.set_spacing(6)
-
-        # Create list box
-        list_box = Gtk.ListBox()
-        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-
-        # Style the list box
-        list_box.set_margin_top(12)
-        list_box.set_margin_bottom(12)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
-
-        # Add list box to content area
-        box.pack_start(list_box, True, True, 0)
-
-        # OpenAI API Key
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="OpenAI API Key", xalign=0)
-        label.set_hexpand(True)
-        self.entry_openai = Gtk.Entry()
-        self.entry_openai.set_visibility(False)
-        self.entry_openai.set_placeholder_text("sk-...")
-        self.entry_openai.set_text(openai_key)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_openai, False, True, 0)
-        list_box.add(row)
-
-        # Gemini API Key
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Gemini API Key", xalign=0)
-        label.set_hexpand(True)
-        self.entry_gemini = Gtk.Entry()
-        self.entry_gemini.set_visibility(False)
-        self.entry_gemini.set_placeholder_text("AI...")
-        self.entry_gemini.set_text(gemini_key)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_gemini, False, True, 0)
-        list_box.add(row)
-
-        # Grok API Key
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Grok API Key", xalign=0)
-        label.set_hexpand(True)
-        self.entry_grok = Gtk.Entry()
-        self.entry_grok.set_visibility(False)
-        self.entry_grok.set_placeholder_text("gsk-...")
-        self.entry_grok.set_text(grok_key)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_grok, False, True, 0)
-        list_box.add(row)
-
-        # Add buttons
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        self.add_button("OK", Gtk.ResponseType.OK)
-
-        self.show_all()
-
-    def get_keys(self):
-        """Return the API keys from the dialog."""
-        return {
-            'openai': self.entry_openai.get_text().strip(),
-            'gemini': self.entry_gemini.get_text().strip(),
-            'grok': self.entry_grok.get_text().strip()
-        }
-
+from gi.repository import Gtk, GLib, Pango, GtkSource
 
 class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
@@ -755,12 +100,16 @@ class OpenAIGTKClient(Gtk.Window):
         # Initialize chat state
         self.current_chat_id = None  # None means this is a new, unsaved chat
         # Each message can carry optional provider-specific metadata in provider_meta.
-        self.conversation_history = [
-            {"role": "system", "content": self.system_message, "provider_meta": {}}
-        ]
+        self.conversation_history = [create_system_message(self.system_message)]
         self.providers = {}
         self.model_provider_map = {}
         self.api_keys = {'openai': '', 'gemini': '', 'grok': ''}
+        
+        # Initialize ToolManager with current settings
+        self.tool_manager = ToolManager(
+            image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
+            music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
+        )
 
         # Remember the current geometry if not maximized
         self.current_geometry = (self.window_width, self.window_height)
@@ -1093,7 +442,7 @@ class OpenAIGTKClient(Gtk.Window):
         Return the conversation history, appending additional system guidance for
         certain models:
         - MATH_PROMPT_APPENDIX for standard chat completion models.
-        - IMAGE_TOOL_PROMPT_APPENDIX when image tools are available.
+        - Tool-specific guidance when tools are available.
         """
         if not self.conversation_history:
             return []
@@ -1105,34 +454,16 @@ class OpenAIGTKClient(Gtk.Window):
             return self.conversation_history
 
         current_prompt = first_message.get("content", "") or ""
-        new_prompt = current_prompt or ""
-
-        # Append math guidance if not already present.
-        if MATH_PROMPT_APPENDIX not in new_prompt:
-            if new_prompt.strip():
-                new_prompt = f"{new_prompt.rstrip()}\n\n{MATH_PROMPT_APPENDIX}"
-            else:
-                new_prompt = MATH_PROMPT_APPENDIX
-
-        # Append image tool guidance only for chat models that support tools.
-        # We rely on the helper, which in turn checks the provider.
+        
+        # Get enabled tools for this model and append guidance using the tools module.
         try:
-            # Only append the image-tool guidance when the feature is enabled
-            # and the model is capable of using tools.
-            if bool(getattr(self, "image_tool_enabled", True)) and self._supports_image_tools(model_name):
-                if IMAGE_TOOL_PROMPT_APPENDIX not in new_prompt:
-                    new_prompt = f"{new_prompt.rstrip()}\n\n{IMAGE_TOOL_PROMPT_APPENDIX}"
+            enabled_tools = self.tool_manager.get_enabled_tools_for_model(
+                model_name, self.model_provider_map
+            )
+            new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
         except Exception as e:
-            # Prompt shaping should never break the call path.
-            print(f"Error while appending image tool prompt: {e}")
-
-        # Append music tool guidance for chat models that can use the music tool.
-        try:
-            if bool(getattr(self, "music_tool_enabled", False)) and self._supports_music_tools(model_name):
-                if MUSIC_TOOL_PROMPT_APPENDIX not in new_prompt:
-                    new_prompt = f"{new_prompt.rstrip()}\n\n{MUSIC_TOOL_PROMPT_APPENDIX}"
-        except Exception as e:
-            print(f"Error while appending music tool prompt: {e}")
+            print(f"Error while appending tool guidance: {e}")
+            new_prompt = current_prompt
 
         # If nothing changed, return the original history.
         if new_prompt == current_prompt:
@@ -1166,109 +497,21 @@ class OpenAIGTKClient(Gtk.Window):
         Return True if the given model for the specified provider should be
         treated as an image-generation model.
         """
-        if not model_name:
-            return False
-        lower = model_name.lower()
-
-        if provider_name == 'openai':
-            return lower in ("dall-e-3", "gpt-image-1")
-
-        if provider_name == 'gemini':
-            # Explicit Gemini image models.
-            return lower in ("gemini-3-pro-image-preview", "gemini-2.5-flash-image")
-
-        if provider_name == 'grok':
-            # Any of the grok-2-image* series are image generators.
-            return lower.startswith("grok-2-image")
-
-        return False
+        return self.tool_manager.is_image_model_for_provider(model_name, provider_name)
 
     def _supports_image_tools(self, model_name):
         """
         Return True if the given model should be offered the image-generation
-        tool. Currently this is limited to non-realtime OpenAI GPT chat models
-        and compatible Gemini chat models.
+        tool. Delegates to ToolManager.
         """
-        if not model_name:
-            return False
-
-        # Respect the user setting that globally enables/disables the image tool.
-        if not bool(getattr(self, "image_tool_enabled", True)):
-            return False
-
-        provider = self.get_provider_name_for_model(model_name)
-        if provider not in ('openai', 'gemini', 'grok'):
-            return False
-
-        lower = model_name.lower()
-        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
-            return False
-        # Exclude explicit image-only models.
-        if self._is_image_model_for_provider(model_name, provider):
-            return False
-
-        # OpenAI GPT chat models.
-        if provider == 'openai':
-            return lower.startswith("gpt-")
-
-        # Gemini chat models that support function calling (non-image variants).
-        if provider == 'gemini':
-            return (
-                lower.startswith("gemini-2.5")
-                or lower.startswith("gemini-3-pro")
-                or lower.startswith("gemini-pro")
-                or lower.startswith("gemini-flash")
-            )
-
-        # Grok chat models (exclude explicit image-only models handled above).
-        if provider == 'grok':
-            return lower.startswith("grok-")
-
-        return False
+        return self.tool_manager.supports_image_tools(model_name, self.model_provider_map)
 
     def _supports_music_tools(self, model_name):
         """
         Return True if the given model should be offered the music-control tool.
-        This mirrors the image tool support logic but is gated by the separate
-        MUSIC_TOOL_ENABLED setting.
+        Delegates to ToolManager.
         """
-        if not model_name:
-            return False
-
-        # Respect the user setting that globally enables/disables the music tool.
-        if not bool(getattr(self, "music_tool_enabled", False)):
-            return False
-
-        provider = self.get_provider_name_for_model(model_name)
-        if provider not in ('openai', 'gemini', 'grok'):
-            return False
-
-        lower = model_name.lower()
-        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
-            return False
-
-        # Exclude explicit image-only models.
-        if self._is_image_model_for_provider(model_name, provider):
-            return False
-
-        # OpenAI GPT chat models.
-        if provider == 'openai':
-            return lower.startswith("gpt-")
-
-        # Gemini chat models that support function calling (non-image variants).
-        if provider == 'gemini':
-            return (
-                lower.startswith("gemini-2.5")
-                or lower.startswith("gemini-3-pro")
-                or lower.startswith("gemini-pro")
-                or lower.startswith("gemini-flash")
-            )
-
-        # Grok chat models (exclude explicit image-only models handled above).
-        if provider == 'grok':
-            return lower.startswith("grok-")
-
-        return False
+        return self.tool_manager.supports_music_tools(model_name, self.model_provider_map)
 
     def _normalize_image_tags(self, text):
         """
@@ -1589,6 +832,9 @@ class OpenAIGTKClient(Gtk.Window):
             # Apply the updated tool settings to the main window object.
             for key, value in tool_settings.items():
                 setattr(self, key, value)
+            # Update the ToolManager with the new settings.
+            self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
+            self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
             # Persist all settings, including the updated tool flags.
             save_settings(convert_settings_for_save(get_object_settings(self)))
         dialog.destroy()
@@ -1887,9 +1133,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         if quick_image_request:
             self.append_message('user', question)
-            self.conversation_history.append(
-                {"role": "user", "content": question, "provider_meta": {}}
-            )
+            self.conversation_history.append(create_user_message(question))
             self.entry_question.set_text("")
             self.show_thinking_animation()
             threading.Thread(
@@ -1954,9 +1198,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.append_message('user', display_text)
         
         # Store user message in the chat history
-        user_msg = {"role": "user", "content": question, "provider_meta": {}}
-        if images:
-            user_msg["images"] = images
+        user_msg = create_user_message(question, images=images if images else None)
             
         self.conversation_history.append(user_msg)
         
@@ -2116,12 +1358,7 @@ class OpenAIGTKClient(Gtk.Window):
             # consistently without showing stray HTML.
             answer = self._normalize_image_tags(answer)
 
-            assistant_message = {"role": "assistant", "content": answer}
-            if assistant_provider_meta:
-                assistant_message["provider_meta"] = assistant_provider_meta
-            else:
-                # Ensure the key exists for consistency, even if empty.
-                assistant_message["provider_meta"] = {}
+            assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
 
             self.conversation_history.append(assistant_message)
 
@@ -2346,20 +1583,11 @@ class OpenAIGTKClient(Gtk.Window):
                     child.destroy()
                 
                 # Reset conversation state
-                self.conversation_history = [
-                    {"role": "system", "content": self.system_message, "provider_meta": {}}
-                ]
+                self.conversation_history = [create_system_message(self.system_message)]
                 self.current_chat_id = None
 
-            # Delete files
-            chat_dir = Path('history') / filename.replace('.json', '')
-            if chat_dir.exists():
-                import shutil
-                shutil.rmtree(chat_dir)
-            
-            history_file = Path('history') / filename
-            if history_file.exists():
-                history_file.unlink()
+            # Delete the chat history and associated files
+            delete_chat_history(filename)
             
             # Refresh the history list
             self.refresh_history_list()
@@ -2385,9 +1613,7 @@ class OpenAIGTKClient(Gtk.Window):
     def on_new_chat_clicked(self, button):
         """Start a new chat conversation."""
         # Clear conversation history
-        self.conversation_history = [
-            {"role": "system", "content": self.system_message, "provider_meta": {}}
-        ]
+        self.conversation_history = [create_system_message(self.system_message)]
         
         # Reset chat ID to indicate this is a new chat
         self.current_chat_id = None
@@ -2837,7 +2063,7 @@ class OpenAIGTKClient(Gtk.Window):
                         # We do not have Audio model, use TTS
                         if self.current_chat_id:
                             # Get audio directory
-                            audio_dir = Path('history') / self.current_chat_id.replace('.json', '') / 'audio'
+                            audio_dir = get_chat_dir(self.current_chat_id) / 'audio'
                             # Generate a hash of the message text for uniqueness
                             import hashlib
                             text_hash = hashlib.md5(text_content.encode()).hexdigest()[:8]

@@ -140,6 +140,51 @@ def load_chat_history(chat_name, messages_only=True):
     except FileNotFoundError:
         return [] if messages_only else {"messages": [], "metadata": {}}
 
+def delete_chat_history(chat_name):
+    """Delete a chat history and its associated files (images, audio, etc.).
+    
+    Args:
+        chat_name: Name of the chat file (with or without .json extension)
+    
+    Returns:
+        bool: True if deletion was successful, False otherwise
+    """
+    import shutil
+    
+    if not chat_name.endswith('.json'):
+        chat_name = f"{chat_name}.json"
+    
+    try:
+        # Delete the associated directory (images, audio, etc.)
+        chat_dir = Path(HISTORY_DIR) / chat_name.replace('.json', '')
+        if chat_dir.exists():
+            shutil.rmtree(chat_dir)
+        
+        # Delete the history JSON file
+        history_file = Path(HISTORY_DIR) / chat_name
+        if history_file.exists():
+            history_file.unlink()
+        
+        return True
+    except Exception as e:
+        print(f"Error deleting chat history {chat_name}: {e}")
+        return False
+
+
+def get_chat_dir(chat_name):
+    """Get the directory path for a chat's associated files.
+    
+    Args:
+        chat_name: Name of the chat file (with or without .json extension)
+    
+    Returns:
+        Path: The directory path for the chat's files
+    """
+    if chat_name.endswith('.json'):
+        chat_name = chat_name.replace('.json', '')
+    return Path(HISTORY_DIR) / chat_name
+
+
 def get_chat_metadata(chat_name):
     """Get metadata for a specific chat."""
     data = load_chat_history(chat_name, messages_only=False)

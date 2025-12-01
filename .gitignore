@@ -1,3 +1,4 @@
+settings.cfg
 todo.txt
 ChatGTK.code-workspace
 Backups/
@@ -9,3 +10,4 @@ debug_export.tex
 debug_failed.tex
 *.pdf
 !screenshots/*.pdf
+WARP.md
