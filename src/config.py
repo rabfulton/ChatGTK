@@ -28,6 +28,8 @@ SETTINGS_CONFIG = {
     'MUSIC_TOOL_ENABLED': {'type': bool, 'default': False},
     'WINDOW_WIDTH': {'type': int, 'default': 800},
     'WINDOW_HEIGHT': {'type': int, 'default': 600},
+    'SETTINGS_DIALOG_WIDTH': {'type': int, 'default': 950},
+    'SETTINGS_DIALOG_HEIGHT': {'type': int, 'default': 800},
     'SYSTEM_MESSAGE': {'type': str, 'default': 'You are a helpful assistant.'},
     'TEMPERAMENT': {'type': float, 'default': 0.7},
     'MICROPHONE': {'type': str, 'default': 'default'},
@@ -39,5 +41,23 @@ SETTINGS_CONFIG = {
     'MAX_TOKENS': {'type': int, 'default': 0},
     'SOURCE_THEME': {'type': str, 'default': 'solarized-dark'},
     'LATEX_DPI': {'type': int, 'default': 200},
-    'LATEX_COLOR': {'type': str, 'default': '#000000'}
+    'LATEX_COLOR': {'type': str, 'default': '#000000'},
+    # Model whitelists per provider – comma-separated model IDs.
+    # These defaults mirror the curated sets previously hardcoded in ai_providers.py.
+    'OPENAI_MODEL_WHITELIST': {
+        'type': str,
+        'default': 'gpt-3.5-turbo,gpt-4,dall-e-3,gpt-image-1,gpt-4o-mini-realtime-preview,o1-mini,o1-preview,chatgpt-4o-latest,gpt-4-turbo,gpt-4.1,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-realtime,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest,gpt-5-pro'
+    },
+    'GEMINI_MODEL_WHITELIST': {
+        'type': str,
+        'default': 'gemini-2.5-flash,gemini-2.5-pro,gemini-2.5-flash-image,gemini-3-pro-preview,gemini-pro,gemini-pro-vision,gemini-pro-latest,gemini-flash-latest,gemini-3-pro-image-preview'
+    },
+    'GROK_MODEL_WHITELIST': {
+        'type': str,
+        'default': 'grok-2-1212,grok-2-vision-1212,grok-2-image-1212,grok-3,grok-3-mini,grok-4-1-fast-non-reasoning,grok-4-1-fast-reasoning,grok-4-fast-non-reasoning,grok-4-fast-reasoning'
+    },
+    'CLAUDE_MODEL_WHITELIST': {
+        'type': str,
+        'default': 'claude-sonnet-4-5,claude-haiku-4-5,claude-opus-4-5,claude-3-5-sonnet-latest,claude-3-5-haiku-latest'
+    },
 }

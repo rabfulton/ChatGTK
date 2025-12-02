@@ -60,7 +60,7 @@ from tools import (
     IMAGE_TOOL_PROMPT_APPENDIX,
     MUSIC_TOOL_PROMPT_APPENDIX,
 )
-from dialogs import SettingsDialog, ToolsDialog, APIKeyDialog
+from dialogs import SettingsDialog, ToolsDialog
 from conversation import (
     create_system_message,
     create_user_message,
@@ -186,12 +186,6 @@ class OpenAIGTKClient(Gtk.Window):
         self.sidebar_button.add(arrow)
         self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
         hbox_top.pack_start(self.sidebar_button, False, False, 0)
-
-        # API keys management button
-        self.api_keys_button = Gtk.Button(label="API Keys")
-        self.api_keys_button.set_tooltip_text("Manage API keys for OpenAI, Gemini, Grok, and Claude")
-        self.api_keys_button.connect("clicked", self.on_api_keys_clicked)
-        hbox_top.pack_start(self.api_keys_button, False, False, 0)
 
         # Initialize model combo before trying to use it
         self.combo_model = Gtk.ComboBoxText()
@@ -394,6 +388,17 @@ class OpenAIGTKClient(Gtk.Window):
 
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
+        # Check if filtering should be disabled via environment variable
+        env_val = os.getenv('DISABLE_MODEL_FILTER', '')
+        disable_filter = env_val.strip().lower() in ('true', '1', 'yes')
+
+        # Gather whitelist sets from settings (parsed from comma-separated strings)
+        whitelists = {}
+        for provider_key in ('openai', 'gemini', 'grok', 'claude'):
+            attr = f"{provider_key}_model_whitelist"
+            whitelist_str = getattr(self, attr, "") or ""
+            whitelists[provider_key] = set(m.strip() for m in whitelist_str.split(",") if m.strip())
+
         def fetch_thread():
             if not self.providers:
                 default_models = self._default_models_for_provider('openai')
@@ -405,18 +410,25 @@ class OpenAIGTKClient(Gtk.Window):
             mapping = {}
             for name, provider in self.providers.items():
                 try:
-                    provider_models = provider.get_available_models()
+                    # Fetch all models from the provider (no provider-side filtering)
+                    provider_models = provider.get_available_models(disable_filter=True)
                 except Exception as e:
                     print(f"Error fetching models for {name}: {e}")
                     provider_models = self._default_models_for_provider(name)
+
+                # Apply whitelist filtering unless disabled
+                whitelist = whitelists.get(name, set())
+                if not disable_filter and whitelist:
+                    provider_models = [m for m in provider_models if m in whitelist]
+
                 for model in provider_models:
                     mapping[model] = name
                     collected_models.append(model)
-            
+
             if not collected_models:
                 collected_models = self._default_models_for_provider('openai')
                 mapping = {model: 'openai' for model in collected_models}
-            
+
             unique_models = sorted(dict.fromkeys(collected_models))
             GLib.idle_add(self.apply_model_fetch_results, unique_models, mapping)
 
@@ -829,16 +841,73 @@ class OpenAIGTKClient(Gtk.Window):
         return False
 
     def on_open_settings(self, widget):
-        # Pass ai_provider to the settings dialog
-        dialog = SettingsDialog(self, ai_provider=ai_provider, **{k.lower(): getattr(self, k.lower()) 
-                               for k in SETTINGS_CONFIG.keys()})
+        # Gather current API keys from environment or stored values
+        current_api_keys = {
+            'openai': os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')),
+            'gemini': os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')),
+            'grok': os.environ.get('GROK_API_KEY', self.api_keys.get('grok', '')),
+            'claude': os.environ.get('CLAUDE_API_KEY', self.api_keys.get('claude', '')),
+        }
+
+        # Pass ai_provider, providers dict, and api_keys to the settings dialog
+        dialog = SettingsDialog(
+            self,
+            ai_provider=ai_provider,
+            providers=self.providers,
+            api_keys=current_api_keys,
+            **{k.lower(): getattr(self, k.lower()) for k in SETTINGS_CONFIG.keys()}
+        )
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             new_settings = dialog.get_settings()
             apply_settings(self, new_settings)
             save_settings(convert_settings_for_save(get_object_settings(self)))
+
+            # Handle API keys from the dialog
+            new_keys = dialog.get_api_keys()
+            self._apply_api_keys(new_keys)
+
             self.fetch_models_async()
         dialog.destroy()
+
+    def _apply_api_keys(self, new_keys):
+        """Apply API key changes: update stored keys, environment, and providers."""
+        # Update stored keys
+        self.api_keys['openai'] = new_keys['openai']
+        self.api_keys['gemini'] = new_keys['gemini']
+        self.api_keys['grok'] = new_keys['grok']
+        self.api_keys['claude'] = new_keys['claude']
+
+        # Update environment variables and providers
+        if new_keys['openai']:
+            os.environ['OPENAI_API_KEY'] = new_keys['openai']
+            self.initialize_provider('openai', new_keys['openai'])
+        else:
+            os.environ.pop('OPENAI_API_KEY', None)
+            self.providers.pop('openai', None)
+
+        if new_keys['gemini']:
+            os.environ['GEMINI_API_KEY'] = new_keys['gemini']
+            self.initialize_provider('gemini', new_keys['gemini'])
+        else:
+            os.environ.pop('GEMINI_API_KEY', None)
+            self.providers.pop('gemini', None)
+
+        if new_keys['grok']:
+            os.environ['GROK_API_KEY'] = new_keys['grok']
+            self.initialize_provider('grok', new_keys['grok'])
+        else:
+            os.environ.pop('GROK_API_KEY', None)
+            self.providers.pop('grok', None)
+
+        if new_keys['claude']:
+            os.environ['CLAUDE_API_KEY'] = new_keys['claude']
+            os.environ['ANTHROPIC_API_KEY'] = new_keys['claude']
+            self.initialize_provider('claude', new_keys['claude'])
+        else:
+            os.environ.pop('CLAUDE_API_KEY', None)
+            os.environ.pop('ANTHROPIC_API_KEY', None)
+            self.providers.pop('claude', None)
 
     def on_open_tools(self, widget):
         # Open the tools dialog for configuring image/music tools.
@@ -855,61 +924,6 @@ class OpenAIGTKClient(Gtk.Window):
             self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
             # Persist all settings, including the updated tool flags.
             save_settings(convert_settings_for_save(get_object_settings(self)))
-        dialog.destroy()
-
-    def on_api_keys_clicked(self, widget):
-        """Handle API keys management button click."""
-        # Get current keys from environment or stored values
-        current_openai = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', ''))
-        current_gemini = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', ''))
-        current_grok = os.environ.get('GROK_API_KEY', self.api_keys.get('grok', ''))
-        current_claude = os.environ.get('CLAUDE_API_KEY', self.api_keys.get('claude', ''))
-
-        dialog = APIKeyDialog(
-            self,
-            openai_key=current_openai,
-            gemini_key=current_gemini,
-            grok_key=current_grok,
-            claude_key=current_claude,
-        )
-        response = dialog.run()
-
-        if response == Gtk.ResponseType.OK:
-            new_keys = dialog.get_keys()
-
-            # Update stored keys
-            self.api_keys['openai'] = new_keys['openai']
-            self.api_keys['gemini'] = new_keys['gemini']
-            self.api_keys['grok'] = new_keys['grok']
-            self.api_keys['claude'] = new_keys['claude']
-
-            # Update environment variables
-            if new_keys['openai']:
-                os.environ['OPENAI_API_KEY'] = new_keys['openai']
-                self.initialize_provider('openai', new_keys['openai'])
-            else:
-                os.environ.pop('OPENAI_API_KEY', None)
-
-            if new_keys['gemini']:
-                os.environ['GEMINI_API_KEY'] = new_keys['gemini']
-                self.initialize_provider('gemini', new_keys['gemini'])
-            else:
-                os.environ.pop('GEMINI_API_KEY', None)
-
-            if new_keys['grok']:
-                os.environ['GROK_API_KEY'] = new_keys['grok']
-                self.initialize_provider('grok', new_keys['grok'])
-            else:
-                os.environ.pop('GROK_API_KEY', None)
-
-            if new_keys['claude']:
-                os.environ['CLAUDE_API_KEY'] = new_keys['claude']
-                os.environ['ANTHROPIC_API_KEY'] = new_keys['claude']
-                self.initialize_provider('claude', new_keys['claude'])
-            else:
-                os.environ.pop('CLAUDE_API_KEY', None)
-                os.environ.pop('ANTHROPIC_API_KEY', None)
-
         dialog.destroy()
 
     def append_user_message(self, text):
