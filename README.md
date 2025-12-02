@@ -133,8 +133,8 @@ Alternatively you can run the install script to add a desktop entry and set up t
 ## FAQ
 
 **gpt-image-1 is not working**<br>
-OpenAI requires identity verification for some of their models. You can verify your identity [here](https://platform.openai.com/settings/organization/general).
+OpenAI requires identity verification for some of their models. You can verify your identity [here](https://platform.openai.com/settings/organization/general).<br>
 **Music tool is not working**<br>
-After installation you must inform `kew` where your music is stored by running `kew path "/path/to/My_Music/"` from your terminal.
+After installation you must inform `kew` where your music is stored by running `kew path "/path/to/My_Music/"` from your terminal.<br>
 
 <a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
