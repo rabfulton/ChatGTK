@@ -1,6 +1,6 @@
-# ChatGTK - OpenAI / Gemini / Grok Chat Client
+# ChatGTK - OpenAI / Gemini / Grok / Claude Chat Client
 
-A GTK-based Linux desktop client for OpenAI, Google Gemini, and xAI Grok APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
+A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, and Anthropic Claude APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
 
 Disclaimer: Written almost entirely by AI, I accept no responsibility for what happens to your computer if you choose to run this code!
 
@@ -20,6 +20,7 @@ The application looks for the following environment variables:
 - `OPENAI_API_KEY` (required for OpenAI models)
 - `GEMINI_API_KEY` (optional, used for Google Gemini models)
 - `GROK_API_KEY` (optional, used for xAI Grok models)
+- `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional, used for Anthropic Claude models via the OpenAI SDK compatibility layer)
 
 You can also manage API keys from within the app via the **API Keys** button in the top bar; any keys set in the environment will be picked up automatically on launch.
 
@@ -49,6 +50,18 @@ You can also manage API keys from within the app via the **API Keys** button in 
     ```bash
     export GROK_API_KEY="your-grok-key"
     ```
+ 
+- **Anthropic Claude API key (via OpenAI SDK compatibility)**  
+  - Sign up or log in at [Anthropic Console](https://console.anthropic.com/) or [Claude platform](https://platform.claude.com/).  
+  - Create an API key for Claude models (e.g. `claude-sonnet-4-5`, `claude-haiku-4-5`).  
+  - Set the key (either of these is accepted by the app):
+  ```bash
+  export CLAUDE_API_KEY="sk-ant-..."
+  # or
+  export ANTHROPIC_API_KEY="sk-ant-..."
+  ```
+  - Claude support is implemented using Anthropic's OpenAI SDK compatibility layer as documented at  
+    `https://platform.claude.com/docs/en/api/openai-sdk`.
 
 ```bash
 ./chatgtk.sh
@@ -72,14 +85,14 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - Text to audio output using gpt-4o-audio-preview model
 - Reasoning support for OpenAI's o3 models
 - "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
-- Multi-provider support for OpenAI, Google Gemini 3 series models, and xAI Grok via separate API keys.
+- Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, and Anthropic Claude via separate API keys.
 
 ### Tools support (images & music)
 
 - **Image tool (`generate_image`)**
   - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
   - Uses your preferred **Image Model** from the main **Settings** dialog.
-  - Available to supported OpenAI, Gemini, and Grok chat models via function/tool calling.
+  - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
 
 - **Music control tool (`control_music`)**
   - Disabled by default; enable via **Enable Music Tool** in the **Tools** dialog.

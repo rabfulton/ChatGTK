@@ -232,7 +232,7 @@ def build_tools_for_provider(
         spec = TOOL_REGISTRY.get(tool_name)
         if not spec:
             continue
-        if provider_name in ("openai", "grok"):
+        if provider_name in ("openai", "grok", "claude"):
             declarations.append(build_openai_tool_declaration(spec))
         elif provider_name == "gemini":
             declarations.append(build_gemini_function_declaration(spec))
@@ -390,6 +390,8 @@ class ToolManager:
             return "gemini"
         if lower.startswith("grok-"):
             return "grok"
+        if lower.startswith("claude-"):
+            return "claude"
         return "openai"
 
     def is_image_model_for_provider(self, model_name: str, provider_name: str) -> bool:
@@ -418,7 +420,7 @@ class ToolManager:
             return False
 
         provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok"):
+        if provider not in ("openai", "gemini", "grok", "claude"):
             return False
 
         lower = model_name.lower()
@@ -443,6 +445,10 @@ class ToolManager:
         # Grok chat models.
         if provider == "grok":
             return lower.startswith("grok-")
+
+        # Claude chat models via the OpenAI SDK compatibility layer.
+        if provider == "claude":
+            return lower.startswith("claude-")
 
         return False
 
@@ -456,7 +462,7 @@ class ToolManager:
             return False
 
         provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok"):
+        if provider not in ("openai", "gemini", "grok", "claude"):
             return False
 
         lower = model_name.lower()
@@ -481,6 +487,10 @@ class ToolManager:
         # Grok chat models.
         if provider == "grok":
             return lower.startswith("grok-")
+
+        # Claude chat models via the OpenAI SDK compatibility layer.
+        if provider == "claude":
+            return lower.startswith("claude-")
 
         return False
 

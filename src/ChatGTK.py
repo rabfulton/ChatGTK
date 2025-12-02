@@ -103,7 +103,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_history = [create_system_message(self.system_message)]
         self.providers = {}
         self.model_provider_map = {}
-        self.api_keys = {'openai': '', 'gemini': '', 'grok': ''}
+        self.api_keys = {'openai': '', 'gemini': '', 'grok': '', 'claude': ''}
         
         # Initialize ToolManager with current settings
         self.tool_manager = ToolManager(
@@ -189,7 +189,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         # API keys management button
         self.api_keys_button = Gtk.Button(label="API Keys")
-        self.api_keys_button.set_tooltip_text("Manage API keys for OpenAI and Gemini")
+        self.api_keys_button.set_tooltip_text("Manage API keys for OpenAI, Gemini, Grok, and Claude")
         self.api_keys_button.connect("clicked", self.on_api_keys_clicked)
         hbox_top.pack_start(self.api_keys_button, False, False, 0)
 
@@ -201,6 +201,12 @@ class OpenAIGTKClient(Gtk.Window):
         env_openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
         env_gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
         env_grok_key = os.environ.get('GROK_API_KEY', '').strip()
+        # Support both CLAUDE_API_KEY (app-specific) and ANTHROPIC_API_KEY (per docs
+        # at `https://platform.claude.com/docs/en/api/openai-sdk`) for Claude.
+        env_claude_key = (
+            os.environ.get('CLAUDE_API_KEY', '').strip()
+            or os.environ.get('ANTHROPIC_API_KEY', '').strip()
+        )
         if env_openai_key:
             self.api_keys['openai'] = env_openai_key
             self.initialize_provider('openai', env_openai_key)
@@ -210,6 +216,12 @@ class OpenAIGTKClient(Gtk.Window):
         if env_grok_key:
             self.api_keys['grok'] = env_grok_key
             self.initialize_provider('grok', env_grok_key)
+        if env_claude_key:
+            self.api_keys['claude'] = env_claude_key
+            # Ensure both environment variables are set for consistency.
+            os.environ['CLAUDE_API_KEY'] = env_claude_key
+            os.environ['ANTHROPIC_API_KEY'] = env_claude_key
+            self.initialize_provider('claude', env_claude_key)
         
         if self.providers:
             self.fetch_models_async()
@@ -417,6 +429,10 @@ class OpenAIGTKClient(Gtk.Window):
         if provider_name == 'grok':
             # Basic Grok chat and image models
             return ["grok-2", "grok-2-mini", "grok-2-image-1212"]
+        if provider_name == 'claude':
+            # Basic Claude chat models via the OpenAI SDK compatibility layer.
+            # See `https://platform.claude.com/docs/en/api/openai-sdk`.
+            return ["claude-sonnet-4-5", "claude-3-5-sonnet-latest"]
         return ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
 
     def initialize_provider(self, provider_name, api_key):
@@ -489,6 +505,8 @@ class OpenAIGTKClient(Gtk.Window):
             return "gemini"
         if lower.startswith("grok-"):
             return "grok"
+        if lower.startswith("claude-"):
+            return "claude"
 
         return 'openai'
 
@@ -845,8 +863,15 @@ class OpenAIGTKClient(Gtk.Window):
         current_openai = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', ''))
         current_gemini = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', ''))
         current_grok = os.environ.get('GROK_API_KEY', self.api_keys.get('grok', ''))
+        current_claude = os.environ.get('CLAUDE_API_KEY', self.api_keys.get('claude', ''))
 
-        dialog = APIKeyDialog(self, openai_key=current_openai, gemini_key=current_gemini, grok_key=current_grok)
+        dialog = APIKeyDialog(
+            self,
+            openai_key=current_openai,
+            gemini_key=current_gemini,
+            grok_key=current_grok,
+            claude_key=current_claude,
+        )
         response = dialog.run()
 
         if response == Gtk.ResponseType.OK:
@@ -856,6 +881,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.api_keys['openai'] = new_keys['openai']
             self.api_keys['gemini'] = new_keys['gemini']
             self.api_keys['grok'] = new_keys['grok']
+            self.api_keys['claude'] = new_keys['claude']
 
             # Update environment variables
             if new_keys['openai']:
@@ -875,6 +901,14 @@ class OpenAIGTKClient(Gtk.Window):
                 self.initialize_provider('grok', new_keys['grok'])
             else:
                 os.environ.pop('GROK_API_KEY', None)
+
+            if new_keys['claude']:
+                os.environ['CLAUDE_API_KEY'] = new_keys['claude']
+                os.environ['ANTHROPIC_API_KEY'] = new_keys['claude']
+                self.initialize_provider('claude', new_keys['claude'])
+            else:
+                os.environ.pop('CLAUDE_API_KEY', None)
+                os.environ.pop('ANTHROPIC_API_KEY', None)
 
         dialog.destroy()
 
@@ -1116,6 +1150,9 @@ class OpenAIGTKClient(Gtk.Window):
         elif provider_name == 'grok':
             env_var = 'GROK_API_KEY'
             provider_label = "Grok"
+        elif provider_name == 'claude':
+            env_var = 'CLAUDE_API_KEY'
+            provider_label = "Claude"
         else:
             env_var = 'OPENAI_API_KEY'
             provider_label = "OpenAI"
@@ -1344,6 +1381,39 @@ class OpenAIGTKClient(Gtk.Window):
                     "temperature": float(self.temperament),
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
+                }
+                if image_tool_handler is not None:
+                    kwargs["image_tool_handler"] = image_tool_handler
+                if music_tool_handler is not None:
+                    kwargs["music_tool_handler"] = music_tool_handler
+
+                answer = provider.generate_chat_completion(**kwargs)
+            elif provider_name == 'claude':
+                # Standard chat completion for Claude, optionally with tools,
+                # using the OpenAI SDK compatibility layer:
+                # `https://platform.claude.com/docs/en/api/openai-sdk`
+                messages_to_send = self._messages_for_model(model)
+
+                last_user_msg = last_msg
+
+                image_tool_handler = None
+                music_tool_handler = None
+
+                if self._supports_image_tools(model):
+                    def image_tool_handler(prompt_arg):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+
+                if self._supports_music_tools(model):
+                    def music_tool_handler(action, keyword=None, volume=None):
+                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                kwargs = {
+                    "messages": messages_to_send,
+                    "model": model,
+                    "temperature": float(self.temperament),
+                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
+                    "chat_id": self.current_chat_id,
+                    "response_meta": assistant_provider_meta,
                 }
                 if image_tool_handler is not None:
                     kwargs["image_tool_handler"] = image_tool_handler

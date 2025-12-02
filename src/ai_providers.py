@@ -440,7 +440,7 @@ class GrokProvider(AIProvider):
         try:
             models = self.client.models.list()
             model_ids = [model.id for model in models]
-            print(f"[GrokProvider] models returned: {model_ids}")
+            # print(f"[GrokProvider] models returned: {model_ids}")
 
             # Hardcode the primary image model so it's always available for testing,
             # even if it is not listed by the API.
@@ -671,6 +671,229 @@ class GrokProvider(AIProvider):
 
     def generate_speech(self, text, voice):
         raise NotImplementedError("Grok provider does not support TTS yet.")
+
+
+class ClaudeProvider(AIProvider):
+    """
+    AI provider implementation for Anthropic Claude models using the
+    OpenAI SDK compatibility layer.
+
+    See: `https://platform.claude.com/docs/en/api/openai-sdk`
+    """
+
+    # Claude OpenAI-compatible endpoint base URL.
+    BASE_URL = "https://api.anthropic.com/v1/"
+
+    def __init__(self):
+        self.client = None
+
+    def initialize(self, api_key: str):
+        """
+        Initialize the Claude client using the OpenAI SDK with a custom base URL.
+        """
+        # We reuse the official OpenAI client, pointing it at the Claude
+        # compatibility endpoint as described in the Anthropic docs:
+        # `https://platform.claude.com/docs/en/api/openai-sdk`
+        self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
+
+    def get_available_models(self, disable_filter: bool = False):
+        """
+        Return Claude models.
+
+        The Anthropic OpenAI SDK compatibility docs (`https://platform.claude.com/docs/en/api/openai-sdk`)
+        only guarantee support for chat/completions-style endpoints. The models.list
+        endpoint is not documented and may reject otherwise valid API keys.
+
+        To avoid confusing 401 errors during startup, we skip models.list entirely
+        and return a curated set of known Claude chat models, with optional filtering.
+        """
+        # Base curated set; extendable over time.
+        allowed_models = {
+            "claude-sonnet-4-5", 
+            "claude-haiku-4-5",
+            "claude-opus-4-5",
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-haiku-latest",
+        }
+
+        # Allow disabling filtering via parameter or env var to keep similar
+        # semantics to other providers, even though we currently only have a
+        # static set here.
+        env_val = os.getenv('DISABLE_MODEL_FILTER', '')
+        disable_filter = disable_filter or env_val.strip().lower() in ('true', '1', 'yes')
+        if disable_filter:
+            return sorted(allowed_models)
+
+        return sorted(allowed_models)
+
+    def generate_chat_completion(
+        self,
+        messages,
+        model,
+        temperature=0.7,
+        max_tokens=None,
+        chat_id=None,
+        response_meta=None,
+        image_tool_handler=None,
+        music_tool_handler=None,
+    ):
+        """
+        Generate a chat completion using Claude models via the OpenAI-compatible
+        /v1/chat/completions endpoint.
+        """
+        if not self.client:
+            raise RuntimeError("Claude client not initialized")
+
+        # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
+        # Also support image input using the same structure as OpenAI vision models.
+        processed_messages = []
+        for msg in messages:
+            content = msg.get("content", "")
+
+            # If the message has attached images, convert them to image_url parts.
+            if "images" in msg and msg["images"]:
+                content_parts = []
+                if content:
+                    content_parts.append({
+                        "type": "text",
+                        "text": content
+                    })
+                for img in msg["images"]:
+                    mime_type = img.get("mime_type", "image/jpeg")
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{img['data']}",
+                            "detail": "auto"
+                        }
+                    })
+                processed_messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": content_parts
+                })
+            else:
+                clean_msg = {
+                    k: v
+                    for k, v in msg.items()
+                    if k in ("role", "content", "name")
+                }
+                processed_messages.append(clean_msg)
+
+        params = {
+            "model": model,
+            "messages": processed_messages,
+        }
+        if temperature is not None:
+            # Anthropic supports temperature in [0, 1]; higher values are capped
+            # according to the OpenAI compatibility docs:
+            # `https://platform.claude.com/docs/en/api/openai-sdk`
+            params["temperature"] = float(temperature)
+        if max_tokens and max_tokens > 0:
+            params["max_tokens"] = int(max_tokens)
+
+        # Enable tools for Claude chat models when handlers are supplied. The
+        # compatibility layer supports the OpenAI tools schema.
+        enabled_tools = set()
+        if image_tool_handler is not None:
+            enabled_tools.add("generate_image")
+        if music_tool_handler is not None:
+            enabled_tools.add("control_music")
+        tools = build_tools_for_provider(enabled_tools, "claude")
+        if tools:
+            params["tools"] = tools
+            params["tool_choice"] = "auto"
+
+        # Simple one-shot path when no tools are involved.
+        if image_tool_handler is None and music_tool_handler is None:
+            response = self.client.chat.completions.create(**params)
+            return response.choices[0].message.content or ""
+
+        # Tool-aware flow for Claude: let the model call tools, route them
+        # through handlers, and append results (e.g. <img> tags) so the UI can
+        # render them even if the model does not echo them back explicitly.
+        tool_aware_messages = params["messages"]
+        max_tool_rounds = 3
+        last_response = None
+        tool_result_snippets = []
+
+        for _ in range(max_tool_rounds):
+            last_response = self.client.chat.completions.create(
+                **{
+                    **params,
+                    "messages": tool_aware_messages,
+                }
+            )
+            msg = last_response.choices[0].message
+
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            if not tool_calls:
+                # No tools requested; this is the final assistant answer.
+                break
+
+            # Append the assistant message that requested tools.
+            tool_aware_messages.append(
+                {
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in tool_calls
+                    ],
+                }
+            )
+
+            # For each tool call, invoke the appropriate handler and append a tool result.
+            tool_context = ToolContext(
+                image_handler=image_tool_handler,
+                music_handler=music_tool_handler,
+            )
+            for tc in tool_calls:
+                if tc.type != "function":
+                    tool_result_content = "Error: unknown tool requested."
+                else:
+                    parsed_args = parse_tool_arguments(tc.function.arguments or "{}")
+                    tool_result_content = run_tool_call(tc.function.name, parsed_args, tool_context)
+
+                if tool_result_content:
+                    tool_result_snippets.append(tool_result_content)
+
+                tool_aware_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": tc.function.name,
+                        "content": tool_result_content or "",
+                    }
+                )
+
+        if last_response is None:
+            raise RuntimeError("No response received from Claude chat completion.")
+
+        base_text = last_response.choices[0].message.content or ""
+        if tool_result_snippets:
+            return base_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return base_text
+
+    def generate_image(self, prompt, chat_id, model=None, image_data=None, mime_type=None):
+        """
+        Claude's OpenAI-compatible API does not currently expose a dedicated
+        image-generation endpoint in this integration. Image generation is
+        handled via the shared image tool instead.
+        """
+        raise NotImplementedError("Claude provider does not support direct image generation.")
+
+    def transcribe_audio(self, audio_file):
+        raise NotImplementedError("Claude provider does not support audio transcription yet.")
+
+    def generate_speech(self, text, voice):
+        raise NotImplementedError("Claude provider does not support TTS yet.")
 
 
 class GeminiProvider(AIProvider):
@@ -1491,6 +1714,7 @@ def get_ai_provider(provider_name: str) -> AIProvider:
         'openai': OpenAIProvider,
         'gemini': GeminiProvider,
         'grok': GrokProvider,
+        'claude': ClaudeProvider,
     }
     
     provider_class = providers.get(provider_name)

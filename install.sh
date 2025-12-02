@@ -27,6 +27,14 @@ else
     grok_key="$GROK_API_KEY"
 fi
 
+if [ -z "$CLAUDE_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+    echo "Optional: enter your Claude API key (starts with 'sk-ant-'):"
+    read -r claude_key
+else
+    # Prefer an explicitly set CLAUDE_API_KEY but fall back to ANTHROPIC_API_KEY.
+    claude_key="${CLAUDE_API_KEY:-$ANTHROPIC_API_KEY}"
+fi
+
 echo "Setting up ChatGTK desktop integration..."
 # Get the absolute path to the current directory
 INSTALL_DIR=$(pwd)
@@ -38,6 +46,8 @@ cat << EOF > chatgtk-launcher.sh
 export OPENAI_API_KEY="${api_key}"
 export GEMINI_API_KEY="${gemini_key}"
 export GROK_API_KEY="${grok_key}"
+export CLAUDE_API_KEY="${claude_key}"
+export ANTHROPIC_API_KEY="${claude_key}"
 cd "${INSTALL_DIR}"
 exec python3 src/ChatGTK.py
 EOF

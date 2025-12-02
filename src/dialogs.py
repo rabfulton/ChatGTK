@@ -591,7 +591,7 @@ class ToolsDialog(Gtk.Dialog):
 class APIKeyDialog(Gtk.Dialog):
     """Dialog for managing API keys for different providers."""
     
-    def __init__(self, parent, openai_key='', gemini_key='', grok_key=''):
+    def __init__(self, parent, openai_key='', gemini_key='', grok_key='', claude_key=''):
         super().__init__(title="API Keys", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 300)
@@ -655,6 +655,20 @@ class APIKeyDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_grok, False, True, 0)
         list_box.add(row)
 
+        # Claude API Key
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Claude API Key", xalign=0)
+        label.set_hexpand(True)
+        self.entry_claude = Gtk.Entry()
+        self.entry_claude.set_visibility(False)
+        self.entry_claude.set_placeholder_text("sk-ant-...")
+        self.entry_claude.set_text(claude_key)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_claude, False, True, 0)
+        list_box.add(row)
+
         # Add buttons
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
@@ -666,6 +680,7 @@ class APIKeyDialog(Gtk.Dialog):
         return {
             'openai': self.entry_openai.get_text().strip(),
             'gemini': self.entry_gemini.get_text().strip(),
-            'grok': self.entry_grok.get_text().strip()
+            'grok': self.entry_grok.get_text().strip(),
+            'claude': self.entry_claude.get_text().strip(),
         }
 
