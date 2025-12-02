@@ -710,7 +710,7 @@ class OpenAIGTKClient(Gtk.Window):
                 except Exception as e:
                     print(f"Error stopping existing kew playback: {e}")
 
-            cmd = ["kew"] + keyword.split()
+            cmd = ["kew", "-q"] + keyword.split()
             try:
                 subprocess.Popen(cmd)
                 return f"Started kew to play music for keyword: {keyword}"

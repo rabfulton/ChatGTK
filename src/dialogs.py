@@ -134,6 +134,9 @@ class SettingsDialog(Gtk.Dialog):
 
         # Storage for model whitelist checkboxes: {provider: {model_id: Gtk.CheckButton}}
         self.model_checkboxes = {}
+        # Lazily build the Model Whitelist page on first access so opening the
+        # settings dialog does not block on network calls to list models.
+        self._model_whitelist_built = False
 
         # Get the content area
         content = self.get_content_area()
@@ -176,7 +179,8 @@ class SettingsDialog(Gtk.Dialog):
         # Build pages
         self._build_general_page()
         self._build_system_prompts_page()
-        self._build_model_whitelist_page()
+        # Model Whitelist page is built lazily when that category is selected
+        # to avoid slow dialog startup caused by provider model listing calls.
         self._build_api_keys_page()
 
         # Connect sidebar selection to stack switching
@@ -215,6 +219,10 @@ class SettingsDialog(Gtk.Dialog):
         if row is not None:
             cat = getattr(row, 'category_name', None)
             if cat:
+                # Lazily construct the Model Whitelist page the first time it
+                # is selected so we don't block dialog opening on network I/O.
+                if cat == "Model Whitelist":
+                    self._ensure_model_whitelist_page()
                 self.stack.set_visible_child_name(cat)
 
     # -----------------------------------------------------------------------
@@ -571,6 +579,23 @@ class SettingsDialog(Gtk.Dialog):
         self.stack.add_named(vbox, "System Prompts")
 
     # -----------------------------------------------------------------------
+    # Lazy builder for Model Whitelist page
+    # -----------------------------------------------------------------------
+    def _ensure_model_whitelist_page(self):
+        """
+        Ensure the Model Whitelist page is built.
+
+        We delay constructing this page until it is first selected in order to
+        avoid performing potentially slow provider.get_available_models()
+        network calls during dialog initialization.
+        """
+        if not getattr(self, "_model_whitelist_built", False):
+            self._build_model_whitelist_page()
+            self._model_whitelist_built = True
+            # The dialog may already be visible, so explicitly show new widgets.
+            self.stack.show_all()
+
+    # -----------------------------------------------------------------------
     # Model Whitelist page
     # -----------------------------------------------------------------------
     def _build_model_whitelist_page(self):
@@ -742,8 +767,15 @@ class SettingsDialog(Gtk.Dialog):
         buffer = self.entry_system_message.get_buffer()
         system_message = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
 
-        # Build whitelist strings from checkboxes
-        def whitelist_str(provider_key):
+        # Build whitelist strings from checkboxes, but only if the Model
+        # Whitelist page was actually built/visited. Otherwise, preserve the
+        # existing values so opening the dialog without touching that section
+        # does not clear any whitelists.
+        model_page_built = getattr(self, "_model_whitelist_built", False)
+
+        def whitelist_str(provider_key, attr_name):
+            if not model_page_built:
+                return getattr(self, attr_name, "")
             cbs = self.model_checkboxes.get(provider_key, {})
             return ",".join(sorted(mid for mid, cb in cbs.items() if cb.get_active()))
 
@@ -766,10 +798,10 @@ class SettingsDialog(Gtk.Dialog):
             'tts_hd': self.switch_hd.get_active(),
             'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
             # Model whitelists
-            'openai_model_whitelist': whitelist_str('openai'),
-            'gemini_model_whitelist': whitelist_str('gemini'),
-            'grok_model_whitelist': whitelist_str('grok'),
-            'claude_model_whitelist': whitelist_str('claude'),
+            'openai_model_whitelist': whitelist_str('openai', 'openai_model_whitelist'),
+            'gemini_model_whitelist': whitelist_str('gemini', 'gemini_model_whitelist'),
+            'grok_model_whitelist': whitelist_str('grok', 'grok_model_whitelist'),
+            'claude_model_whitelist': whitelist_str('claude', 'claude_model_whitelist'),
         }
 
     def get_api_keys(self):

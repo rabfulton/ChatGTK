@@ -465,7 +465,6 @@ class GrokProvider(AIProvider):
                 "grok-4-1-fast-reasoning",
                 "grok-4-fast-non-reasoning",
                 "grok-4-fast-reasoning",
-                "grok-code-fast-1",
             }
             filtered = [m for m in model_ids if m in allowed_models]
             return sorted(filtered or model_ids)
