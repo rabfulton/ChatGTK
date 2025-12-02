@@ -56,11 +56,203 @@ class AIProvider(ABC):
         pass
 
 class OpenAIProvider(AIProvider):
+    # Maximum file size for document uploads (in bytes) - 512 MB per OpenAI docs
+    MAX_FILE_SIZE = 512 * 1024 * 1024
+    
+    # Supported MIME types for document uploads.
+    # NOTE: The Responses API currently only accepts PDF files for file inputs,
+    # so we restrict uploads to PDFs here. Other text-like formats (TXT, MD,
+    # etc.) are inlined as text by the UI instead of being uploaded.
+    SUPPORTED_DOC_TYPES = {
+        "application/pdf",
+    }
+    
     def __init__(self):
         self.client = None
+        self._current_api_key = None
+        # Cache for uploaded file IDs: key = (path, size, mtime) -> file_id
+        self._file_id_cache = {}
     
     def initialize(self, api_key: str):
+        # Only clear file cache when API key actually changes (different account)
+        if api_key != self._current_api_key:
+            self._file_id_cache = {}
+            self._current_api_key = api_key
         self.client = OpenAI(api_key=api_key)
+    
+    def _get_file_cache_key(self, file_path: str) -> tuple:
+        """Generate a cache key for a file based on path, size, and modification time."""
+        try:
+            stat = os.stat(file_path)
+            return (file_path, stat.st_size, stat.st_mtime)
+        except OSError:
+            return None
+    
+    def _upload_file(self, file_path: str, mime_type: str) -> str:
+        """
+        Upload a file to OpenAI and return the file_id.
+        Uses caching to avoid re-uploading unchanged files.
+        """
+        cache_key = self._get_file_cache_key(file_path)
+        if cache_key and cache_key in self._file_id_cache:
+            print(f"[OpenAIProvider] Using cached file_id for {file_path}")
+            return self._file_id_cache[cache_key]
+        
+        # Check file size
+        file_size = os.path.getsize(file_path)
+        if file_size > self.MAX_FILE_SIZE:
+            raise ValueError(
+                f"File too large: {file_size / (1024*1024):.1f} MB exceeds "
+                f"maximum of {self.MAX_FILE_SIZE / (1024*1024):.0f} MB"
+            )
+        
+        # Check MIME type
+        if mime_type not in self.SUPPORTED_DOC_TYPES:
+            raise ValueError(
+                f"Unsupported file type: {mime_type}. "
+                f"Supported types: {', '.join(sorted(self.SUPPORTED_DOC_TYPES))}"
+            )
+        
+        print(f"[OpenAIProvider] Uploading file: {file_path} ({mime_type})")
+        
+        with open(file_path, "rb") as f:
+            response = self.client.files.create(
+                file=f,
+                purpose="user_data",
+            )
+        
+        file_id = response.id
+        print(f"[OpenAIProvider] File uploaded successfully: {file_id}")
+        
+        # Cache the file_id
+        if cache_key:
+            self._file_id_cache[cache_key] = file_id
+        
+        return file_id
+    
+    def _has_attached_files(self, messages) -> bool:
+        """Check if any message in the conversation has attached files."""
+        for msg in messages:
+            if msg.get("files"):
+                return True
+        return False
+    
+    def _generate_with_responses_api(
+        self,
+        messages,
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = None,
+    ) -> str:
+        """
+        Generate a response using the OpenAI Responses API, which supports
+        file attachments natively.
+        """
+        # Build the input for the responses API
+        input_items = []
+        
+        for msg in messages:
+            role = msg.get("role", "user")
+            content_text = msg.get("content", "")
+            files = msg.get("files", [])
+            images = msg.get("images", [])
+            
+            # Skip system messages - use instructions parameter instead
+            if role == "system":
+                continue
+            
+            # Map assistant role to the responses API format
+            if role == "assistant":
+                # For assistant messages, we just add them as output references
+                # The responses API handles conversation context differently
+                input_items.append({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": content_text}],
+                })
+                continue
+            
+            # Build content parts for user messages
+            content_parts = []
+            
+            # Add text content
+            if content_text:
+                content_parts.append({
+                    "type": "input_text",
+                    "text": content_text,
+                })
+            
+            # Add file attachments
+            for file_info in files:
+                file_path = file_info.get("path")
+                mime_type = file_info.get("mime_type", "application/octet-stream")
+                
+                # Check if we already have a file_id (from previous upload)
+                file_id = file_info.get("file_id")
+                
+                if not file_id and file_path:
+                    # Upload the file and get the file_id
+                    file_id = self._upload_file(file_path, mime_type)
+                
+                if file_id:
+                    # Note: file_id and filename are mutually exclusive in the API
+                    content_parts.append({
+                        "type": "input_file",
+                        "file_id": file_id,
+                    })
+            
+            # Add image attachments (convert to base64 data URL format)
+            for img in images:
+                img_data = img.get("data", "")
+                img_mime = img.get("mime_type", "image/jpeg")
+                content_parts.append({
+                    "type": "input_image",
+                    "image_url": f"data:{img_mime};base64,{img_data}",
+                })
+            
+            if content_parts:
+                input_items.append({
+                    "type": "message",
+                    "role": role,
+                    "content": content_parts,
+                })
+        
+        # Extract system message for instructions
+        instructions = None
+        for msg in messages:
+            if msg.get("role") == "system":
+                instructions = msg.get("content", "")
+                break
+        
+        # Call the responses API
+        params = {
+            "model": model,
+            "input": input_items,
+        }
+        
+        if instructions:
+            params["instructions"] = instructions
+        
+        if temperature is not None:
+            params["temperature"] = temperature
+        
+        if max_tokens and max_tokens > 0:
+            params["max_output_tokens"] = max_tokens
+        
+        print(f"[OpenAIProvider] Calling responses API with {len(input_items)} input items")
+        
+        response = self.client.responses.create(**params)
+        
+        # Extract the text content from the response
+        text_content = ""
+        if hasattr(response, "output") and response.output:
+            for item in response.output:
+                if hasattr(item, "content") and item.content:
+                    for content_item in item.content:
+                        if hasattr(content_item, "text"):
+                            text_content += content_item.text
+        
+        return text_content
     
     def get_available_models(self, disable_filter=False):
         import re
@@ -97,6 +289,16 @@ class OpenAIProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
     ):
+        # Check if any message has attached files - if so, use the responses API
+        if self._has_attached_files(messages):
+            print(f"[OpenAIProvider] Using responses API for file attachments")
+            return self._generate_with_responses_api(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        
         # Check if this is an audio-capable model
         model_lower = model.lower()
         is_audio_model = "audio" in model_lower

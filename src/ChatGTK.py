@@ -448,19 +448,32 @@ class OpenAIGTKClient(Gtk.Window):
         return ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
 
     def initialize_provider(self, provider_name, api_key):
-        """Initialize and cache providers when keys change."""
+        """Initialize and cache providers when keys change.
+
+        This reuses existing provider instances so that any internal caches
+        (such as uploaded file IDs) are preserved across calls, and only
+        reinitializes when the API key actually changes.
+        """
         global ai_provider
         api_key = (api_key or "").strip()
         self.api_keys[provider_name] = api_key
+
+        # If the key was cleared, drop the provider.
         if not api_key:
             self.providers.pop(provider_name, None)
             if provider_name == 'openai':
                 ai_provider = None
             return None
 
-        provider = get_ai_provider(provider_name)
+        # Reuse an existing provider instance when available so caches survive.
+        provider = self.providers.get(provider_name)
+        if provider is None:
+            provider = get_ai_provider(provider_name)
+
+        # Let the provider decide how to handle key changes (e.g., clear caches).
         provider.initialize(api_key)
         self.providers[provider_name] = provider
+
         if provider_name == 'openai':
             ai_provider = provider
         return provider
@@ -1289,8 +1302,9 @@ class OpenAIGTKClient(Gtk.Window):
         # ... existing non-realtime code ...
         # Use new method to append user message
         
-        # Handle attachment
+        # Handle attachment - distinguish images from documents
         images = []
+        files = []
         display_text = question
         
         if getattr(self, 'attached_file_path', None):
@@ -1299,16 +1313,72 @@ class OpenAIGTKClient(Gtk.Window):
                 if not mime_type:
                     mime_type = "application/octet-stream"
                 
-                with open(self.attached_file_path, "rb") as f:
-                    file_data = f.read()
-                    encoded = base64.b64encode(file_data).decode('utf-8')
-                    images.append({
-                        "data": encoded,
-                        "mime_type": mime_type
-                    })
-                
                 filename = os.path.basename(self.attached_file_path)
-                display_text = (question + f"\n[Attached: {filename}]") if question else f"[Attached: {filename}]"
+                
+                # Determine if this is an image or a document based on MIME type
+                is_image = mime_type.startswith("image/")
+                
+                if is_image:
+                    # Handle images: base64 encode and store in images list
+                    with open(self.attached_file_path, "rb") as f:
+                        file_data = f.read()
+                        encoded = base64.b64encode(file_data).decode('utf-8')
+                        images.append({
+                            "data": encoded,
+                            "mime_type": mime_type
+                        })
+                else:
+                    # Handle documents (PDF, text, etc.)
+                    # Validate file size (max 512 MB per OpenAI docs)
+                    max_file_size = 512 * 1024 * 1024  # 512 MB
+                    file_size = os.path.getsize(self.attached_file_path)
+                    
+                    if file_size > max_file_size:
+                        size_mb = file_size / (1024 * 1024)
+                        self.show_error_dialog(
+                            f"File too large: {size_mb:.1f} MB exceeds maximum of 512 MB"
+                        )
+                        self.attached_file_path = None
+                        self.btn_attach.set_label("Attach File")
+                        return
+                    
+                    # For PDFs, pass the file through to the provider via the Responses API.
+                    if mime_type == "application/pdf":
+                        files.append({
+                            "path": self.attached_file_path,
+                            "mime_type": mime_type,
+                            "display_name": filename,
+                        })
+                    else:
+                        # For other text-like documents (e.g. .txt, .md), inline the
+                        # content into the user message instead of uploading a file.
+                        try:
+                            with open(self.attached_file_path, "r", encoding="utf-8", errors="ignore") as f:
+                                file_text = f.read()
+                        except Exception as read_err:
+                            print(f"Error reading text document: {read_err}")
+                            self.show_error_dialog(f"Error reading file: {filename}")
+                            self.attached_file_path = None
+                            self.btn_attach.set_label("Attach File")
+                            return
+
+                        # Optionally truncate very large text files to avoid extremely
+                        # long prompts. Here we cap at ~32k characters.
+                        max_chars = 32_000
+                        if len(file_text) > max_chars:
+                            file_text = file_text[:max_chars] + "\n\n[File content truncated]"
+
+                        header = f"[File content from {filename}]\n"
+                        if question:
+                            question = question + "\n\n" + header + file_text
+                        else:
+                            question = header + file_text
+                        display_text = question
+                    
+                # If this was a real attachment (PDF or image), show a simple marker.
+                if not display_text or display_text == question:
+                    # Only add an attachment marker when we didn't already inline content.
+                    display_text = (question + f"\n[Attached: {filename}]") if question else f"[Attached: {filename}]"
                 
                 # Reset attachment
                 self.attached_file_path = None
@@ -1321,7 +1391,11 @@ class OpenAIGTKClient(Gtk.Window):
         self.append_message('user', display_text)
         
         # Store user message in the chat history
-        user_msg = create_user_message(question, images=images if images else None)
+        user_msg = create_user_message(
+            question,
+            images=images if images else None,
+            files=files if files else None,
+        )
             
         self.conversation_history.append(user_msg)
         
@@ -1364,6 +1438,17 @@ class OpenAIGTKClient(Gtk.Window):
             last_msg = self.conversation_history[-1]
             prompt = last_msg.get("content", "")
             has_attached_images = "images" in last_msg and last_msg["images"]
+            has_attached_files = "files" in last_msg and last_msg["files"]
+
+            # Check if files are attached to a non-OpenAI provider
+            if has_attached_files and provider_name != 'openai':
+                # Show a warning that document analysis requires OpenAI
+                warning_msg = (
+                    f"Document attachments are currently only supported with OpenAI models. "
+                    f"The attached document(s) will be ignored when using {provider_name.title()} models."
+                )
+                print(f"[ChatGTK] Warning: {warning_msg}")
+                # We continue with the request but without the files
 
             # Route image models through a shared helper so that both manual model
             # selection and tool-based invocations use the same behavior.
@@ -1627,11 +1712,32 @@ class OpenAIGTKClient(Gtk.Window):
             Gtk.STOCK_OPEN, Gtk.ResponseType.OK
         )
 
-        # Add filters
+        # Add filters - order: All files, Documents (new feature), Images
         filter_any = Gtk.FileFilter()
-        filter_any.set_name("All files")
+        filter_any.set_name("All supported files")
         filter_any.add_pattern("*")
         dialog.add_filter(filter_any)
+
+        # Add filter for documents (text, PDF, markdown, etc.)
+        filter_docs = Gtk.FileFilter()
+        filter_docs.set_name("Documents (PDF, TXT, MD, CSV, JSON)")
+        filter_docs.add_mime_type("application/pdf")
+        filter_docs.add_mime_type("text/plain")
+        filter_docs.add_mime_type("text/markdown")
+        filter_docs.add_mime_type("text/x-markdown")
+        filter_docs.add_mime_type("text/csv")
+        filter_docs.add_mime_type("application/json")
+        filter_docs.add_mime_type("text/html")
+        filter_docs.add_mime_type("application/xml")
+        filter_docs.add_mime_type("text/xml")
+        filter_docs.add_pattern("*.txt")
+        filter_docs.add_pattern("*.md")
+        filter_docs.add_pattern("*.pdf")
+        filter_docs.add_pattern("*.csv")
+        filter_docs.add_pattern("*.json")
+        filter_docs.add_pattern("*.html")
+        filter_docs.add_pattern("*.xml")
+        dialog.add_filter(filter_docs)
         
         filter_image = Gtk.FileFilter()
         filter_image.set_name("Images")

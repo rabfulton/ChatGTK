@@ -60,12 +60,19 @@ class Message:
         The text content of the message.
     images : Optional[List[Dict[str, Any]]]
         Optional list of attached images (each with 'data' and 'mime_type').
+    files : Optional[List[Dict[str, Any]]]
+        Optional list of attached document files. Each dict may contain:
+        - 'path': Local file path (used before upload).
+        - 'mime_type': MIME type of the file.
+        - 'display_name': Human-readable filename for display.
+        - 'file_id': Provider-assigned ID after upload (e.g., OpenAI file ID).
     provider_meta : ProviderMeta
         Provider-specific metadata.
     """
     role: str
     content: str
     images: Optional[List[Dict[str, Any]]] = None
+    files: Optional[List[Dict[str, Any]]] = None
     provider_meta: ProviderMeta = field(default_factory=ProviderMeta)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -77,6 +84,8 @@ class Message:
         }
         if self.images:
             result["images"] = self.images
+        if self.files:
+            result["files"] = self.files
         return result
     
     @classmethod
@@ -86,6 +95,7 @@ class Message:
             role=data.get("role", "user"),
             content=data.get("content", ""),
             images=data.get("images"),
+            files=data.get("files"),
             provider_meta=ProviderMeta.from_dict(data.get("provider_meta")),
         )
 
@@ -130,6 +140,7 @@ class ConversationHistory:
         self,
         content: str,
         images: Optional[List[Dict[str, Any]]] = None,
+        files: Optional[List[Dict[str, Any]]] = None,
     ) -> Message:
         """
         Add a user message to the history.
@@ -140,13 +151,15 @@ class ConversationHistory:
             The message content.
         images : Optional[List[Dict[str, Any]]]
             Optional list of attached images.
+        files : Optional[List[Dict[str, Any]]]
+            Optional list of attached document files.
         
         Returns
         -------
         Message
             The created message.
         """
-        msg = Message(role="user", content=content, images=images)
+        msg = Message(role="user", content=content, images=images, files=files)
         self._messages.append(msg)
         return msg
     
@@ -309,11 +322,33 @@ def create_system_message(content: str) -> Dict[str, Any]:
 def create_user_message(
     content: str,
     images: Optional[List[Dict[str, Any]]] = None,
+    files: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Create a user message dict."""
+    """Create a user message dict.
+    
+    Parameters
+    ----------
+    content : str
+        The message content.
+    images : Optional[List[Dict[str, Any]]]
+        Optional list of attached images (each with 'data' and 'mime_type').
+    files : Optional[List[Dict[str, Any]]]
+        Optional list of attached document files. Each dict may contain:
+        - 'path': Local file path (used before upload).
+        - 'mime_type': MIME type of the file.
+        - 'display_name': Human-readable filename for display.
+        - 'file_id': Provider-assigned ID after upload.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        The user message dictionary.
+    """
     msg: Dict[str, Any] = {"role": "user", "content": content, "provider_meta": {}}
     if images:
         msg["images"] = images
+    if files:
+        msg["files"] = files
     return msg
 
 
