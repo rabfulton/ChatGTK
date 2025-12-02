@@ -113,7 +113,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "System Prompts", "Model Whitelist", "API Keys"]
+    CATEGORIES = ["General", "Tool Options", "System Prompts", "Model Whitelist", "API Keys"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
@@ -178,6 +178,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Build pages
         self._build_general_page()
+        self._build_tool_options_page()
         self._build_system_prompts_page()
         # Model Whitelist page is built lazily when that category is selected
         # to avoid slow dialog startup caused by provider model listing calls.
@@ -453,37 +454,6 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.spin_max_tokens, False, True, 0)
         list_box.add(row)
 
-        # Preferred Image Model
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Image Model", xalign=0)
-        label.set_hexpand(True)
-        self.combo_image_model = Gtk.ComboBoxText()
-
-        known_image_models = [
-            "dall-e-3",
-            "gpt-image-1",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-            "grok-2-image-1212",
-        ]
-
-        for model_id in known_image_models:
-            self.combo_image_model.append_text(model_id)
-
-        current_image_model = getattr(self, "image_model", "dall-e-3")
-        active_index = 0
-        for idx, model_id in enumerate(known_image_models):
-            if model_id == current_image_model:
-                active_index = idx
-                break
-        self.combo_image_model.set_active(active_index)
-
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.combo_image_model, False, True, 0)
-        list_box.add(row)
-
         # Code Theme
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -525,6 +495,130 @@ class SettingsDialog(Gtk.Dialog):
         list_box.add(row)
 
         self.stack.add_named(scroll, "General")
+
+    # -----------------------------------------------------------------------
+    # Tool Options page
+    # -----------------------------------------------------------------------
+    def _build_tool_options_page(self):
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        list_box.set_margin_top(12)
+        list_box.set_margin_bottom(12)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
+        scroll.add(list_box)
+
+        # ---- Image Tool section ----
+        header_row = Gtk.ListBoxRow()
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Image Tool</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+
+        # Enable Image Tool
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Image Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_image_tool_settings = Gtk.Switch()
+        current_image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
+        self.switch_image_tool_settings.set_active(current_image_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_image_tool_settings, False, True, 0)
+        list_box.add(row)
+
+        # Preferred Image Model for the image tool
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Image Tool Model", xalign=0)
+        label.set_hexpand(True)
+        self.combo_image_model = Gtk.ComboBoxText()
+
+        known_image_models = [
+            "dall-e-3",
+            "gpt-image-1",
+            "gemini-3-pro-image-preview",
+            "gemini-2.5-flash-image",
+            "grok-2-image-1212",
+        ]
+
+        for model_id in known_image_models:
+            self.combo_image_model.append_text(model_id)
+
+        current_image_model = getattr(self, "image_model", "dall-e-3")
+        active_index = 0
+        for idx, model_id in enumerate(known_image_models):
+            if model_id == current_image_model:
+                active_index = idx
+                break
+        self.combo_image_model.set_active(active_index)
+
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_image_model, False, True, 0)
+        list_box.add(row)
+
+        # ---- Music Tool section ----
+        header_row = Gtk.ListBoxRow()
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Music Tool</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+
+        # Enable Music Tool
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Music Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_music_tool_settings = Gtk.Switch()
+        current_music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
+        self.switch_music_tool_settings.set_active(current_music_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_music_tool_settings, False, True, 0)
+        list_box.add(row)
+
+        # Launch kew in its own terminal window
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Launch kew in terminal", xalign=0)
+        label.set_hexpand(True)
+        self.switch_kew_terminal = Gtk.Switch()
+        current_launch_in_terminal = bool(getattr(self, "music_launch_in_terminal", False))
+        self.switch_kew_terminal.set_active(current_launch_in_terminal)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_kew_terminal, False, True, 0)
+        list_box.add(row)
+
+        # Preferred terminal command prefix
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Terminal command prefix", xalign=0)
+        label.set_hexpand(False)
+        self.entry_terminal_prefix = Gtk.Entry()
+        self.entry_terminal_prefix.set_hexpand(True)
+        self.entry_terminal_prefix.set_width_chars(40)
+        self.entry_terminal_prefix.set_placeholder_text(
+            'e.g. "xfce4-terminal --command=\\"{cmd}\\"" or "gnome-terminal --"'
+        )
+        self.entry_terminal_prefix.set_text(getattr(self, "music_terminal_prefix", "") or "")
+        hbox.pack_start(label, False, True, 0)
+        hbox.pack_start(self.entry_terminal_prefix, True, True, 0)
+        list_box.add(row)
+
+        self.stack.add_named(scroll, "Tool Options")
 
     # -----------------------------------------------------------------------
     # System Prompts page
@@ -797,6 +891,10 @@ class SettingsDialog(Gtk.Dialog):
             'latex_color': self.btn_latex_color.get_rgba().to_string(),
             'tts_hd': self.switch_hd.get_active(),
             'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
+            'image_tool_enabled': self.switch_image_tool_settings.get_active(),
+            'music_tool_enabled': self.switch_music_tool_settings.get_active(),
+            'music_launch_in_terminal': self.switch_kew_terminal.get_active(),
+            'music_terminal_prefix': self.entry_terminal_prefix.get_text().strip(),
             # Model whitelists
             'openai_model_whitelist': whitelist_str('openai', 'openai_model_whitelist'),
             'gemini_model_whitelist': whitelist_str('gemini', 'gemini_model_whitelist'),

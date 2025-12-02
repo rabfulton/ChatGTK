@@ -691,13 +691,21 @@ class OpenAIGTKClient(Gtk.Window):
         if not action:
             return "Error: music control action is required."
 
+        # Determine whether kew should be launched inside a dedicated terminal.
+        launch_in_terminal = bool(getattr(self, "music_launch_in_terminal", False))
+        terminal_prefix = (getattr(self, "music_terminal_prefix", "") or "").strip()
+
         # Handle play separately: we may need to launch kew.
         if action == "play":
             if not keyword or not keyword.strip():
                 return "Error: 'play' action requires a keyword describing what to play."
 
-            # If kew is already playing, stop it first to avoid overlapping music.
-            if self._check_kew_playing():
+            # If kew is already playing and we are not using a dedicated terminal
+            # window, stop it first to avoid overlapping music. When running
+            # inside a user-visible terminal we leave the existing instance
+            # alone so the terminal session is preserved; kew itself (via MPRIS)
+            # can decide how to handle a second invocation.
+            if self._check_kew_playing() and not launch_in_terminal:
                 try:
                     subprocess.run(
                         ["playerctl", "-p", "kew", "stop"],
@@ -710,15 +718,75 @@ class OpenAIGTKClient(Gtk.Window):
                 except Exception as e:
                     print(f"Error stopping existing kew playback: {e}")
 
-            cmd = ["kew", "-q"] + keyword.split()
+            # Build kew command arguments. For headless mode we use --noui so
+            # kew does not try to manage its own terminal UI.
+            kew_args = ["kew", "-q"] + keyword.split()
+            if launch_in_terminal:
+                base_cmd = kew_args
+            else:
+                base_cmd = ["kew", "--noui", "-q"] + keyword.split()
+
+            # When configured, wrap kew in a terminal command prefix so it runs
+            # in its own terminal window (useful to see UI/logs).
+            if launch_in_terminal:
+                if not terminal_prefix:
+                    return (
+                        "Error: 'Launch kew in terminal' is enabled, but no terminal "
+                        "command prefix is configured. Set one under Settings → Tool Options."
+                    )
+                import shlex
+                try:
+                    if "{cmd}" in terminal_prefix:
+                        # Template mode: user provided something like
+                        #   xfce4-terminal --command="{cmd}"
+                        # We expand {cmd} to a shell-style string, then split.
+                        cmd_str = shlex.join(base_cmd)
+                        expanded = terminal_prefix.replace("{cmd}", cmd_str)
+                        term_parts = shlex.split(expanded)
+                        cmd = term_parts
+                    else:
+                        term_parts = shlex.split(terminal_prefix)
+
+                        # For many terminals (e.g. xfce4-terminal, gnome-terminal), using
+                        # a bare prefix like "xfce4-terminal" requires an explicit
+                        # exec flag (-e / --command / --) or a full template. When the
+                        # user supplies such a flag we simply append the kew command;
+                        # otherwise we fall back to treating the kew command as a
+                        # positional command after a "--" separator.
+                        has_exec_flag = any(
+                            part in ("-e", "--", "--command") or part.startswith("--command=")
+                            for part in term_parts
+                        )
+                        if has_exec_flag:
+                            cmd = term_parts + base_cmd
+                        else:
+                            cmd = term_parts + ["--"] + base_cmd
+                except ValueError as e:
+                    return f"Error parsing terminal command prefix: {e}"
+            else:
+                cmd = base_cmd
+
             try:
-                subprocess.Popen(cmd)
+                print(f"Launching kew with command: {cmd}")
+                proc = subprocess.Popen(cmd)
+                # Avoid leaving zombie processes when kew/terminal exits by
+                # reaping the child in a background thread.
+                import threading
+                threading.Thread(target=proc.wait, daemon=True).start()
+                if launch_in_terminal:
+                    return f"Started kew in a terminal window to play music for keyword: {keyword}"
                 return f"Started kew to play music for keyword: {keyword}"
-            except FileNotFoundError:
-                return (
-                    "Error: kew is not installed or not found in PATH. "
-                    "Please install kew (`kew` terminal music player) first."
-                )
+            except FileNotFoundError as e:
+                if launch_in_terminal:
+                    return (
+                        "Error: failed to launch kew in terminal. Make sure your terminal "
+                        f"command prefix is correct and that 'kew' is installed. ({e})"
+                    )
+                else:
+                    return (
+                        "Error: kew is not installed or not found in PATH. "
+                        "Please install kew (`kew` terminal music player) first."
+                    )
             except Exception as e:
                 print(f"Error launching kew: {e}")
                 return f"Error starting kew: {e}"
@@ -862,6 +930,10 @@ class OpenAIGTKClient(Gtk.Window):
             new_settings = dialog.get_settings()
             apply_settings(self, new_settings)
             save_settings(convert_settings_for_save(get_object_settings(self)))
+
+            # Keep the ToolManager in sync with any updated tool options.
+            self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
+            self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
 
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()

@@ -26,6 +26,12 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the music control tool (kew + MPRIS) to text models.
     # When false, models will not be told about the tool and cannot call it.
     'MUSIC_TOOL_ENABLED': {'type': bool, 'default': False},
+    # When true, kew will be launched inside a separate terminal window for music playback.
+    # This is useful if you want to see kew's UI and logs instead of running it headless.
+    'MUSIC_LAUNCH_IN_TERMINAL': {'type': bool, 'default': False},
+    # Command prefix used when launching kew in a terminal, e.g. "gnome-terminal --"
+    # or "konsole -e". The kew command and its arguments will be appended to this.
+    'MUSIC_TERMINAL_PREFIX': {'type': str, 'default': ''},
     'WINDOW_WIDTH': {'type': int, 'default': 800},
     'WINDOW_HEIGHT': {'type': int, 'default': 600},
     'SETTINGS_DIALOG_WIDTH': {'type': int, 'default': 950},

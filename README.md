@@ -98,7 +98,18 @@ Alternatively you can run the install script to add a desktop entry and set up t
   - Disabled by default; enable via **Enable Music Tool** in the **Tools** dialog.
   - Lets the model control your local music playback through the [`kew` terminal music player](https://github.com/ravachol/kew) and MPRIS.
   - Supported actions: `play` (with a keyword/song/album/artist), `pause`, `resume`, `stop`, `next`, `previous`, `volume_up`, `volume_down`, `set_volume`.
-  - When music is already playing, a new `play` request will stop the current kew playback before starting a new one.
+  - You can optionally have `kew` run inside its own terminal window via **Settings → Tool Options → Music Tool**:
+    - **Launch kew in terminal**: when enabled, the app starts `kew` through your preferred terminal instead of headless.
+    - **Terminal command prefix**:
+      - Simple prefixes (no `{cmd}`), e.g. `gnome-terminal --` or `konsole -e`  
+        → the app appends the `kew` command and arguments for you.
+      - Template mode using `{cmd}` for terminals that require a full command string (e.g. `xfce4-terminal`):  
+        - Example for Xfce:  
+          - `xfce4-terminal --command="{cmd}"`  
+          - The app expands `{cmd}` to something like `kew -q Bach` before launching.
+        - Example for Kitty / Alacritty via a shell:  
+          - `kitty sh -c "{cmd}"` or `alacritty -e sh -c "{cmd}"`.
+      - If you’re unsure, start with your terminal’s binary name plus its recommended “execute command” flag, and test a simple play request; any launch errors are printed to the terminal where you started ChatGTK.
 
 ## Screenshots
 
