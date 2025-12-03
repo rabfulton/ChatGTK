@@ -25,6 +25,19 @@ from utils import load_settings, apply_settings, parse_color_to_rgba, save_setti
 
 
 # ---------------------------------------------------------------------------
+# Small UI helper(s)
+# ---------------------------------------------------------------------------
+
+def _add_listbox_row_margins(row, top=4, bottom=4):
+    """
+    Add a bit of vertical breathing room to rows in settings-style ListBoxes.
+    """
+    row.set_margin_top(top)
+    row.set_margin_bottom(bottom)
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Helper: build the API keys editor (reused in SettingsDialog and APIKeyDialog)
 # ---------------------------------------------------------------------------
 
@@ -35,15 +48,16 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     """
     list_box = Gtk.ListBox()
     list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-    list_box.set_margin_top(12)
-    list_box.set_margin_bottom(12)
-    list_box.set_margin_start(12)
-    list_box.set_margin_end(12)
+    list_box.set_margin_top(0)
+    list_box.set_margin_bottom(0)
+    list_box.set_margin_start(0)
+    list_box.set_margin_end(0)
 
     entries = {}
 
     # OpenAI API Key
     row = Gtk.ListBoxRow()
+    _add_listbox_row_margins(row)
     hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     row.add(hbox)
     label = Gtk.Label(label="OpenAI API Key", xalign=0)
@@ -59,6 +73,7 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
 
     # Gemini API Key
     row = Gtk.ListBoxRow()
+    _add_listbox_row_margins(row)
     hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     row.add(hbox)
     label = Gtk.Label(label="Gemini API Key", xalign=0)
@@ -74,6 +89,7 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
 
     # Grok API Key
     row = Gtk.ListBoxRow()
+    _add_listbox_row_margins(row)
     hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     row.add(hbox)
     label = Gtk.Label(label="Grok API Key", xalign=0)
@@ -89,6 +105,7 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
 
     # Claude API Key
     row = Gtk.ListBoxRow()
+    _add_listbox_row_margins(row)
     hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     row.add(hbox)
     label = Gtk.Label(label="Claude API Key", xalign=0)
@@ -125,7 +142,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Load saved dialog size or use defaults
         settings_dict = load_settings()
-        dialog_width = settings_dict.get('SETTINGS_DIALOG_WIDTH', 950)
+        dialog_width = settings_dict.get('SETTINGS_DIALOG_WIDTH', 800)
         dialog_height = settings_dict.get('SETTINGS_DIALOG_HEIGHT', 800)
         self.set_default_size(dialog_width, dialog_height)
 
@@ -140,7 +157,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Get the content area
         content = self.get_content_area()
-        content.set_spacing(0)
+        content.set_spacing(50)
 
         # Root horizontal box: sidebar | stack
         root_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -235,14 +252,15 @@ class SettingsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(12)
-        list_box.set_margin_bottom(12)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
+        list_box.set_margin_top(0)
+        list_box.set_margin_bottom(0)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
         scroll.add(list_box)
 
         # AI Name
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="AI Name", xalign=0)
@@ -255,6 +273,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Default Model
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Default Model", xalign=0)
@@ -267,6 +286,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         separator.set_margin_top(8)
@@ -280,6 +300,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Font Family
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Font Family", xalign=0)
@@ -292,6 +313,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Font Size
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Font Size", xalign=0)
@@ -306,6 +328,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # User Color
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="User Color", xalign=0)
@@ -319,6 +342,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # AI Color
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="AI Color", xalign=0)
@@ -332,6 +356,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Math - LaTeX Color picker
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Math Color", xalign=0)
@@ -345,6 +370,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Math - LaTeX DPI
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Math DPI", xalign=0)
@@ -359,6 +385,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Code Theme
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Code Theme", xalign=0)
@@ -380,6 +407,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         separator.set_margin_top(8)
@@ -393,6 +421,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Microphone
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Microphone", xalign=0)
@@ -423,6 +452,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # TTS Voice
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="TTS Voice", xalign=0)
@@ -450,6 +480,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # HD Voice Toggle
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="TTS HD Voice", xalign=0)
@@ -462,6 +493,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         separator.set_margin_top(8)
@@ -475,6 +507,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Read Aloud Provider
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Read Aloud Provider", xalign=0)
@@ -502,6 +535,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Audio-preview prompt template
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Prompt Template (Auidio Preview Only)", xalign=0)
@@ -521,6 +555,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Read Aloud - Automatically read responses aloud
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Automatically read responses aloud", xalign=0)
@@ -534,6 +569,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Realtime Voice
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Realtime Voice", xalign=0)
@@ -561,6 +597,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         separator.set_margin_top(8)
@@ -574,6 +611,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Max Tokens
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Max Tokens (0 = no limit)", xalign=0)
@@ -588,6 +626,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Conversation Buffer Length
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(
@@ -607,6 +646,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Temperament
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Temperament", xalign=0)
@@ -630,14 +670,15 @@ class SettingsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(12)
-        list_box.set_margin_bottom(12)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
+        list_box.set_margin_top(0)
+        list_box.set_margin_bottom(0)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
         scroll.add(list_box)
 
         # ---- Image Tool section ----
         header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header_row.add(header_box)
         header_label = Gtk.Label()
@@ -648,6 +689,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Enable Image Tool
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Enable Image Tool", xalign=0)
@@ -661,6 +703,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Preferred Image Model for the image tool
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Image Tool Model", xalign=0)
@@ -692,6 +735,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         separator.set_margin_top(8)
@@ -705,6 +749,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # ---- Music Tool section ----
         header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header_row.add(header_box)
         header_label = Gtk.Label()
@@ -715,6 +760,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Enable Music Tool
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Enable Music Tool", xalign=0)
@@ -728,6 +774,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Launch kew in its own terminal window
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Launch kew in terminal", xalign=0)
@@ -741,6 +788,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Preferred terminal command prefix
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Terminal command prefix", xalign=0)
@@ -758,6 +806,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         separator.set_margin_top(8)
@@ -771,6 +820,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # ---- Read Aloud Tool section ----
         header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header_row.add(header_box)
         header_label = Gtk.Label()
@@ -781,6 +831,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Enable Read Aloud Tool (model can invoke read_aloud)
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Enable Read Aloud Tool", xalign=0)
@@ -1130,14 +1181,15 @@ class ToolsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(12)
-        list_box.set_margin_bottom(12)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
+        list_box.set_margin_top(0)
+        list_box.set_margin_bottom(0)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
         box.pack_start(list_box, True, True, 0)
 
         # Enable/disable image tool for text models
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Enable Image Tool", xalign=0)
@@ -1151,6 +1203,7 @@ class ToolsDialog(Gtk.Dialog):
 
         # Enable/disable music control tool for text models
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Enable Music Tool", xalign=0)
@@ -1164,6 +1217,7 @@ class ToolsDialog(Gtk.Dialog):
 
         # Enable/disable read aloud tool for text models
         row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Enable Read Aloud Tool", xalign=0)
