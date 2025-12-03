@@ -60,7 +60,7 @@ from tools import (
     IMAGE_TOOL_PROMPT_APPENDIX,
     MUSIC_TOOL_PROMPT_APPENDIX,
 )
-from dialogs import SettingsDialog, ToolsDialog
+from dialogs import SettingsDialog, ToolsDialog, PromptEditorDialog
 from conversation import (
     create_system_message,
     create_user_message,
@@ -252,14 +252,26 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_box.set_margin_bottom(5)
         scrolled_window.add(self.conversation_box)
 
-        # Question input and send button
+        # Question input, prompt editor button, and send button
         hbox_input = Gtk.Box(spacing=6)
+
         self.entry_question = Gtk.Entry()
         self.entry_question.set_placeholder_text("Enter your question here...")
         self.entry_question.connect("activate", self.on_submit)
+
+        # Button to open a larger prompt editor dialog
+        btn_edit_prompt = Gtk.Button()
+        btn_edit_prompt.set_tooltip_text("Open prompt editor")
+        edit_icon = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
+        btn_edit_prompt.add(edit_icon)
+        btn_edit_prompt.set_relief(Gtk.ReliefStyle.NONE)
+        btn_edit_prompt.connect("clicked", self.on_open_prompt_editor)
+
         btn_send = Gtk.Button(label="Send")
         btn_send.connect("clicked", self.on_submit)
+
         hbox_input.pack_start(self.entry_question, True, True, 0)
+        hbox_input.pack_start(btn_edit_prompt, False, False, 0)
         hbox_input.pack_start(btn_send, False, False, 0)
         vbox_main.pack_start(hbox_input, False, False, 0)
 
@@ -1000,6 +1012,19 @@ class OpenAIGTKClient(Gtk.Window):
             self._apply_api_keys(new_keys)
 
             self.fetch_models_async()
+        dialog.destroy()
+
+    def on_open_prompt_editor(self, widget):
+        """Open a larger dialog for composing a more complex prompt."""
+        initial_text = self.entry_question.get_text()
+
+        dialog = PromptEditorDialog(self, initial_text=initial_text)
+        response = dialog.run()
+
+        if response == Gtk.ResponseType.OK:
+            text = dialog.get_text().strip()
+            self.entry_question.set_text(text)
+
         dialog.destroy()
 
     def _apply_api_keys(self, new_keys):

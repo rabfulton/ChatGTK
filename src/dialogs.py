@@ -1169,6 +1169,65 @@ class ToolsDialog(Gtk.Dialog):
 
 
 # ---------------------------------------------------------------------------
+# PromptEditorDialog – large editor for composing prompts
+# ---------------------------------------------------------------------------
+
+class PromptEditorDialog(Gtk.Dialog):
+    """Dialog providing a larger multiline editor for composing prompts."""
+
+    def __init__(self, parent, initial_text: str = ""):
+        super().__init__(title="Edit Prompt", transient_for=parent, flags=0)
+        self.set_modal(True)
+
+        # Default size; user can resize further
+        self.set_default_size(800, 500)
+
+        content = self.get_content_area()
+        content.set_spacing(6)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        vbox.set_margin_start(12)
+        vbox.set_margin_end(12)
+        content.pack_start(vbox, True, True, 0)
+
+        # Optional hint label
+        label = Gtk.Label(
+            label="Compose a longer or multi-line prompt below.",
+            xalign=0,
+        )
+        vbox.pack_start(label, False, False, 0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        vbox.pack_start(scroll, True, True, 0)
+
+        self.textview = Gtk.TextView()
+        self.textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.textview.set_accepts_tab(True)
+
+        buf = self.textview.get_buffer()
+        buf.set_text(initial_text or "")
+
+        scroll.add(self.textview)
+
+        # Dialog buttons
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("Use Prompt", Gtk.ResponseType.OK)
+
+        self.show_all()
+
+    def get_text(self) -> str:
+        """Return the full prompt text from the editor."""
+        buf = self.textview.get_buffer()
+        start_iter = buf.get_start_iter()
+        end_iter = buf.get_end_iter()
+        return buf.get_text(start_iter, end_iter, True)
+
+
+# ---------------------------------------------------------------------------
 # APIKeyDialog – kept for legacy compatibility; uses the shared helper
 # ---------------------------------------------------------------------------
 
