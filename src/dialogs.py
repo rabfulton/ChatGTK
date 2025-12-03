@@ -253,6 +253,31 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_ai_name, False, True, 0)
         list_box.add(row)
 
+        # Default Model
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Default Model", xalign=0)
+        label.set_hexpand(True)
+        self.entry_default_model = Gtk.Entry()
+        self.entry_default_model.set_text(self.default_model)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_default_model, False, True, 0)
+        list_box.add(row)
+
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
         # Font Family
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -305,7 +330,7 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.btn_ai_color, False, True, 0)
         list_box.add(row)
 
-        # LaTeX Color picker
+        # Math - LaTeX Color picker
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
@@ -318,30 +343,52 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.btn_latex_color, False, True, 0)
         list_box.add(row)
 
-        # Default Model
+        # Math - LaTeX DPI
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Default Model", xalign=0)
+        label = Gtk.Label(label="Math DPI", xalign=0)
         label.set_hexpand(True)
-        self.entry_default_model = Gtk.Entry()
-        self.entry_default_model.set_text(self.default_model)
+        self.spin_latex_dpi = Gtk.SpinButton()
+        self.spin_latex_dpi.set_range(72, 600)
+        self.spin_latex_dpi.set_increments(1, 10)
+        self.spin_latex_dpi.set_value(float(self.latex_dpi))
         hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_default_model, False, True, 0)
+        hbox.pack_start(self.spin_latex_dpi, False, True, 0)
         list_box.add(row)
 
-        # Temperament
+        # Code Theme
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Temperament", xalign=0)
+        label = Gtk.Label(label="Code Theme", xalign=0)
         label.set_hexpand(True)
-        self.scale_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
-        self.scale_temp.set_size_request(200, -1)
-        self.scale_temp.set_value(float(self.temperament))
-        self.scale_temp.set_digits(2)
+        self.combo_theme = Gtk.ComboBoxText()
+        scheme_manager = GtkSource.StyleSchemeManager.get_default()
+        themes = scheme_manager.get_scheme_ids()
+        settings_dict = load_settings()
+        current_theme = settings_dict.get('SOURCE_THEME', 'solarized-dark')
+        current_idx = 0
+        for idx, theme_id in enumerate(sorted(themes)):
+            self.combo_theme.append_text(theme_id)
+            if theme_id == current_theme:
+                current_idx = idx
+        self.combo_theme.set_active(current_idx)
         hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.scale_temp, False, True, 0)
+        hbox.pack_start(self.combo_theme, False, True, 0)
+        list_box.add(row)
+
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
         list_box.add(row)
 
         # Microphone
@@ -413,6 +460,78 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_hd, False, True, 0)
         list_box.add(row)
 
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # Read Aloud Provider
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Read Aloud Provider", xalign=0)
+        label.set_hexpand(True)
+        self.combo_read_aloud_provider = Gtk.ComboBoxText()
+
+        read_aloud_providers = [
+            ("tts", "OpenAI TTS (tts-1 / tts-1-hd)"),
+            ("gpt-4o-audio-preview", "gpt-4o-audio-preview"),
+            ("gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview"),
+        ]
+        for provider_id, display_name in read_aloud_providers:
+            self.combo_read_aloud_provider.append(provider_id, display_name)
+
+        current_provider = getattr(self, "read_aloud_provider", "tts") or "tts"
+        provider_ids = [p[0] for p in read_aloud_providers]
+        if current_provider in provider_ids:
+            self.combo_read_aloud_provider.set_active(provider_ids.index(current_provider))
+        else:
+            self.combo_read_aloud_provider.set_active(0)
+
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_read_aloud_provider, False, True, 0)
+        list_box.add(row)
+
+        # Audio-preview prompt template
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Prompt Template (Auidio Preview Only)", xalign=0)
+        label.set_hexpand(False)
+        label.set_tooltip_text('Use {text} as placeholder for the response text (for audio-preview models)')
+        self.entry_audio_prompt_template = Gtk.Entry()
+        self.entry_audio_prompt_template.set_hexpand(True)
+        self.entry_audio_prompt_template.set_width_chars(50)
+        default_template = 'Please say the following verbatim in a New York accent: "{text}"'
+        self.entry_audio_prompt_template.set_placeholder_text(default_template)
+        current_template = getattr(self, "read_aloud_audio_prompt_template", "") or ""
+        self.entry_audio_prompt_template.set_text(current_template)
+        self.entry_audio_prompt_template.set_tooltip_text('Use {text} as placeholder for the response text (for audio-preview models)')
+        hbox.pack_start(label, False, True, 0)
+        hbox.pack_start(self.entry_audio_prompt_template, True, True, 0)
+        list_box.add(row)
+
+        # Read Aloud - Automatically read responses aloud
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Automatically read responses aloud", xalign=0)
+        label.set_hexpand(True)
+        self.switch_read_aloud = Gtk.Switch()
+        current_read_aloud_enabled = bool(getattr(self, "read_aloud_enabled", False))
+        self.switch_read_aloud.set_active(current_read_aloud_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_read_aloud, False, True, 0)
+        list_box.add(row)
+
         # Realtime Voice
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -440,6 +559,19 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
 
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
         # Max Tokens
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -454,44 +586,18 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.spin_max_tokens, False, True, 0)
         list_box.add(row)
 
-        # Code Theme
+        # Temperament
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Code Theme", xalign=0)
+        label = Gtk.Label(label="Temperament", xalign=0)
         label.set_hexpand(True)
-        self.combo_theme = Gtk.ComboBoxText()
-
-        scheme_manager = GtkSource.StyleSchemeManager.get_default()
-        themes = scheme_manager.get_scheme_ids()
-
-        settings_dict = load_settings()
-        current_theme = settings_dict.get('SOURCE_THEME', 'solarized-dark')
-
-        current_idx = 0
-        for idx, theme_id in enumerate(sorted(themes)):
-            self.combo_theme.append_text(theme_id)
-            if theme_id == current_theme:
-                current_idx = idx
-
-        self.combo_theme.set_active(current_idx)
-
+        self.scale_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
+        self.scale_temp.set_size_request(200, -1)
+        self.scale_temp.set_value(float(self.temperament))
+        self.scale_temp.set_digits(2)
         hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.combo_theme, False, True, 0)
-        list_box.add(row)
-
-        # LaTeX DPI
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Math DPI", xalign=0)
-        label.set_hexpand(True)
-        self.spin_latex_dpi = Gtk.SpinButton()
-        self.spin_latex_dpi.set_range(72, 600)
-        self.spin_latex_dpi.set_increments(1, 10)
-        self.spin_latex_dpi.set_value(float(self.latex_dpi))
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.spin_latex_dpi, False, True, 0)
+        hbox.pack_start(self.scale_temp, False, True, 0)
         list_box.add(row)
 
         self.stack.add_named(scroll, "General")
@@ -565,6 +671,19 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.combo_image_model, False, True, 0)
         list_box.add(row)
 
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
         # ---- Music Tool section ----
         header_row = Gtk.ListBoxRow()
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -618,28 +737,28 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_terminal_prefix, True, True, 0)
         list_box.add(row)
 
-        # ---- Read Aloud section ----
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # ---- Read Aloud Tool section ----
         header_row = Gtk.ListBoxRow()
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header_row.add(header_box)
         header_label = Gtk.Label()
         header_label.set_xalign(0)
-        header_label.set_markup("<b>Read Aloud</b>")
+        header_label.set_markup("<b>Read Aloud Tool</b>")
         header_box.pack_start(header_label, True, True, 0)
         list_box.add(header_row)
-
-        # Enable Read Aloud (auto-speak assistant responses)
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Automatically read responses aloud", xalign=0)
-        label.set_hexpand(True)
-        self.switch_read_aloud = Gtk.Switch()
-        current_read_aloud_enabled = bool(getattr(self, "read_aloud_enabled", False))
-        self.switch_read_aloud.set_active(current_read_aloud_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_read_aloud, False, True, 0)
-        list_box.add(row)
 
         # Enable Read Aloud Tool (model can invoke read_aloud)
         row = Gtk.ListBoxRow()
@@ -654,51 +773,9 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
         list_box.add(row)
 
-        # Read Aloud Provider
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Read Aloud Provider", xalign=0)
-        label.set_hexpand(True)
-        self.combo_read_aloud_provider = Gtk.ComboBoxText()
-
-        read_aloud_providers = [
-            ("tts", "OpenAI TTS (tts-1 / tts-1-hd)"),
-            ("gpt-4o-audio-preview", "gpt-4o-audio-preview"),
-            ("gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview"),
-        ]
-        for provider_id, display_name in read_aloud_providers:
-            self.combo_read_aloud_provider.append(provider_id, display_name)
-
-        current_provider = getattr(self, "read_aloud_provider", "tts") or "tts"
-        provider_ids = [p[0] for p in read_aloud_providers]
-        if current_provider in provider_ids:
-            self.combo_read_aloud_provider.set_active(provider_ids.index(current_provider))
-        else:
-            self.combo_read_aloud_provider.set_active(0)
-
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.combo_read_aloud_provider, False, True, 0)
-        list_box.add(row)
-
-        # Audio-preview prompt template
-        row = Gtk.ListBoxRow()
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Audio-preview prompt template", xalign=0)
-        label.set_hexpand(False)
-        label.set_tooltip_text('Use {text} as placeholder for the response text')
-        self.entry_audio_prompt_template = Gtk.Entry()
-        self.entry_audio_prompt_template.set_hexpand(True)
-        self.entry_audio_prompt_template.set_width_chars(50)
-        default_template = 'Please say the following verbatim in a New York accent: "{text}"'
-        self.entry_audio_prompt_template.set_placeholder_text(default_template)
-        current_template = getattr(self, "read_aloud_audio_prompt_template", "") or ""
-        self.entry_audio_prompt_template.set_text(current_template)
-        self.entry_audio_prompt_template.set_tooltip_text('Use {text} as placeholder for the response text')
-        hbox.pack_start(label, False, True, 0)
-        hbox.pack_start(self.entry_audio_prompt_template, True, True, 0)
-        list_box.add(row)
+        # Connect signals to enforce mutual exclusivity between auto-read and tool
+        self.switch_read_aloud.connect("state-set", self._on_read_aloud_state_set)
+        self.switch_read_aloud_tool.connect("state-set", self._on_read_aloud_tool_state_set)
 
         self.stack.add_named(scroll, "Tool Options")
 
@@ -934,6 +1011,21 @@ class SettingsDialog(Gtk.Dialog):
             error_dialog.format_secondary_text(str(e))
             error_dialog.run()
             error_dialog.destroy()
+
+    # -----------------------------------------------------------------------
+    # Read Aloud mutual exclusivity handlers
+    # -----------------------------------------------------------------------
+    def _on_read_aloud_state_set(self, switch, state):
+        """When auto-read is enabled, disable the read aloud tool."""
+        if state and self.switch_read_aloud_tool.get_active():
+            self.switch_read_aloud_tool.set_active(False)
+        return False  # Allow the state change to proceed
+
+    def _on_read_aloud_tool_state_set(self, switch, state):
+        """When read aloud tool is enabled, disable auto-read."""
+        if state and self.switch_read_aloud.get_active():
+            self.switch_read_aloud.set_active(False)
+        return False  # Allow the state change to proceed
 
     # -----------------------------------------------------------------------
     # Collect settings

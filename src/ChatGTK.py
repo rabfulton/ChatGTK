@@ -1051,6 +1051,9 @@ class OpenAIGTKClient(Gtk.Window):
             # Apply the updated tool settings to the main window object.
             for key, value in tool_settings.items():
                 setattr(self, key, value)
+            # Enforce mutual exclusivity: if read_aloud_tool is enabled, disable auto-read
+            if getattr(self, "read_aloud_tool_enabled", False) and getattr(self, "read_aloud_enabled", False):
+                self.read_aloud_enabled = False
             # Update the ToolManager with the new settings.
             self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
             self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))

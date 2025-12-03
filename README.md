@@ -112,12 +112,12 @@ Alternatively you can run the install script to add a desktop entry and set up t
       - If you're unsure, start with your terminal's binary name plus its recommended "execute command" flag, and test a simple play request; any launch errors are printed to the terminal where you started ChatGTK.
 
 - **Read Aloud tool (`read_aloud`)**
-  - Disabled by default; enable via **Enable Read Aloud Tool** in the **Tools** dialog (top bar → *Tools*).
+  - Disabled by default; enable via **Enable Read Aloud Tool** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
   - Allows models to speak text aloud to the user using text-to-speech.
-  - Configure via **Settings → Tool Options → Read Aloud**:
-    - **Automatically read responses aloud**: when enabled, all assistant responses are automatically spoken.
+  - Configure Read Aloud settings via **Settings → General** (near TTS settings):
+    - **Automatically read responses aloud**: when enabled, all assistant responses are automatically spoken. Note: this option and the Read Aloud Tool are mutually exclusive.
     - **Read Aloud Provider**: choose between OpenAI TTS (`tts-1` / `tts-1-hd`) or audio-preview models (`gpt-4o-audio-preview`, `gpt-4o-mini-audio-preview`).
-    - **Audio-preview prompt template**: for audio-preview models, customize the prompt used to instruct the model what to say. Use `{text}` as a placeholder for the response text. Default: `Please say the following verbatim in a New York accent: "{text}"`.
+    - **Read Aloud prompt template**: for audio-preview models, customize the prompt used to instruct the model what to say. Use `{text}` as a placeholder for the response text. Default: `Please say the following verbatim in a New York accent: "{text}"`.
   - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
 
 ## Screenshots
