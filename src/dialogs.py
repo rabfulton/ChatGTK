@@ -130,7 +130,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Tool Options", "System Prompts", "Model Whitelist", "API Keys"]
+    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Model Whitelist", "API Keys"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
@@ -195,6 +195,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Build pages
         self._build_general_page()
+        self._build_audio_page()
         self._build_tool_options_page()
         self._build_system_prompts_page()
         # Model Whitelist page is built lazily when that category is selected
@@ -419,6 +420,73 @@ class SettingsDialog(Gtk.Dialog):
         row.set_activatable(False)
         list_box.add(row)
 
+        # Max Tokens
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Max Tokens (0 = no limit)", xalign=0)
+        label.set_hexpand(True)
+        self.spin_max_tokens = Gtk.SpinButton()
+        self.spin_max_tokens.set_range(0, 32000)
+        self.spin_max_tokens.set_increments(100, 1000)
+        self.spin_max_tokens.set_value(float(self.max_tokens))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_max_tokens, False, True, 0)
+        list_box.add(row)
+
+        # Conversation Buffer Length
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(
+            label="Message Buffer (1 = No Memory, ALL = Whole Conversation)",
+            xalign=0,
+        )
+        label.set_hexpand(True)
+        self.entry_conv_buffer = Gtk.Entry()
+        self.entry_conv_buffer.set_hexpand(False)
+        self.entry_conv_buffer.set_width_chars(10)
+        current_buffer = getattr(self, "conversation_buffer_length", "ALL") or "ALL"
+        self.entry_conv_buffer.set_text(str(current_buffer))
+        self.entry_conv_buffer.set_placeholder_text("ALL")
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_conv_buffer, False, True, 0)
+        list_box.add(row)
+
+        # Temperament
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Temperament", xalign=0)
+        label.set_hexpand(True)
+        self.scale_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
+        self.scale_temp.set_size_request(200, -1)
+        self.scale_temp.set_value(float(self.temperament))
+        self.scale_temp.set_digits(2)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.scale_temp, False, True, 0)
+        list_box.add(row)
+
+        self.stack.add_named(scroll, "General")
+
+    # -----------------------------------------------------------------------
+    # Audio page
+    # -----------------------------------------------------------------------
+    def _build_audio_page(self):
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        list_box.set_margin_top(0)
+        list_box.set_margin_bottom(0)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
+        scroll.add(list_box)
+
         # Microphone
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -595,71 +663,7 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
 
-        # --- Separator (as its own ListBoxRow, so it's visible) ---
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        separator.set_margin_top(8)
-        separator.set_margin_bottom(8)
-        box.pack_start(separator, True, True, 0)
-        row.add(box)
-        # Make separator row not selectable/focusable:
-        row.set_selectable(False)
-        row.set_activatable(False)
-        list_box.add(row)
-
-        # Max Tokens
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Max Tokens (0 = no limit)", xalign=0)
-        label.set_hexpand(True)
-        self.spin_max_tokens = Gtk.SpinButton()
-        self.spin_max_tokens.set_range(0, 32000)
-        self.spin_max_tokens.set_increments(100, 1000)
-        self.spin_max_tokens.set_value(float(self.max_tokens))
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.spin_max_tokens, False, True, 0)
-        list_box.add(row)
-
-        # Conversation Buffer Length
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(
-            label="Message Buffer (1 = No Memory, ALL = Whole Conversation)",
-            xalign=0,
-        )
-        label.set_hexpand(True)
-        self.entry_conv_buffer = Gtk.Entry()
-        self.entry_conv_buffer.set_hexpand(False)
-        self.entry_conv_buffer.set_width_chars(10)
-        current_buffer = getattr(self, "conversation_buffer_length", "ALL") or "ALL"
-        self.entry_conv_buffer.set_text(str(current_buffer))
-        self.entry_conv_buffer.set_placeholder_text("ALL")
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_conv_buffer, False, True, 0)
-        list_box.add(row)
-
-        # Temperament
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Temperament", xalign=0)
-        label.set_hexpand(True)
-        self.scale_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
-        self.scale_temp.set_size_request(200, -1)
-        self.scale_temp.set_value(float(self.temperament))
-        self.scale_temp.set_digits(2)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.scale_temp, False, True, 0)
-        list_box.add(row)
-
-        self.stack.add_named(scroll, "General")
+        self.stack.add_named(scroll, "Audio")
 
     # -----------------------------------------------------------------------
     # Tool Options page
