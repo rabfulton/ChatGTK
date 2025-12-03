@@ -48,6 +48,14 @@ MUSIC_TOOL_PROMPT_APPENDIX = (
     "album name, or artist name describing what to play."
 )
 
+# Guidance appended to system prompts when the read aloud tool is enabled.
+READ_ALOUD_TOOL_PROMPT_APPENDIX = (
+    "You have access to a read_aloud tool that can speak text aloud to the user "
+    "using text-to-speech. Use this tool when the user asks you to read something "
+    "out loud, announce something, or when audible output would enhance the user's "
+    "experience (e.g. reading a poem, story, or important announcement)."
+)
+
 
 # ---------------------------------------------------------------------------
 # ToolSpec dataclass
@@ -126,10 +134,32 @@ MUSIC_TOOL_SPEC = ToolSpec(
     prompt_appendix=MUSIC_TOOL_PROMPT_APPENDIX,
 )
 
+READ_ALOUD_TOOL_SPEC = ToolSpec(
+    name="read_aloud",
+    description=(
+        "Read text aloud to the user using text-to-speech. Use this when "
+        "the user asks you to speak, read, or announce something out loud."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string",
+                "description": (
+                    "The text to be read aloud to the user."
+                ),
+            },
+        },
+        "required": ["text"],
+    },
+    prompt_appendix=READ_ALOUD_TOOL_PROMPT_APPENDIX,
+)
+
 # Registry mapping tool name to spec for easy lookup.
 TOOL_REGISTRY: Dict[str, ToolSpec] = {
     IMAGE_TOOL_SPEC.name: IMAGE_TOOL_SPEC,
     MUSIC_TOOL_SPEC.name: MUSIC_TOOL_SPEC,
+    READ_ALOUD_TOOL_SPEC.name: READ_ALOUD_TOOL_SPEC,
 }
 
 
@@ -253,6 +283,7 @@ class ToolContext:
     """
     image_handler: Optional[Callable[[str], str]] = None
     music_handler: Optional[Callable[[str, Optional[str], Optional[float]], str]] = None
+    read_aloud_handler: Optional[Callable[[str], str]] = None
 
 
 def run_tool_call(
@@ -298,6 +329,16 @@ def run_tool_call(
         except Exception as e:
             print(f"Error in music_handler: {e}")
             return f"Error controlling music: {e}"
+
+    elif tool_name == "read_aloud":
+        if context.read_aloud_handler is None:
+            return "Error: read aloud tool is not available."
+        text = args.get("text", "")
+        try:
+            return context.read_aloud_handler(text)
+        except Exception as e:
+            print(f"Error in read_aloud_handler: {e}")
+            return f"Error reading aloud: {e}"
 
     else:
         return f"Error: unknown tool '{tool_name}' requested."
@@ -348,6 +389,7 @@ class ToolManager:
         self,
         image_tool_enabled: bool = True,
         music_tool_enabled: bool = False,
+        read_aloud_tool_enabled: bool = False,
     ):
         """
         Initialize the ToolManager.
@@ -358,9 +400,12 @@ class ToolManager:
             Whether the image tool is globally enabled.
         music_tool_enabled : bool
             Whether the music tool is globally enabled.
+        read_aloud_tool_enabled : bool
+            Whether the read aloud tool is globally enabled.
         """
         self.image_tool_enabled = image_tool_enabled
         self.music_tool_enabled = music_tool_enabled
+        self.read_aloud_tool_enabled = read_aloud_tool_enabled
 
     def get_provider_name_for_model(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None) -> str:
         """
@@ -494,6 +539,48 @@ class ToolManager:
 
         return False
 
+    def supports_read_aloud_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None) -> bool:
+        """
+        Return True if the given model should be offered the read-aloud tool.
+        """
+        if not model_name:
+            return False
+        if not self.read_aloud_tool_enabled:
+            return False
+
+        provider = self.get_provider_name_for_model(model_name, model_provider_map)
+        if provider not in ("openai", "gemini", "grok", "claude"):
+            return False
+
+        lower = model_name.lower()
+        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
+            return False
+        if self.is_image_model_for_provider(model_name, provider):
+            return False
+
+        # OpenAI GPT chat models.
+        if provider == "openai":
+            return lower.startswith("gpt-")
+
+        # Gemini chat models that support function calling.
+        if provider == "gemini":
+            return (
+                lower.startswith("gemini-2.5")
+                or lower.startswith("gemini-3-pro")
+                or lower.startswith("gemini-pro")
+                or lower.startswith("gemini-flash")
+            )
+
+        # Grok chat models.
+        if provider == "grok":
+            return lower.startswith("grok-")
+
+        # Claude chat models via the OpenAI SDK compatibility layer.
+        if provider == "claude":
+            return lower.startswith("claude-")
+
+        return False
+
     def get_enabled_tools_for_model(
         self,
         model_name: str,
@@ -507,6 +594,8 @@ class ToolManager:
             enabled.add("generate_image")
         if self.supports_music_tools(model_name, model_provider_map):
             enabled.add("control_music")
+        if self.supports_read_aloud_tools(model_name, model_provider_map):
+            enabled.add("read_aloud")
         return enabled
 
     def build_tool_context(
@@ -514,6 +603,7 @@ class ToolManager:
         model_name: str,
         image_handler: Optional[Callable[[str], str]] = None,
         music_handler: Optional[Callable[[str, Optional[str], Optional[float]], str]] = None,
+        read_aloud_handler: Optional[Callable[[str], str]] = None,
         model_provider_map: Optional[Dict[str, str]] = None,
     ) -> ToolContext:
         """
@@ -527,6 +617,8 @@ class ToolManager:
             Handler for image generation.
         music_handler : Optional[Callable[[str, Optional[str], Optional[float]], str]]
             Handler for music control.
+        read_aloud_handler : Optional[Callable[[str], str]]
+            Handler for read aloud.
         model_provider_map : Optional[Dict[str, str]]
             Optional mapping of model names to provider names.
 
@@ -540,5 +632,7 @@ class ToolManager:
             ctx.image_handler = image_handler
         if self.supports_music_tools(model_name, model_provider_map):
             ctx.music_handler = music_handler
+        if self.supports_read_aloud_tools(model_name, model_provider_map):
+            ctx.read_aloud_handler = read_aloud_handler
         return ctx
 

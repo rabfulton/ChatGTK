@@ -618,6 +618,88 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_terminal_prefix, True, True, 0)
         list_box.add(row)
 
+        # ---- Read Aloud section ----
+        header_row = Gtk.ListBoxRow()
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Read Aloud</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+
+        # Enable Read Aloud (auto-speak assistant responses)
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Automatically read responses aloud", xalign=0)
+        label.set_hexpand(True)
+        self.switch_read_aloud = Gtk.Switch()
+        current_read_aloud_enabled = bool(getattr(self, "read_aloud_enabled", False))
+        self.switch_read_aloud.set_active(current_read_aloud_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_read_aloud, False, True, 0)
+        list_box.add(row)
+
+        # Enable Read Aloud Tool (model can invoke read_aloud)
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Read Aloud Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_read_aloud_tool = Gtk.Switch()
+        current_read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
+        self.switch_read_aloud_tool.set_active(current_read_aloud_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
+        list_box.add(row)
+
+        # Read Aloud Provider
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Read Aloud Provider", xalign=0)
+        label.set_hexpand(True)
+        self.combo_read_aloud_provider = Gtk.ComboBoxText()
+
+        read_aloud_providers = [
+            ("tts", "OpenAI TTS (tts-1 / tts-1-hd)"),
+            ("gpt-4o-audio-preview", "gpt-4o-audio-preview"),
+            ("gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview"),
+        ]
+        for provider_id, display_name in read_aloud_providers:
+            self.combo_read_aloud_provider.append(provider_id, display_name)
+
+        current_provider = getattr(self, "read_aloud_provider", "tts") or "tts"
+        provider_ids = [p[0] for p in read_aloud_providers]
+        if current_provider in provider_ids:
+            self.combo_read_aloud_provider.set_active(provider_ids.index(current_provider))
+        else:
+            self.combo_read_aloud_provider.set_active(0)
+
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_read_aloud_provider, False, True, 0)
+        list_box.add(row)
+
+        # Audio-preview prompt template
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Audio-preview prompt template", xalign=0)
+        label.set_hexpand(False)
+        label.set_tooltip_text('Use {text} as placeholder for the response text')
+        self.entry_audio_prompt_template = Gtk.Entry()
+        self.entry_audio_prompt_template.set_hexpand(True)
+        self.entry_audio_prompt_template.set_width_chars(50)
+        default_template = 'Please say the following verbatim in a New York accent: "{text}"'
+        self.entry_audio_prompt_template.set_placeholder_text(default_template)
+        current_template = getattr(self, "read_aloud_audio_prompt_template", "") or ""
+        self.entry_audio_prompt_template.set_text(current_template)
+        self.entry_audio_prompt_template.set_tooltip_text('Use {text} as placeholder for the response text')
+        hbox.pack_start(label, False, True, 0)
+        hbox.pack_start(self.entry_audio_prompt_template, True, True, 0)
+        list_box.add(row)
+
         self.stack.add_named(scroll, "Tool Options")
 
     # -----------------------------------------------------------------------
@@ -900,6 +982,11 @@ class SettingsDialog(Gtk.Dialog):
             'gemini_model_whitelist': whitelist_str('gemini', 'gemini_model_whitelist'),
             'grok_model_whitelist': whitelist_str('grok', 'grok_model_whitelist'),
             'claude_model_whitelist': whitelist_str('claude', 'claude_model_whitelist'),
+            # Read Aloud settings
+            'read_aloud_enabled': self.switch_read_aloud.get_active(),
+            'read_aloud_tool_enabled': self.switch_read_aloud_tool.get_active(),
+            'read_aloud_provider': self.combo_read_aloud_provider.get_active_id() or 'tts',
+            'read_aloud_audio_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
         }
 
     def get_api_keys(self):
@@ -962,6 +1049,19 @@ class ToolsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_music_tool, False, True, 0)
         list_box.add(row)
 
+        # Enable/disable read aloud tool for text models
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Read Aloud Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_read_aloud_tool = Gtk.Switch()
+        current_read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
+        self.switch_read_aloud_tool.set_active(current_read_aloud_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
+        list_box.add(row)
+
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
 
@@ -972,6 +1072,7 @@ class ToolsDialog(Gtk.Dialog):
         return {
             "image_tool_enabled": self.switch_image_tool.get_active(),
             "music_tool_enabled": self.switch_music_tool.get_active(),
+            "read_aloud_tool_enabled": self.switch_read_aloud_tool.get_active(),
         }
 
 

@@ -288,6 +288,7 @@ class OpenAIProvider(AIProvider):
         chat_id=None,
         image_tool_handler=None,
         music_tool_handler=None,
+        read_aloud_tool_handler=None,
     ):
         # Check if any message has attached files - if so, use the responses API
         if self._has_attached_files(messages):
@@ -371,6 +372,8 @@ class OpenAIProvider(AIProvider):
                 enabled_tools.add("generate_image")
             if music_tool_handler is not None:
                 enabled_tools.add("control_music")
+            if read_aloud_tool_handler is not None:
+                enabled_tools.add("read_aloud")
             tools = build_tools_for_provider(enabled_tools, "openai")
             if tools:
                 params["tools"] = tools
@@ -391,7 +394,7 @@ class OpenAIProvider(AIProvider):
         print(f"Params: {params}")
 
         # When no tools are involved we can keep the simple one-shot path.
-        if (image_tool_handler is None and music_tool_handler is None) or is_reasoning_model:
+        if (image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None) or is_reasoning_model:
             response = self.client.chat.completions.create(**params)
             text_content = response.choices[0].message.content or ""
         else:
@@ -438,6 +441,7 @@ class OpenAIProvider(AIProvider):
                 tool_context = ToolContext(
                     image_handler=image_tool_handler,
                     music_handler=music_tool_handler,
+                    read_aloud_handler=read_aloud_tool_handler,
                 )
                 for tc in tool_calls:
                     if tc.type != "function":
@@ -685,6 +689,7 @@ class GrokProvider(AIProvider):
         response_meta=None,
         image_tool_handler=None,
         music_tool_handler=None,
+        read_aloud_tool_handler=None,
     ):
         """
         Generate a chat completion using Grok text models.
@@ -745,13 +750,15 @@ class GrokProvider(AIProvider):
             enabled_tools.add("generate_image")
         if music_tool_handler is not None:
             enabled_tools.add("control_music")
+        if read_aloud_tool_handler is not None:
+            enabled_tools.add("read_aloud")
         tools = build_tools_for_provider(enabled_tools, "grok")
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
         # Simple one-shot path when no tools are involved.
-        if image_tool_handler is None and music_tool_handler is None:
+        if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
 
@@ -800,6 +807,7 @@ class GrokProvider(AIProvider):
             tool_context = ToolContext(
                 image_handler=image_tool_handler,
                 music_handler=music_tool_handler,
+                read_aloud_handler=read_aloud_tool_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -937,6 +945,7 @@ class ClaudeProvider(AIProvider):
         response_meta=None,
         image_tool_handler=None,
         music_tool_handler=None,
+        read_aloud_tool_handler=None,
     ):
         """
         Generate a chat completion using Claude models via the OpenAI-compatible
@@ -999,13 +1008,15 @@ class ClaudeProvider(AIProvider):
             enabled_tools.add("generate_image")
         if music_tool_handler is not None:
             enabled_tools.add("control_music")
+        if read_aloud_tool_handler is not None:
+            enabled_tools.add("read_aloud")
         tools = build_tools_for_provider(enabled_tools, "claude")
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
         # Simple one-shot path when no tools are involved.
-        if image_tool_handler is None and music_tool_handler is None:
+        if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
 
@@ -1054,6 +1065,7 @@ class ClaudeProvider(AIProvider):
             tool_context = ToolContext(
                 image_handler=image_tool_handler,
                 music_handler=music_tool_handler,
+                read_aloud_handler=read_aloud_tool_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -1232,6 +1244,7 @@ class GeminiProvider(AIProvider):
         response_meta=None,
         image_tool_handler=None,
         music_tool_handler=None,
+        read_aloud_tool_handler=None,
     ):
         self._require_key()
         contents, system_instruction = self._convert_messages(messages)
@@ -1274,6 +1287,8 @@ class GeminiProvider(AIProvider):
             enabled_tools.add("generate_image")
         if music_tool_handler is not None:
             enabled_tools.add("control_music")
+        if read_aloud_tool_handler is not None:
+            enabled_tools.add("read_aloud")
         function_declarations = build_tools_for_provider(enabled_tools, "gemini")
         if function_declarations:
             payload.setdefault("tools", []).append(
@@ -1299,7 +1314,7 @@ class GeminiProvider(AIProvider):
 
             # If no tool handlers are supplied, fall back to the existing
             # simple text-extraction behavior.
-            if image_tool_handler is None and music_tool_handler is None:
+            if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
                 return self._extract_text(data)
 
             # With tool handlers, inspect the response for any functionCall
@@ -1312,6 +1327,7 @@ class GeminiProvider(AIProvider):
             tool_context = ToolContext(
                 image_handler=image_tool_handler,
                 music_handler=music_tool_handler,
+                read_aloud_handler=read_aloud_tool_handler,
             )
             for candidate in data.get("candidates", []) or []:
                 parts = candidate.get("content", {}).get("parts", []) or []
@@ -1330,6 +1346,8 @@ class GeminiProvider(AIProvider):
                             caption = f"Generated image for prompt: {args.get('prompt', '')}".strip()
                         elif name == "control_music":
                             caption = f"Music control result for action: {args.get('action', '')}".strip()
+                        elif name == "read_aloud":
+                            caption = f"Read aloud: {args.get('text', '')[:50]}...".strip() if len(args.get('text', '')) > 50 else f"Read aloud: {args.get('text', '')}".strip()
                         else:
                             caption = ""
                         segment = f"{caption}\n{tool_output}" if caption else tool_output

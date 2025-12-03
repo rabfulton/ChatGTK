@@ -66,4 +66,17 @@ SETTINGS_CONFIG = {
         'type': str,
         'default': 'claude-sonnet-4-5,claude-haiku-4-5,claude-opus-4-5,claude-3-5-sonnet-latest,claude-3-5-haiku-latest'
     },
+    # Read Aloud settings – automatically speak assistant responses.
+    # When enabled, each new assistant message is read aloud using the selected provider.
+    'READ_ALOUD_ENABLED': {'type': bool, 'default': False},
+    # Provider for read-aloud: 'tts' uses OpenAI tts-1/tts-1-hd, or use an audio-preview model.
+    'READ_ALOUD_PROVIDER': {'type': str, 'default': 'tts'},
+    # Prompt template for audio-preview models. {text} is replaced with the response text.
+    'READ_ALOUD_AUDIO_PROMPT_TEMPLATE': {
+        'type': str,
+        'default': 'Please say the following verbatim in a New York accent: "{text}"'
+    },
+    # Master switch for exposing the read_aloud tool to text models.
+    # When false, models will not be told about the tool and cannot call it.
+    'READ_ALOUD_TOOL_ENABLED': {'type': bool, 'default': False},
 }

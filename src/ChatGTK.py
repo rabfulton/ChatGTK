@@ -109,6 +109,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.tool_manager = ToolManager(
             image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
             music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
+            read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
         )
 
         # Remember the current geometry if not maximized
@@ -556,6 +557,13 @@ class OpenAIGTKClient(Gtk.Window):
         """
         return self.tool_manager.supports_music_tools(model_name, self.model_provider_map)
 
+    def _supports_read_aloud_tools(self, model_name):
+        """
+        Return True if the given model should be offered the read-aloud tool.
+        Delegates to ToolManager.
+        """
+        return self.tool_manager.supports_read_aloud_tools(model_name, self.model_provider_map)
+
     def _normalize_image_tags(self, text):
         """
         Normalize any <img ...> tags emitted by models into the self-closing
@@ -886,6 +894,44 @@ class OpenAIGTKClient(Gtk.Window):
         """
         return self._control_music(action, keyword=keyword, volume=volume)
 
+    def _handle_read_aloud_tool(self, text: str) -> str:
+        """
+        Handle read_aloud tool calls from AI models.
+        
+        This is called when a model invokes the read_aloud tool to speak text
+        to the user. It uses the same read_aloud_text method but blocks until
+        playback is complete so the tool returns a proper status.
+        """
+        if not text:
+            return "No text provided to read aloud."
+        
+        try:
+            # Get the provider setting
+            provider = getattr(self, 'read_aloud_provider', 'tts') or 'tts'
+            
+            if provider == 'tts':
+                success = self._synthesize_and_play_tts(
+                    text,
+                    chat_id=self.current_chat_id,
+                    stop_event=None
+                )
+            elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
+                success = self._synthesize_and_play_audio_preview(
+                    text,
+                    chat_id=self.current_chat_id,
+                    model_id=provider,
+                    stop_event=None
+                )
+            else:
+                return f"Unknown read aloud provider: {provider}"
+            
+            if success:
+                return "Text was read aloud successfully."
+            else:
+                return "Failed to read text aloud."
+        except Exception as e:
+            return f"Error reading aloud: {e}"
+
     def apply_model_fetch_results(self, models, mapping):
         if mapping:
             self.model_provider_map = mapping
@@ -947,6 +993,7 @@ class OpenAIGTKClient(Gtk.Window):
             # Keep the ToolManager in sync with any updated tool options.
             self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
             self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
+            self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
 
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()
@@ -1007,6 +1054,7 @@ class OpenAIGTKClient(Gtk.Window):
             # Update the ToolManager with the new settings.
             self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
             self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
+            self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
             # Persist all settings, including the updated tool flags.
             save_settings(convert_settings_for_save(get_object_settings(self)))
         dialog.destroy()
@@ -1467,12 +1515,13 @@ class OpenAIGTKClient(Gtk.Window):
             elif provider_name == 'openai':
                 messages_to_send = self._messages_for_model(model)
 
-                # Provide handlers so OpenAI models can call tools (image/music)
+                # Provide handlers so OpenAI models can call tools (image/music/read_aloud)
                 # autonomously when they decide it is helpful.
                 last_user_msg = last_msg
 
                 image_tool_handler = None
                 music_tool_handler = None
+                read_aloud_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -1481,6 +1530,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
                         return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                if self._supports_read_aloud_tools(model):
+                    def read_aloud_tool_handler(text):
+                        return self._handle_read_aloud_tool(text)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -1493,6 +1546,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["image_tool_handler"] = image_tool_handler
                 if music_tool_handler is not None:
                     kwargs["music_tool_handler"] = music_tool_handler
+                if read_aloud_tool_handler is not None:
+                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'gemini':
@@ -1504,6 +1559,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                 image_tool_handler = None
                 music_tool_handler = None
+                read_aloud_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -1512,6 +1568,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
                         return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                if self._supports_read_aloud_tools(model):
+                    def read_aloud_tool_handler(text):
+                        return self._handle_read_aloud_tool(text)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -1525,6 +1585,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["image_tool_handler"] = image_tool_handler
                 if music_tool_handler is not None:
                     kwargs["music_tool_handler"] = music_tool_handler
+                if read_aloud_tool_handler is not None:
+                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
 
@@ -1537,6 +1599,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                 image_tool_handler = None
                 music_tool_handler = None
+                read_aloud_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -1545,6 +1608,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
                         return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                if self._supports_read_aloud_tools(model):
+                    def read_aloud_tool_handler(text):
+                        return self._handle_read_aloud_tool(text)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -1557,6 +1624,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["image_tool_handler"] = image_tool_handler
                 if music_tool_handler is not None:
                     kwargs["music_tool_handler"] = music_tool_handler
+                if read_aloud_tool_handler is not None:
+                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'claude':
@@ -1569,6 +1638,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                 image_tool_handler = None
                 music_tool_handler = None
+                read_aloud_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -1577,6 +1647,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
                         return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+
+                if self._supports_read_aloud_tools(model):
+                    def read_aloud_tool_handler(text):
+                        return self._handle_read_aloud_tool(text)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -1590,6 +1664,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["image_tool_handler"] = image_tool_handler
                 if music_tool_handler is not None:
                     kwargs["music_tool_handler"] = music_tool_handler
+                if read_aloud_tool_handler is not None:
+                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
             else:
@@ -1604,9 +1680,16 @@ class OpenAIGTKClient(Gtk.Window):
             self.conversation_history.append(assistant_message)
 
             # Update UI in main thread
+            formatted_answer = format_response(answer)
             GLib.idle_add(self.hide_thinking_animation)
-            GLib.idle_add(lambda: self.append_message('ai', format_response(answer)))
+            GLib.idle_add(lambda: self.append_message('ai', formatted_answer))
             GLib.idle_add(self.save_current_chat)
+            
+            # Read aloud the response if enabled (runs in background thread)
+            # Skip for audio models since they already play audio directly
+            is_audio_model = "audio" in model.lower() and "preview" in model.lower()
+            if not is_audio_model:
+                self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
             
         except Exception as error:
             print(f"\nAPI Call Error: {error}")
@@ -2388,6 +2471,221 @@ class OpenAIGTKClient(Gtk.Window):
         
         btn_speak.connect("clicked", on_speak_clicked)
         return btn_speak
+
+    # -----------------------------------------------------------------------
+    # Read Aloud Helpers – synthesize and play text via TTS or audio-preview
+    # -----------------------------------------------------------------------
+
+    def _synthesize_and_play_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
+        """
+        Synthesize text using OpenAI TTS and play it.
+        
+        Uses the existing TTS voice/HD settings and caches audio files per chat.
+        Returns True if playback completed successfully, False otherwise.
+        """
+        import hashlib
+        
+        # Get the OpenAI provider for TTS
+        openai_provider = self.providers.get('openai')
+        if not openai_provider:
+            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
+            if api_key:
+                openai_provider = self.initialize_provider('openai', api_key)
+        
+        if not openai_provider:
+            print("Read Aloud: OpenAI provider not available for TTS")
+            return False
+        
+        try:
+            # Clean the text of any audio file tags
+            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
+            if not clean_text:
+                return True  # Nothing to say
+            
+            # Get audio directory for caching
+            if chat_id:
+                audio_dir = get_chat_dir(chat_id) / 'audio'
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Generate a hash of the message text for uniqueness
+                text_hash = hashlib.md5(clean_text.encode()).hexdigest()[:8]
+                current_mode = "ttshd" if self.tts_hd else "tts"
+                audio_file = audio_dir / f"read_aloud_{current_mode}_{self.tts_voice}_{text_hash}.wav"
+                
+                # Check for cached file
+                if audio_file.exists():
+                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+                    self.current_read_aloud_process.wait()
+                    return True
+            else:
+                # No chat_id, use a temp file
+                import tempfile
+                audio_file = Path(tempfile.gettempdir()) / f"read_aloud_{hash(clean_text)}.wav"
+            
+            # Generate TTS audio
+            with openai_provider.audio.speech.with_streaming_response.create(
+                model="tts-1-hd" if self.tts_hd else "tts-1",
+                voice=self.tts_voice,
+                input=clean_text
+            ) as response:
+                with open(audio_file, 'wb') as f:
+                    for chunk in response.iter_bytes():
+                        if stop_event and stop_event.is_set():
+                            # User requested stop
+                            audio_file.unlink(missing_ok=True)
+                            return False
+                        f.write(chunk)
+            
+            if stop_event and stop_event.is_set():
+                audio_file.unlink(missing_ok=True)
+                return False
+            
+            # Play the generated audio
+            self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+            self.current_read_aloud_process.wait()
+            return True
+            
+        except Exception as e:
+            print(f"Read Aloud TTS error: {e}")
+            return False
+
+    def _synthesize_and_play_audio_preview(self, text: str, *, chat_id: str, model_id: str, stop_event: threading.Event = None) -> bool:
+        """
+        Synthesize text using gpt-4o-audio-preview or gpt-4o-mini-audio-preview.
+        
+        Builds a prompt using the configured template and sends it to the audio model.
+        Returns True if playback completed successfully, False otherwise.
+        """
+        # Get the OpenAI provider
+        openai_provider = self.providers.get('openai')
+        if not openai_provider:
+            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
+            if api_key:
+                openai_provider = self.initialize_provider('openai', api_key)
+        
+        if not openai_provider:
+            print("Read Aloud: OpenAI provider not available for audio-preview")
+            return False
+        
+        try:
+            # Clean the text of any audio file tags
+            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
+            if not clean_text:
+                return True  # Nothing to say
+            
+            # Build the prompt using the configured template
+            template = getattr(self, 'read_aloud_audio_prompt_template', '') or 'Please say the following verbatim in a New York accent: "{text}"'
+            prompt = template.replace('{text}', clean_text)
+            
+            # Call the audio-preview model
+            response = openai_provider.client.chat.completions.create(
+                model=model_id,
+                modalities=["text", "audio"],
+                audio={"voice": self.tts_voice, "format": "wav"},
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            if stop_event and stop_event.is_set():
+                return False
+            
+            # Extract and play the audio
+            if hasattr(response.choices[0].message, 'audio') and response.choices[0].message.audio:
+                audio_data = response.choices[0].message.audio.data
+                audio_bytes = base64.b64decode(audio_data)
+                
+                # Save to file
+                if chat_id:
+                    audio_dir = get_chat_dir(chat_id) / 'audio'
+                    audio_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    audio_file = audio_dir / f"read_aloud_audio_preview_{timestamp}.wav"
+                else:
+                    import tempfile
+                    audio_file = Path(tempfile.gettempdir()) / f"read_aloud_audio_preview_{hash(clean_text)}.wav"
+                
+                with open(audio_file, 'wb') as f:
+                    f.write(audio_bytes)
+                
+                if stop_event and stop_event.is_set():
+                    audio_file.unlink(missing_ok=True)
+                    return False
+                
+                # Play the audio
+                self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+                self.current_read_aloud_process.wait()
+                return True
+            else:
+                print("Read Aloud: No audio in response from audio-preview model")
+                return False
+                
+        except Exception as e:
+            print(f"Read Aloud audio-preview error: {e}")
+            return False
+
+    def read_aloud_text(self, text: str, *, chat_id: str = None):
+        """
+        Read the given text aloud using the configured speech provider.
+        
+        This is the main entry point for the Read Aloud feature. It checks
+        if read aloud is enabled and dispatches to the appropriate synthesis
+        method based on the configured provider.
+        
+        Runs in a background thread to avoid blocking the UI.
+        """
+        # Check if read aloud is enabled
+        if not getattr(self, 'read_aloud_enabled', False):
+            return
+        
+        # Use current chat_id if not specified
+        if chat_id is None:
+            chat_id = self.current_chat_id
+        
+        # Stop any existing read-aloud playback
+        self.stop_read_aloud()
+        
+        # Create a stop event for this playback
+        self.read_aloud_stop_event = threading.Event()
+        
+        def read_aloud_thread():
+            provider = getattr(self, 'read_aloud_provider', 'tts') or 'tts'
+            
+            try:
+                if provider == 'tts':
+                    self._synthesize_and_play_tts(
+                        text,
+                        chat_id=chat_id,
+                        stop_event=self.read_aloud_stop_event
+                    )
+                elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
+                    self._synthesize_and_play_audio_preview(
+                        text,
+                        chat_id=chat_id,
+                        model_id=provider,
+                        stop_event=self.read_aloud_stop_event
+                    )
+                else:
+                    print(f"Read Aloud: Unknown provider '{provider}'")
+            except Exception as e:
+                print(f"Read Aloud error: {e}")
+            finally:
+                self.read_aloud_stop_event = None
+        
+        threading.Thread(target=read_aloud_thread, daemon=True).start()
+
+    def stop_read_aloud(self):
+        """Stop any ongoing read-aloud playback."""
+        # Signal the read-aloud thread to stop
+        if hasattr(self, 'read_aloud_stop_event') and self.read_aloud_stop_event:
+            self.read_aloud_stop_event.set()
+        
+        # Terminate any playing audio process
+        if hasattr(self, 'current_read_aloud_process') and self.current_read_aloud_process:
+            try:
+                self.current_read_aloud_process.terminate()
+            except Exception:
+                pass
 
     def _split_table_row(self, line):
         """Split a markdown table row into cells."""

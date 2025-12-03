@@ -87,7 +87,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
 - Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, and Anthropic Claude via separate API keys.
 
-### Tools support (images & music)
+### Tools support (images, music & read aloud)
 
 - **Image tool (`generate_image`)**
   - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
@@ -109,7 +109,16 @@ Alternatively you can run the install script to add a desktop entry and set up t
           - The app expands `{cmd}` to something like `kew -q Bach` before launching.
         - Example for Kitty / Alacritty via a shell:  
           - `kitty sh -c "{cmd}"` or `alacritty -e sh -c "{cmd}"`.
-      - If you’re unsure, start with your terminal’s binary name plus its recommended “execute command” flag, and test a simple play request; any launch errors are printed to the terminal where you started ChatGTK.
+      - If you're unsure, start with your terminal's binary name plus its recommended "execute command" flag, and test a simple play request; any launch errors are printed to the terminal where you started ChatGTK.
+
+- **Read Aloud tool (`read_aloud`)**
+  - Disabled by default; enable via **Enable Read Aloud Tool** in the **Tools** dialog (top bar → *Tools*).
+  - Allows models to speak text aloud to the user using text-to-speech.
+  - Configure via **Settings → Tool Options → Read Aloud**:
+    - **Automatically read responses aloud**: when enabled, all assistant responses are automatically spoken.
+    - **Read Aloud Provider**: choose between OpenAI TTS (`tts-1` / `tts-1-hd`) or audio-preview models (`gpt-4o-audio-preview`, `gpt-4o-mini-audio-preview`).
+    - **Audio-preview prompt template**: for audio-preview models, customize the prompt used to instruct the model what to say. Use `{text}` as a placeholder for the response text. Default: `Please say the following verbatim in a New York accent: "{text}"`.
+  - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
 
 ## Screenshots
 
