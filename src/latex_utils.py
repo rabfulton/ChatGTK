@@ -321,19 +321,454 @@ def is_latex_installed():
 if not is_latex_installed():
     print("Warning: LaTeX or dvipng not found. Formula rendering will not work.")
 
-def escape_latex_text(text):
-    """Escape special LaTeX characters in text."""
+
+# =============================================================================
+# UNIFIED TOKENIZATION SYSTEM FOR PDF EXPORT
+# =============================================================================
+#
+# This system provides a single, coherent mechanism for protecting regions of
+# text that should not be modified by escaping or newline insertion logic.
+#
+# Pipeline order:
+#   1. Extract all protected regions (code blocks, inline code, math, headers, images)
+#   2. Process plain text (markdown → LaTeX conversions, escaping)
+#   3. Insert forced newlines only in plain text segments
+#   4. Restore all protected regions
+#
+# Token format: @@TYPE_INDEX@@ where TYPE is one of:
+#   - CODEBLOCK: Triple-backtick code blocks → lstlisting
+#   - INLINECODE: Backtick inline code → \lstinline
+#   - DISPLAYMATH: Display math $$...$$ or \[...\]
+#   - INLINEMATH: Inline math $...$ or \(...\)
+#   - HEADER: Markdown headers → \section*, etc.
+#   - LATEXCMD: Pre-existing LaTeX commands that should pass through
+#   - IMAGE: HTML img tags → \includegraphics
+# =============================================================================
+
+
+def escape_latex_text_simple(text: str) -> str:
+    """
+    Escape special LaTeX characters in plain text.
     
+    This is a simpler version that assumes protected regions have already
+    been tokenized. It escapes all special characters without trying to
+    detect and preserve LaTeX commands (since those are already tokens).
+    
+    Note: Order matters! Backslash must be escaped first, then other chars.
+    """
+    # First escape backslashes (must be done first to avoid double-escaping)
+    # We use a placeholder to avoid the replacement being affected by later escapes
+    text = text.replace('\\', '\x00BACKSLASH\x00')
+    
+    # Then escape other special characters
+    escapes = {
+        '&': r'\&',
+        '%': r'\%',
+        '$': r'\$',
+        '#': r'\#',
+        '_': r'\_',
+        '{': r'\{',
+        '}': r'\}',
+        '~': r'\textasciitilde{}',
+        '^': r'\textasciicircum{}',
+        '"': r"''",
+        # Bullet and dashes
+        '\u2022': r'\textbullet{}',   # •
+        '\u2014': r'\textemdash{}',   # —
+        '\u2013': r'\textendash{}',   # –
+        # Smart quotes (using unicode escapes to be explicit)
+        '\u2018': r'`',    # ' left single quote
+        '\u2019': r"'",    # ' right single quote  
+        '\u201c': r"``",   # " left double quote
+        '\u201d': r"''",   # " right double quote
+    }
+    
+    for char, escape in escapes.items():
+        text = text.replace(char, escape)
+    
+    # Finally replace the backslash placeholder
+    text = text.replace('\x00BACKSLASH\x00', r'\textbackslash{}')
+    
+    return text
+
+
+class ProtectedRegions:
+    """
+    Manages protected regions during LaTeX export processing.
+    
+    This class provides a unified tokenization mechanism that:
+    - Extracts regions that should not be modified (code, math, headers, etc.)
+    - Replaces them with placeholder tokens
+    - Restores them after other processing is complete
+    
+    Usage:
+        regions = ProtectedRegions()
+        text = regions.protect_code_blocks(text)
+        text = regions.protect_inline_code(text)
+        text = regions.protect_math(text)
+        # ... do escaping and newline processing on text ...
+        text = regions.restore_all(text)
+    """
+    
+    def __init__(self):
+        self._tokens = {}  # token -> original/processed content
+        self._counter = 0
+    
+    def _make_token(self, token_type: str) -> str:
+        """Generate a unique token placeholder."""
+        token = f"@@{token_type}_{self._counter}@@"
+        self._counter += 1
+        return token
+    
+    def _store(self, token_type: str, content: str) -> str:
+        """Store content and return its token."""
+        token = self._make_token(token_type)
+        self._tokens[token] = content
+        return token
+    
+    def protect_code_blocks(self, text: str) -> str:
+        """
+        Extract triple-backtick code blocks and replace with tokens.
+        Converts to lstlisting environments.
+        """
+        def codeblock_repl(match):
+            language = match.group(1) or ""
+            code = match.group(2)
+            # Normalize language for lstlisting
+            if not language:
+                language = "{[LaTeX]TeX}"
+            elif language.lower() == 'javascript':
+                language = 'java'
+            # Create lstlisting environment - preserve code exactly as-is
+            formatted = f"\n\\begin{{lstlisting}}[language={language}]\n{code}\n\\end{{lstlisting}}\n"
+            return self._store("CODEBLOCK", formatted)
+        
+        # Process closed code blocks first
+        pattern_closed = r"(?ms)^[ \t]*```(\w+)?\n(.*?)\n[ \t]*```[ \t]*(\n|$)"
+        text = re.sub(pattern_closed, codeblock_repl, text)
+        # Process any unclosed code blocks
+        pattern_unclosed = r"(?ms)^[ \t]*```(\w+)?\n(.*)$"
+        text = re.sub(pattern_unclosed, codeblock_repl, text)
+        return text
+    
+    def protect_inline_code(self, text: str) -> str:
+        """
+        Extract backtick inline code and replace with tokens.
+        Converts to \\lstinline commands.
+        """
+        def choose_delim(code_content):
+            """Choose a delimiter that doesn't appear in the code."""
+            candidates = ['|', '!', '/', ':', ';', '@', '+', '=']
+            for d in candidates:
+                if d not in code_content:
+                    return d
+            return '|'
+        
+        def inline_code_repl(match):
+            content = match.group(1)
+            # Don't allow inline code to span newlines - this causes issues
+            if '\n' in content:
+                # Just escape it as regular text instead
+                return '`' + content + '`'
+            delim = choose_delim(content)
+            formatted = f"\\lstinline{delim}{content}{delim}"
+            return self._store("INLINECODE", formatted)
+        
+        return re.sub(r'`([^`]+)`', inline_code_repl, text)
+    
+    def protect_display_math(self, text: str) -> str:
+        """
+        Extract display math ($$...$$ or \\[...\\]) and replace with tokens.
+        Normalizes to $$...$$ format.
+        """
+        # First convert \[...\] to $$...$$
+        text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
+        
+        # Now protect all $$...$$ blocks
+        def display_math_repl(match):
+            return self._store("DISPLAYMATH", match.group(0))
+        
+        return re.sub(r'\$\$([^$]+)\$\$', display_math_repl, text)
+    
+    def protect_inline_math(self, text: str) -> str:
+        """
+        Extract inline math ($...$ or \\(...\\)) and replace with tokens.
+        Normalizes to $...$ format.
+        """
+        # First convert \(...\) to $...$
+        text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text)
+        
+        # Now protect all $...$ (but not $$...$$, which should already be tokenized)
+        def inline_math_repl(match):
+            # Skip if this looks like it might be part of a display math that wasn't matched
+            content = match.group(1)
+            if not content.strip():
+                return match.group(0)  # Empty math, leave as-is
+            return self._store("INLINEMATH", match.group(0))
+        
+        return re.sub(r'(?<!\$)\$([^$]+)\$(?!\$)', inline_math_repl, text)
+    
+    def protect_headers(self, text: str) -> str:
+        """
+        Extract markdown headers and replace with tokens.
+        Converts to LaTeX sectioning commands.
+        Title text is escaped to handle special LaTeX characters.
+        """
+        def header_repl(match):
+            level = len(match.group(1))
+            title = match.group(2).strip()
+            # Escape special characters in the title
+            title = escape_latex_text_simple(title)
+            if level == 1:
+                cmd = f"\\section*{{{title}}}"
+            elif level == 2:
+                cmd = f"\\subsection*{{{title}}}"
+            elif level == 3:
+                cmd = f"\\subsubsection*{{{title}}}"
+            else:
+                cmd = f"\\paragraph*{{{title}}}"
+            return self._store("HEADER", cmd)
+        
+        return re.sub(r'^(#{1,4})\s*(.+)$', header_repl, text, flags=re.MULTILINE)
+    
+    def protect_latex_commands(self, text: str) -> str:
+        """
+        Protect existing LaTeX commands from escaping.
+        This handles commands like \\textbf{}, \\textit{}, \\lstinline, etc.
+        """
+        def cmd_repl(match):
+            return self._store("LATEXCMD", match.group(0))
+        
+        # Protect commands with braces: \cmd{...} or \cmd*{...}
+        # Use a pattern that handles escaped braces inside: \{ and \}
+        # Match: \command{ then any chars except unescaped }, then }
+        # This handles content like \textbf{hello \& world}
+        text = re.sub(r'\\[a-zA-Z]+\*?\{(?:[^{}]|\\[{}])*\}', cmd_repl, text)
+        
+        # Protect \lstinline commands (which use delimiters, not braces)
+        text = re.sub(r'\\lstinline[|!/:;@+=][^|!/:;@+=]*[|!/:;@+=]', cmd_repl, text)
+        
+        # Protect double backslash (line break)
+        text = re.sub(r'\\\\', cmd_repl, text)
+        
+        return text
+    
+    def protect_images(self, text: str, chat_id: str = None) -> str:
+        """
+        Extract HTML img tags and replace with tokens.
+        Converts to LaTeX \\includegraphics commands.
+        """
+        def img_repl(match):
+            src = match.group(1)
+            image_path = process_image_path(src, chat_id)
+            if image_path:
+                formatted = r'\begin{center}\includegraphics[width=\linewidth]{' + image_path + r'}\end{center}'
+            else:
+                formatted = r'\textit{[Image unavailable]}'
+            return self._store("IMAGE", formatted)
+        
+        return re.sub(r'<img\s+src="([^"]+)"\s*/?>', img_repl, text)
+    
+    def get_token_pattern(self) -> str:
+        """Return regex pattern matching any token."""
+        return r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE)_\d+@@'
+    
+    def restore_all(self, text: str) -> str:
+        """
+        Restore all protected regions by replacing tokens with their content.
+        
+        Tokens are restored in reverse order (LIFO) because later tokens may
+        contain earlier tokens. For example, if \textit{$x$} is processed:
+        1. $x$ becomes @@INLINEMATH_0@@
+        2. \textit{@@INLINEMATH_0@@} becomes @@LATEXCMD_1@@
+        
+        When restoring, we must restore LATEXCMD_1 first (revealing INLINEMATH_0),
+        then restore INLINEMATH_0.
+        """
+        # Restore in reverse order (last added first)
+        for token in reversed(list(self._tokens.keys())):
+            text = text.replace(token, self._tokens[token])
+        return text
+    
+    def split_by_tokens(self, text: str) -> list:
+        """
+        Split text into segments, separating tokens from plain text.
+        Returns list of (is_token, content) tuples.
+        """
+        pattern = self.get_token_pattern()
+        parts = re.split(f'({pattern})', text)
+        result = []
+        for part in parts:
+            if part:  # Skip empty strings
+                is_token = re.fullmatch(pattern, part) is not None
+                result.append((is_token, part))
+        return result
+
+
+def insert_forced_newlines_safe(text: str, regions: ProtectedRegions) -> str:
+    """
+    Insert LaTeX forced line breaks (\\\\) only in plain text segments.
+    
+    This function is aware of protected regions and will never insert
+    line breaks inside code blocks, math, headers, or other protected content.
+    
+    Rules for adding \\\\:
+    - Only in plain text segments (between tokens)
+    - Not on blank lines (those become paragraph breaks)
+    - Not on lines starting with LaTeX sectioning commands
+    - Not on lines already ending with \\\\
+    - Not on the last line before a blank line or end of segment
+    """
+    segments = regions.split_by_tokens(text)
+    result_parts = []
+    
+    for is_token, content in segments:
+        if is_token:
+            # Token - pass through unchanged
+            result_parts.append(content)
+        else:
+            # Plain text - process line by line
+            lines = content.split('\n')
+            processed = []
+            
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                
+                # Rule: blank lines stay blank (paragraph break)
+                if stripped == "":
+                    processed.append(line)
+                    continue
+                
+                # Rule: lines starting with sectioning commands don't get \\
+                if re.match(r'^\s*\\(section|subsection|subsubsection|paragraph)\*?\{', line):
+                    processed.append(line)
+                    continue
+                
+                # Rule: lines already ending with \\ don't get another
+                if re.search(r'\\\\\s*$', line):
+                    processed.append(line)
+                    continue
+                
+                # Rule: don't add \\ if this is the last line or next line is blank
+                # This prevents "There's no line here to end" errors
+                is_last = (i == len(lines) - 1)
+                next_is_blank = (i < len(lines) - 1 and lines[i + 1].strip() == "")
+                
+                if is_last or next_is_blank:
+                    processed.append(line)
+                else:
+                    processed.append(line + r"\\")
+            
+            result_parts.append('\n'.join(processed))
+    
+    return ''.join(result_parts)
+
+
+def process_bold_italic(text: str) -> str:
+    """
+    Convert markdown bold and italic to LaTeX.
+    
+    Important constraints:
+    - Must not span multiple lines (LaTeX \\textbf/\\textit don't allow \\par inside)
+    - Content inside must have special chars escaped, but tokens must be preserved
+    """
+    # Token pattern to protect from escaping
+    token_pattern = r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE)_\d+@@'
+    
+    def escape_preserving_tokens(content):
+        """Escape content but preserve any tokens it contains."""
+        # Split by tokens
+        parts = re.split(f'({token_pattern})', content)
+        result = []
+        for part in parts:
+            if re.fullmatch(token_pattern, part):
+                # This is a token - keep as-is
+                result.append(part)
+            else:
+                # This is plain text - escape it
+                result.append(escape_latex_text_simple(part))
+        return ''.join(result)
+    
+    def make_bold(match):
+        content = match.group(1)
+        content = escape_preserving_tokens(content)
+        return f'\\textbf{{{content}}}'
+    
+    def make_italic(match):
+        content = match.group(1)
+        content = escape_preserving_tokens(content)
+        return f'\\textit{{{content}}}'
+    
+    # Bold: **text** → \textbf{text}
+    # Use [^*\n]+ to avoid matching across newlines
+    text = re.sub(r'\*\*([^*\n]+)\*\*', make_bold, text)
+    
+    # Italic: *text* → \textit{text}
+    # Use [^*\n]+ to avoid matching across newlines
+    text = re.sub(r'\*([^*\n]+)\*', make_italic, text)
+    
+    return text
+
+
+def escape_latex_text(text):
+    """Escape special LaTeX characters in text, preserving math expressions."""
+    import re
+
     # Don't escape if the text is already a LaTeX equation
     if text.strip().startswith('$') and text.strip().endswith('$'):
         return text
-    
+
     if text.strip().startswith('\\begin{equation*}'):
         return text
 
     if text.strip().startswith('\\begin{center}\\includegraphics'):
         return text
 
+    # Tokenize expressions to protect them from escaping
+    protected_items = []  # List of (token, original_text) pairs
+
+    # Find display math $$...$$
+    def display_math_repl(match):
+        token = f"@@DISPLAYMATH{len(protected_items)}@@"
+        protected_items.append((token, match.group(0)))
+        return token
+
+    text = re.sub(r'\$\$([^$]+)\$\$', display_math_repl, text)
+
+    # Find inline math $...$
+    def inline_math_repl(match):
+        token = f"@@INLINEMATH{len(protected_items)}@@"
+        protected_items.append((token, match.group(0)))
+        return token
+
+    text = re.sub(r'\$([^$]+)\$', inline_math_repl, text)
+
+    # Find LaTeX commands like \textbf{...}, \textit{...}, \section*{...}, etc.
+    def latex_cmd_repl(match):
+        token = f"@@LATEXCMD{len(protected_items)}@@"
+        protected_items.append((token, match.group(0)))
+        return token
+
+    # Match common LaTeX commands with their arguments
+    text = re.sub(r'\\[a-zA-Z]+\*?\{[^}]*\}', latex_cmd_repl, text)
+
+    # Also protect \lstinline commands
+    def lstinline_repl(match):
+        token = f"@@LATEXCMD{len(protected_items)}@@"
+        protected_items.append((token, match.group(0)))
+        return token
+
+    text = re.sub(r'\\lstinline[^\s]*', lstinline_repl, text)
+
+    # Protect double backslash (line break command)
+    def double_backslash_repl(match):
+        token = f"@@LATEXCMD{len(protected_items)}@@"
+        protected_items.append((token, match.group(0)))
+        return token
+
+    text = re.sub(r'\\\\', double_backslash_repl, text)
+
+    # Now escape the remaining text
     escapes = {
         '\\': r'\textbackslash{}',
         '&': r'\&',
@@ -345,15 +780,26 @@ def escape_latex_text(text):
         '}': r'\}',
         '~': r'\textasciitilde{}',
         '^': r'\textasciicircum{}',
-        '<': r'\textless{}',
-        '>': r'\textgreater{}',
-        '"': "''",  # Changed to use simple quotes instead of \textquotedbl
+        '<': r'<',
+        '>': r'>',
+        '"': r"''",  # Use simple quotes
+        '•': r'\textbullet{}',  # Bullet point
+        '—': r'\textemdash{}',  # Em dash
+        '–': r'\textendash{}',  # En dash
+        ''': r'`',  # Left single quote
+        ''': r"'",  # Right single quote
+        '"': r"''",  # Left double quote
+        '"': r"''",  # Right double quote
     }
-    
+
     result = text
     for char, escape in escapes.items():
         result = result.replace(char, escape)
-    
+
+    # Restore protected expressions
+    for token, expr in protected_items:
+        result = result.replace(token, expr)
+
     return result
 
 def process_image_path(src, chat_id=None):
@@ -379,66 +825,75 @@ def process_image_path(src, chat_id=None):
 def format_message_content(content: str, chat_id=None) -> str:
     """
     Process a message content through markdown-like formatting for LaTeX export.
-    Converts code blocks with triple backticks to raw LaTeX lstlisting blocks,
-    preserving line breaks and avoiding further inline markdown processing.
-    """
-    import re, sys
-
-    # Replace audio tags with transcript text
-    def audio_tag_replacer(match):
-        # Get the text content before the audio tag
-        text_before = content[:match.start()].strip()
-        return text_before
-
-    # Remove audio tags and keep transcript
-    content = re.sub(r'\n?<audio_file>.*?</audio_file>', '', content)
-
-    # --- Step 1: Tokenize code blocks so that inline processing does not affect them.
-    code_blocks = []
-
-    def codeblock_repl(match):
-        language = match.group(1) or ""
-        code = match.group(2)
-        # Do not alter the code—the newlines and spacing are preserved as-is.
-        # If no language is provided, default to printing as raw LaTeX.
-        if not language:
-            language = "{[LaTeX]TeX}"
-        if language.lower() == 'javascript':
-            language = 'java'
-        # Create a raw LaTeX lstlisting environment.
-        formatted = f"\n\\begin{{lstlisting}}[language={language}]\n{code}\n\\end{{lstlisting}}\n"
-        token = f"@@CODEBLOCK_{len(code_blocks)}@@"
-        code_blocks.append(formatted)
-        return token
-
-    # Process closed code blocks.
-    pattern_closed = r"(?ms)^[ \t]*```(\w+)?\n(.*?)\n[ \t]*```[ \t]*(\n|$)"
-    content = re.sub(pattern_closed, codeblock_repl, content)
-    # Process any unclosed code blocks.
-    pattern_unclosed = r"(?ms)^[ \t]*```(\w+)?\n(.*)$"
-    content = re.sub(pattern_unclosed, codeblock_repl, content)
-
-    # --- Step 2: Process inline math (e.g. convert \( ... \) to $...$)
-    content = re.sub(r"\\\((.*?)\\\)", r'$\1$', content)
-
-    # --- Step 3: Process inline markdown formatting (headers, bold, inline code, etc.)
-    this_mod = sys.modules[__name__]
-    content = this_mod.process_inline_markup(content)
-
-    # --- Step 4: Reinsert our protected code blocks.
-    for i, block in enumerate(code_blocks):
-        content = content.replace(f"@@CODEBLOCK_{i}@@", block)
-
-    # --- Step 5: Process HTML image tags.
-    content = process_html_image_tags(content, chat_id)
     
-    # --- Final Step: Escape stray '#' characters.
-    content = escape_unprotected_hashes(content)
+    This function uses a unified tokenization system to protect regions that
+    should not be modified (code blocks, math, headers, etc.) before applying
+    escaping and newline insertion to plain text.
+    
+    Pipeline:
+        1. Remove custom tags (audio, etc.)
+        2. Protect all sensitive regions with tokens
+        3. Process markdown (bold/italic) in plain text
+        4. Escape LaTeX special characters in plain text
+        5. Insert forced newlines in plain text only
+        6. Restore all protected regions
+    """
+    # Initialize the unified protection system
+    regions = ProtectedRegions()
+    
+    # --- Step 1: Remove custom tags ---
+    # Remove audio tags entirely
+    content = re.sub(r'\n?<audio_file>.*?</audio_file>', '', content)
+    
+    # --- Step 2: Protect all sensitive regions (order matters!) ---
+    # Code blocks first (they may contain anything, including math-like syntax)
+    content = regions.protect_code_blocks(content)
+    
+    # Display math before inline math ($$...$$ before $...$)
+    content = regions.protect_display_math(content)
+    content = regions.protect_inline_math(content)
+    
+    # Headers (must be before inline code, as headers might contain backticks)
+    content = regions.protect_headers(content)
+    
+    # Inline code
+    content = regions.protect_inline_code(content)
+    
+    # Images
+    content = regions.protect_images(content, chat_id)
+    
+    # --- Step 3: Process markdown formatting in remaining plain text ---
+    # Bold and italic (these create LaTeX commands that we then protect)
+    content = process_bold_italic(content)
+    
+    # Now protect the LaTeX commands we just created (textbf, textit, etc.)
+    content = regions.protect_latex_commands(content)
+    
+    # --- Step 4: Escape special characters in plain text ---
+    # At this point, only plain text remains unprotected
+    segments = regions.split_by_tokens(content)
+    escaped_parts = []
+    for is_token, segment in segments:
+        if is_token:
+            escaped_parts.append(segment)
+        else:
+            escaped_parts.append(escape_latex_text_simple(segment))
+    content = ''.join(escaped_parts)
+    
+    # --- Step 5: Insert forced newlines in plain text only ---
+    content = insert_forced_newlines_safe(content, regions)
+    
+    # --- Step 6: Restore all protected regions ---
+    content = regions.restore_all(content)
     
     return content
 
 def process_inline_markup(text):
     r"""
+    DEPRECATED: This function is kept for backward compatibility.
+    New code should use format_message_content() which uses the unified
+    ProtectedRegions tokenization system.
+    
     Process inline markdown markup and convert it to raw LaTeX.
     
     This function converts:
@@ -466,10 +921,9 @@ def process_inline_markup(text):
     def inline_code_token(match):
         content = match.group(1)
         token = f"@@INLINECODE_{len(inline_code_tokens)}@@"
-        # Convert inline code to a robust LaTeX representation.
-        # We use \\texttt{\\detokenize{...}} so that inline code remains safe when nested
-        # within other formatting commands (avoiding issues with fragile \\verb or \\lstinline).
-        inline_code_tokens.append(f"\\texttt{{\\detokenize{{{content}}}}}")
+        # Use lstinline for inline code - it handles special characters better than detokenize
+        delim = choose_delim(content)
+        inline_code_tokens.append(f"\\lstinline{delim}{content}{delim}")
         return token
 
     text = re.sub(r'`([^`]+)`', inline_code_token, text)
@@ -509,6 +963,9 @@ def process_inline_markup(text):
 
 def insert_forced_newlines(text):
     """
+    DEPRECATED: This function is kept for backward compatibility.
+    New code should use insert_forced_newlines_safe() with a ProtectedRegions instance.
+    
     Insert explicit LaTeX forced line breaks (\\\\) into non-protected text.
     
     This function splits the text by token placeholders (used for code blocks,
@@ -524,7 +981,7 @@ def insert_forced_newlines(text):
     """
     import re
 
-    token_pattern = r'(@@(?:CODEBLOCK|INLINECODE|HEADER)_\d+@@)'
+    token_pattern = r'(@@(?:CODEBLOCK|INLINECODE|HEADER)[_\d]+@@)'
     parts = re.split(token_pattern, text)
     new_parts = []
     for part in parts:
@@ -615,6 +1072,7 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
             latex_preamble = r"""
 \documentclass{article}
 \usepackage[utf8]{inputenc}
+\DeclareTextSymbol{\textquotedbl}{OT1}{34}
 \usepackage{geometry}
 \usepackage{xcolor}
 \usepackage{parskip}
@@ -690,9 +1148,7 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
     escapeinside={(*@}{@*)},
     mathescape=false,
     texcl=false,
-    escapechar=\%,
     upquote=true,
-    literate={\\}{\\}1 {\ }{ }1,
     basewidth={0.5em,0.45em},
     lineskip=-0.1pt,
     xleftmargin=\dimexpr\fboxsep+1pt\relax,
@@ -729,7 +1185,9 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
                     ['pdflatex', '-interaction=nonstopmode', str(tex_file)],
                     cwd=temp_dir,
                     capture_output=True,
-                    text=True
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace'
                 )
                 print(f"DEBUG: pdflatex return code: {result.returncode}")
                 if result.returncode != 0:
@@ -745,7 +1203,11 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
                     log_file = temp_dir / "chat_export.log"
                     if log_file.exists():
                         debug_log = Path('debug_failed.log')
-                        debug_log.write_text(log_file.read_text())
+                        try:
+                            debug_log.write_text(log_file.read_text(encoding='utf-8', errors='replace'))
+                        except UnicodeDecodeError:
+                            # If log file contains binary data, save as binary
+                            debug_log.write_bytes(log_file.read_bytes())
                         print(f"DEBUG: Saved LaTeX log to {debug_log}")
                     return False
                     
