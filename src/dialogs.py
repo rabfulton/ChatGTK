@@ -586,6 +586,25 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.spin_max_tokens, False, True, 0)
         list_box.add(row)
 
+        # Conversation Buffer Length
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(
+            label="Message Buffer (1 = No Memory, ALL = Whole Conversation)",
+            xalign=0,
+        )
+        label.set_hexpand(True)
+        self.entry_conv_buffer = Gtk.Entry()
+        self.entry_conv_buffer.set_hexpand(False)
+        self.entry_conv_buffer.set_width_chars(10)
+        current_buffer = getattr(self, "conversation_buffer_length", "ALL") or "ALL"
+        self.entry_conv_buffer.set_text(str(current_buffer))
+        self.entry_conv_buffer.set_placeholder_text("ALL")
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_conv_buffer, False, True, 0)
+        list_box.add(row)
+
         # Temperament
         row = Gtk.ListBoxRow()
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -1079,6 +1098,8 @@ class SettingsDialog(Gtk.Dialog):
             'read_aloud_tool_enabled': self.switch_read_aloud_tool.get_active(),
             'read_aloud_provider': self.combo_read_aloud_provider.get_active_id() or 'tts',
             'read_aloud_audio_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
+            # Conversation buffer length (string: "ALL", "0", "10", etc.)
+            'conversation_buffer_length': (self.entry_conv_buffer.get_text() or "ALL").strip(),
         }
 
     def get_api_keys(self):

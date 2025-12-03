@@ -45,6 +45,12 @@ SETTINGS_CONFIG = {
     'SIDEBAR_VISIBLE': {'type': bool, 'default': True},
     'SIDEBAR_WIDTH': {'type': int, 'default': 200},
     'MAX_TOKENS': {'type': int, 'default': 0},
+    # Conversation buffer length controls how much of the history is sent with
+    # each request. Accepted values:
+    #   - "ALL" (default): send the full conversation history.
+    #   - "0": send only the latest non-system message.
+    #   - Any positive integer N: send the last N non-system messages.
+    'CONVERSATION_BUFFER_LENGTH': {'type': str, 'default': 'ALL'},
     'SOURCE_THEME': {'type': str, 'default': 'solarized-dark'},
     'LATEX_DPI': {'type': int, 'default': 200},
     'LATEX_COLOR': {'type': str, 'default': '#000000'},

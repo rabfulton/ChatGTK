@@ -490,7 +490,65 @@ class OpenAIGTKClient(Gtk.Window):
         if provider_name == 'openai':
             ai_provider = provider
         return provider
-    
+
+    def _get_conversation_buffer_limit(self):
+        """
+        Return the configured conversation buffer length as an integer.
+
+        Returns:
+            None: send the full conversation history (ALL).
+            0:    send only the latest non-system message.
+            N>0:  send the last N non-system messages.
+        """
+        raw = getattr(self, "conversation_buffer_length", None)
+        if raw is None:
+            return None
+
+        # Accept both numeric and string values for robustness.
+        if isinstance(raw, (int, float)):
+            value = int(raw)
+            return max(value, 0)
+
+        text = str(raw).strip()
+        if not text:
+            return None
+
+        if text.upper() == "ALL":
+            return None
+
+        try:
+            value = int(text)
+            return max(value, 0)
+        except ValueError:
+            print(f"Invalid CONVERSATION_BUFFER_LENGTH value '{raw}', defaulting to ALL.")
+            return None
+
+    def _apply_conversation_buffer_limit(self, history):
+        """
+        Apply the configured conversation buffer length to the given history.
+
+        The system message (first entry) is always preserved when present.
+        """
+        if not history:
+            return history
+
+        limit = self._get_conversation_buffer_limit()
+        if limit is None or len(history) <= 1:
+            # No limit configured, or only system + one message.
+            return history
+
+        first = history[0]
+        non_system = history[1:]
+        if not non_system:
+            return history
+
+        if limit == 0:
+            trimmed = [non_system[-1]]
+        else:
+            trimmed = non_system[-limit:]
+
+        return [first] + trimmed
+
     def _messages_for_model(self, model_name):
         """
         Return the conversation history, appending additional system guidance for
@@ -500,15 +558,18 @@ class OpenAIGTKClient(Gtk.Window):
         """
         if not self.conversation_history:
             return []
+
+        # For non-chat-completion models, we still respect the buffer limit but
+        # skip any extra system guidance.
         if not is_chat_completion_model(model_name):
-            return self.conversation_history
+            return self._apply_conversation_buffer_limit(self.conversation_history)
 
         first_message = self.conversation_history[0]
         if first_message.get("role") != "system":
-            return self.conversation_history
+            return self._apply_conversation_buffer_limit(self.conversation_history)
 
         current_prompt = first_message.get("content", "") or ""
-        
+
         # Get enabled tools for this model and append guidance using the tools module.
         try:
             enabled_tools = self.tool_manager.get_enabled_tools_for_model(
@@ -519,11 +580,14 @@ class OpenAIGTKClient(Gtk.Window):
             print(f"Error while appending tool guidance: {e}")
             new_prompt = current_prompt
 
-        # If nothing changed, return the original history.
-        if new_prompt == current_prompt:
-            return self.conversation_history
+        # Start from the current conversation history and apply the buffer limit.
+        limited_history = self._apply_conversation_buffer_limit(self.conversation_history)
 
-        messages = [msg.copy() for msg in self.conversation_history]
+        # If nothing changed in the prompt, just return the (possibly trimmed) history.
+        if new_prompt == current_prompt:
+            return limited_history
+
+        messages = [msg.copy() for msg in limited_history]
         messages[0]["content"] = new_prompt
         return messages
 
