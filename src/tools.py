@@ -24,10 +24,9 @@ from typing import Any, Callable, Dict, List, Optional, Set
 CHAT_COMPLETION_EXCLUDE_TERMS = ("dall", "image", "realtime", "audio", "tts", "whisper")
 
 # Guidance appended to system prompts for math formatting.
-MATH_PROMPT_APPENDIX = (
-    "When writing mathematical equations, do not use the dollar sign ($) as a delimiter. "
-    "Instead, use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
-    "Leave currency amounts as standard dollar signs (e.g., $5.00)."
+SYSTEM_PROMPT_APPENDIX = (
+    "When writing mathematical equations use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
+    "You always format your responses using markdown."
 )
 
 # Guidance appended to system prompts when the image tool is enabled.
@@ -199,11 +198,11 @@ def append_tool_guidance(
     """
     result = system_prompt.rstrip() if system_prompt else ""
 
-    if include_math and MATH_PROMPT_APPENDIX not in result:
+    if include_math and SYSTEM_PROMPT_APPENDIX not in result:
         if result:
-            result = f"{result}\n\n{MATH_PROMPT_APPENDIX}"
+            result = f"{result}\n\n{SYSTEM_PROMPT_APPENDIX}"
         else:
-            result = MATH_PROMPT_APPENDIX
+            result = SYSTEM_PROMPT_APPENDIX
 
     for tool_name in sorted(enabled_tools):
         spec = TOOL_REGISTRY.get(tool_name)

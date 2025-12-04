@@ -310,26 +310,64 @@ class OpenAIProvider(AIProvider):
         params = {}
         
         if is_reasoning_model:
-            # Format messages with the correct content structure, skipping system messages
+            # Format messages with the correct content structure for reasoning models.
+            # For o1/o3 and newer, OpenAI recommends using *developer* messages
+            # instead of legacy system messages:
+            # https://platform.openai.com/docs/api-reference/chat/create
+            #
+            # Our chat pipeline (in ChatGTK._messages_for_model) stores the
+            # conversation instructions – including SYSTEM_PROMPT_APPENDIX and
+            # any tool guidance – as a leading "system" message. To ensure that
+            # these instructions are honored by reasoning models, we convert any
+            # such system message into a developer message here.
+            #
+            # Starting with o1-2024-12-17, reasoning models avoid markdown
+            # formatting by default. To explicitly request markdown output we
+            # follow OpenAI's guidance and include the string
+            # "Formatting re-enabled" on the first line of our developer
+            # message.
             formatted_messages = []
+            formatting_flag_added = False
+
             for msg in messages:
-                if msg["role"] != "system":  # Skip system messages
-                    formatted_messages.append({
-                        "role": msg["role"],
-                        "content": [{
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+
+                # Map system → developer so o1/o3 obey SYSTEM_PROMPT_APPENDIX
+                # and the rest of the system instructions.
+                if role == "system":
+                    role = "developer"
+
+                    if not formatting_flag_added:
+                        if "Formatting re-enabled" not in content:
+                            # Ensure the required marker is on the first line.
+                            content = "Formatting re-enabled\n\n" + (content.lstrip() if isinstance(content, str) else content)
+                        formatting_flag_added = True
+
+                # Skip messages with no textual content; reasoning models expect
+                # text-only content in this path.
+                if not content:
+                    continue
+
+                formatted_messages.append({
+                    "role": role,
+                    "content": [
+                        {
                             "type": "text",
-                            "text": msg["content"]
-                        }]
-                    })
-            
+                            "text": content,
+                        }
+                    ],
+                })
+
             params.update({
-                'model': model,
-                'messages': formatted_messages,
-                # TODO developer messages and reasoning_effort do not seem to be working here. Revisit this in the future.
-                #'reasoning_effort': 'low',  # Can be 'low', 'medium', or 'high'
-                'response_format': {
-                    'type': 'text'
-                }
+                "model": model,
+                "messages": formatted_messages,
+                # TODO developer messages and reasoning_effort do not seem to be
+                # working here. Revisit this in the future.
+                # "reasoning_effort": "low",  # Can be "low", "medium", or "high"
+                "response_format": {
+                    "type": "text",
+                },
             })
         else:
             # Preprocess messages to handle images and clean keys

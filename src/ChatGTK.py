@@ -56,7 +56,7 @@ from tools import (
     is_chat_completion_model,
     append_tool_guidance,
     CHAT_COMPLETION_EXCLUDE_TERMS,
-    MATH_PROMPT_APPENDIX,
+    SYSTEM_PROMPT_APPENDIX,
     IMAGE_TOOL_PROMPT_APPENDIX,
     MUSIC_TOOL_PROMPT_APPENDIX,
 )
@@ -553,7 +553,7 @@ class OpenAIGTKClient(Gtk.Window):
         """
         Return the conversation history, appending additional system guidance for
         certain models:
-        - MATH_PROMPT_APPENDIX for standard chat completion models.
+        - SYSTEM_PROMPT_APPENDIX for standard chat completion models.
         - Tool-specific guidance when tools are available.
         """
         if not self.conversation_history:
