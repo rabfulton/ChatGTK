@@ -96,20 +96,17 @@ Alternatively you can run the install script to add a desktop entry and set up t
 
 - **Music control tool (`control_music`)**
   - Disabled by default; enable via **Enable Music Tool** in the **Tools** dialog.
-  - Lets the model control your local music playback through the [`kew` terminal music player](https://github.com/ravachol/kew) and MPRIS.
-  - Supported actions: `play` (with a keyword/song/album/artist), `pause`, `resume`, `stop`, `next`, `previous`, `volume_up`, `volume_down`, `set_volume`.
-  - You can optionally have `kew` run inside its own terminal window via **Settings → Tool Options → Music Tool**:
-    - **Launch kew in terminal**: when enabled, the app starts `kew` through your preferred terminal instead of headless.
-    - **Terminal command prefix**:
-      - Simple prefixes (no `{cmd}`), e.g. `gnome-terminal --` or `konsole -e`  
-        → the app appends the `kew` command and arguments for you.
-      - Template mode using `{cmd}` for terminals that require a full command string (e.g. `xfce4-terminal`):  
-        - Example for Xfce:  
-          - `xfce4-terminal --command="{cmd}"`  
-          - The app expands `{cmd}` to something like `kew -q Bach` before launching.
-        - Example for Kitty / Alacritty via a shell:  
-          - `kitty sh -c "{cmd}"` or `alacritty -e sh -c "{cmd}"`.
-      - If you're unsure, start with your terminal's binary name plus its recommended "execute command" flag, and test a simple play request; any launch errors are printed to the terminal where you started ChatGTK.
+  - Lets the model play music from your local [beets](https://beets.io/) music library using a configurable player (default: `mpv`).
+  - The assistant translates natural language requests into **beets query strings** for smart playlist generation. Examples:
+    - "Play some 80s music" → `year:1980..1989`
+    - "Play jazz from the 1950s" → `genre:jazz year:1950..1959`
+    - "Play something by Pink Floyd" → `artist:"Pink Floyd"`
+  - Configure via **Settings → Tool Options → Music Tool**:
+    - **Music Player Executable**: path to your music player and required arguments to play a playlist (e.g. `/usr/bin/audacioius -p <playlist>`)
+    - **Music Library Directory**: directory where your music files are stored
+    - **Beets Library DB** (optional): path to your beets `library.db` file; leave empty to use app-generated library
+    - **Generate Library** button: scans your Music Library Directory and creates a beets library automatically (no need to run `beet import` manually)
+  - Non-play actions (pause, resume, stop, next, previous) require `playerctl` for MPRIS control.
 
 - **Read Aloud tool (`read_aloud`)**
   - Disabled by default; enable via **Enable Read Aloud Tool** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
@@ -138,6 +135,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - soundfile>=0.12.1
 - numpy>=1.24.0
 - pathlib>=1.0.1
+- beets>=1.6.0 (optional, for music control tool)
 
 ## System Dependencies
 - python3
@@ -146,15 +144,16 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - pulseaudio
 - texlive (for LaTeX support)
 - dvipng (for LaTeX rendering)
- - Optional, for music control tool:
-   - [`kew` terminal music player](https://github.com/ravachol/kew) (must be on `PATH`)
-   - `playerctl` (for MPRIS-based playback control)
+- Optional, for music control tool:
+  - A music player such as `vlc` (configurable in Settings)
+  - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
+  - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
 
 ## FAQ
 
 **gpt-image-1 is not working**<br>
 OpenAI requires identity verification for some of their models. You can verify your identity [here](https://platform.openai.com/settings/organization/general).<br>
 **Music tool is not working**<br>
-After installation you must inform `kew` where your music is stored by running `kew path "/path/to/My_Music/"` from your terminal.<br>
+Set your **Music Library Directory** in **Settings → Tool Options**, then click the **Generate Library** button to scan your music files. Verify your **Music Player Executable** path is correct (default: `/usr/bin/audacious -p <playlist>`). Alternatively, if you already have a beets library, you can specify its path in the **Beets Library DB** field.<br>
 
 <a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>

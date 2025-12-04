@@ -23,15 +23,15 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the image-generation tool to text models.
     # When false, models will not be told about the tool and cannot call it.
     'IMAGE_TOOL_ENABLED': {'type': bool, 'default': True},
-    # Master switch for exposing the music control tool (kew + MPRIS) to text models.
+    # Master switch for exposing the music control tool (beets + local player) to text models.
     # When false, models will not be told about the tool and cannot call it.
     'MUSIC_TOOL_ENABLED': {'type': bool, 'default': False},
-    # When true, kew will be launched inside a separate terminal window for music playback.
-    # This is useful if you want to see kew's UI and logs instead of running it headless.
-    'MUSIC_LAUNCH_IN_TERMINAL': {'type': bool, 'default': False},
-    # Command prefix used when launching kew in a terminal, e.g. "gnome-terminal --"
-    # or "konsole -e". The kew command and its arguments will be appended to this.
-    'MUSIC_TERMINAL_PREFIX': {'type': str, 'default': ''},
+    # Path to the music player executable used for playback (e.g. mpv, vlc).
+    'MUSIC_PLAYER_PATH': {'type': str, 'default': '/usr/bin/audacious -p <playlist>'},
+    # Directory where music files are stored; used by beets to locate tracks.
+    'MUSIC_LIBRARY_DIR': {'type': str, 'default': ''},
+    # Path to the beets library database file. If empty, uses beets' default library.
+    'MUSIC_LIBRARY_DB': {'type': str, 'default': ''},
     'WINDOW_WIDTH': {'type': int, 'default': 800},
     'WINDOW_HEIGHT': {'type': int, 'default': 600},
     'SETTINGS_DIALOG_WIDTH': {'type': int, 'default': 950},

@@ -49,7 +49,7 @@ from markup_utils import (
 )
 from gi.repository import Gdk
 from datetime import datetime
-from config import BASE_DIR, SETTINGS_CONFIG
+from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG
 from audio import record_audio
 from tools import (
     ToolManager,
@@ -755,220 +755,248 @@ class OpenAIGTKClient(Gtk.Window):
             except Exception as inner:
                 raise RuntimeError(f"Image generation failed for both preferred and fallback models: {inner}") from inner
 
-    def _get_kew_playback_status(self):
-        """Return the current MPRIS playback status for kew, or None if unavailable."""
-        try:
-            result = subprocess.run(
-                ["playerctl", "-p", "kew", "status"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                return None
-            status = (result.stdout or "").strip()
-            return status or None
-        except FileNotFoundError:
-            # playerctl is not installed.
-            return None
-        except Exception as e:
-            print(f"Error querying kew playback status via playerctl: {e}")
-            return None
-
-    def _check_kew_playing(self):
-        """Return True if kew is currently reported as Playing via MPRIS."""
-        status = self._get_kew_playback_status()
-        return status == "Playing"
-
-    def _control_music(self, action, keyword=None, volume=None):
+    def _get_beets_library(self):
         """
-        Core implementation of the control_music tool, using kew and MPRIS
-        (via playerctl) to control playback.
+        Get a beets Library instance based on configured settings.
+        
+        Returns a Library instance or raises an exception with a user-friendly message.
+        """
+        try:
+            from beets.library import Library
+        except ImportError:
+            raise RuntimeError(
+                "The beets library is not installed. Please install it with: pip install beets"
+            )
+        
+        library_db = getattr(self, "music_library_db", "") or ""
+        library_dir = getattr(self, "music_library_dir", "") or ""
+        
+        # If user provided a specific DB path, use it
+        if library_db:
+            if not os.path.exists(library_db):
+                raise RuntimeError(
+                    f"Beets library database not found at: {library_db}. "
+                    "Please check your Music Library DB path in Settings → Tool Options."
+                )
+            return Library(library_db, directory=library_dir if library_dir else None)
+        
+        # Check for app-generated library in the application folder
+        app_library_db = os.path.join(PARENT_DIR, "music_library.db")
+        if os.path.exists(app_library_db):
+            return Library(app_library_db, directory=library_dir if library_dir else None)
+        
+        # Otherwise try to use beets' default configuration
+        try:
+            import beets.util
+            from beets import config as beets_config
+            beets_config.read(user=True, defaults=True)
+            default_db = beets_config['library'].get()
+            default_dir = beets_config['directory'].get()
+            
+            if library_dir:
+                # User specified a directory but not a DB; use default DB with custom dir
+                return Library(default_db, directory=library_dir)
+            else:
+                return Library(default_db, directory=default_dir)
+        except Exception as e:
+            # If beets config fails, provide a helpful message
+            raise RuntimeError(
+                f"Could not load beets library. Either generate a library using the "
+                f"'Generate Library' button in Settings → Tool Options, configure a "
+                f"beets library DB path, or ensure beets is properly configured. "
+                f"Error: {e}"
+            )
+
+    def _control_music_via_beets(self, action, keyword=None, volume=None):
+        """
+        Core implementation of the control_music tool using beets library
+        and a local music player.
         """
         action = (action or "").strip().lower()
         if not action:
             return "Error: music control action is required."
 
-        # Determine whether kew should be launched inside a dedicated terminal.
-        launch_in_terminal = bool(getattr(self, "music_launch_in_terminal", False))
-        terminal_prefix = (getattr(self, "music_terminal_prefix", "") or "").strip()
+        player_path = getattr(self, "music_player_path", "/usr/bin/mpv") or "/usr/bin/mpv"
 
-        # Handle play separately: we may need to launch kew.
+        # Handle play action: query beets and launch player
         if action == "play":
             if not keyword or not keyword.strip():
-                return "Error: 'play' action requires a keyword describing what to play."
-
-            # If kew is already playing and we are not using a dedicated terminal
-            # window, stop it first to avoid overlapping music. When running
-            # inside a user-visible terminal we leave the existing instance
-            # alone so the terminal session is preserved; kew itself (via MPRIS)
-            # can decide how to handle a second invocation.
-            if self._check_kew_playing() and not launch_in_terminal:
-                try:
-                    subprocess.run(
-                        ["playerctl", "-p", "kew", "stop"],
-                        capture_output=True,
-                        text=True,
-                    )
-                except FileNotFoundError:
-                    # If playerctl is not available, we still proceed to start kew.
-                    pass
-                except Exception as e:
-                    print(f"Error stopping existing kew playback: {e}")
-
-            # Build kew command arguments. For headless mode we use --noui so
-            # kew does not try to manage its own terminal UI.
-            kew_args = ["kew", "-q"] + keyword.split()
-            if launch_in_terminal:
-                base_cmd = kew_args
-            else:
-                base_cmd = ["kew", "--noui", "-q"] + keyword.split()
-
-            # When configured, wrap kew in a terminal command prefix so it runs
-            # in its own terminal window (useful to see UI/logs).
-            if launch_in_terminal:
-                if not terminal_prefix:
-                    return (
-                        "Error: 'Launch kew in terminal' is enabled, but no terminal "
-                        "command prefix is configured. Set one under Settings → Tool Options."
-                    )
-                import shlex
-                try:
-                    if "{cmd}" in terminal_prefix:
-                        # Template mode: user provided something like
-                        #   xfce4-terminal --command="{cmd}"
-                        # We expand {cmd} to a shell-style string, then split.
-                        cmd_str = shlex.join(base_cmd)
-                        expanded = terminal_prefix.replace("{cmd}", cmd_str)
-                        term_parts = shlex.split(expanded)
-                        cmd = term_parts
-                    else:
-                        term_parts = shlex.split(terminal_prefix)
-
-                        # For many terminals (e.g. xfce4-terminal, gnome-terminal), using
-                        # a bare prefix like "xfce4-terminal" requires an explicit
-                        # exec flag (-e / --command / --) or a full template. When the
-                        # user supplies such a flag we simply append the kew command;
-                        # otherwise we fall back to treating the kew command as a
-                        # positional command after a "--" separator.
-                        has_exec_flag = any(
-                            part in ("-e", "--", "--command") or part.startswith("--command=")
-                            for part in term_parts
-                        )
-                        if has_exec_flag:
-                            cmd = term_parts + base_cmd
-                        else:
-                            cmd = term_parts + ["--"] + base_cmd
-                except ValueError as e:
-                    return f"Error parsing terminal command prefix: {e}"
-            else:
-                cmd = base_cmd
+                return "Error: 'play' action requires a beets query string describing what to play."
 
             try:
-                print(f"Launching kew with command: {cmd}")
-                proc = subprocess.Popen(cmd)
-                # Avoid leaving zombie processes when kew/terminal exits by
-                # reaping the child in a background thread.
-                import threading
-                threading.Thread(target=proc.wait, daemon=True).start()
-                if launch_in_terminal:
-                    return f"Started kew in a terminal window to play music for keyword: {keyword}"
-                return f"Started kew to play music for keyword: {keyword}"
-            except FileNotFoundError as e:
-                if launch_in_terminal:
-                    return (
-                        "Error: failed to launch kew in terminal. Make sure your terminal "
-                        f"command prefix is correct and that 'kew' is installed. ({e})"
-                    )
-                else:
-                    return (
-                        "Error: kew is not installed or not found in PATH. "
-                        "Please install kew (`kew` terminal music player) first."
-                    )
+                lib = self._get_beets_library()
+            except RuntimeError as e:
+                return f"Error: {e}"
+
+            # Query beets for matching items
+            query = keyword.strip()
+            try:
+                items = list(lib.items(query))
             except Exception as e:
-                print(f"Error launching kew: {e}")
-                return f"Error starting kew: {e}"
+                return f"Error querying beets library: {e}"
 
-        # All other actions require playerctl.
-        try:
-            # Quick check that playerctl exists.
-            subprocess.run(
-                ["playerctl", "--version"],
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError:
-            return (
-                "Error: playerctl is not installed. Install it via your package manager "
-                "to enable music control via MPRIS."
-            )
-        except Exception as e:
-            print(f"Error checking playerctl availability: {e}")
+            if not items:
+                return f"No tracks found matching query: {query}"
 
-        base_cmd = ["playerctl", "-p", "kew"]
+            # Limit to a reasonable number of tracks to avoid enormous playlists
+            max_tracks = 100
+            if len(items) > max_tracks:
+                items = items[:max_tracks]
+                limited_msg = f" (limited to first {max_tracks} tracks)"
+            else:
+                limited_msg = ""
 
-        if action == "pause":
-            cmd = base_cmd + ["pause"]
-            success_msg = "Paused kew playback."
-        elif action == "resume":
-            cmd = base_cmd + ["play"]
-            success_msg = "Resumed kew playback."
-        elif action == "stop":
-            cmd = base_cmd + ["stop"]
-            success_msg = "Stopped kew playback."
-        elif action == "next":
-            cmd = base_cmd + ["next"]
-            success_msg = "Skipped to the next track in kew."
-        elif action == "previous":
-            cmd = base_cmd + ["previous"]
-            success_msg = "Went back to the previous track in kew."
-        elif action == "volume_up":
-            cmd = base_cmd + ["volume", "0.05+"]
-            success_msg = "Increased kew volume."
-        elif action == "volume_down":
-            cmd = base_cmd + ["volume", "0.05-"]
-            success_msg = "Decreased kew volume."
-        elif action == "set_volume":
-            if volume is None:
-                return "Error: 'set_volume' action requires a numeric volume value (0-100)."
+            # Create a temporary M3U playlist
             try:
-                vol = float(volume)
-            except (TypeError, ValueError):
-                return "Error: volume must be a number between 0 and 100."
-            # Accept either 0–100 or 0–1.0 style inputs; normalize to 0–1.0.
-            if vol > 1.0:
-                vol = vol / 100.0
-            vol = max(0.0, min(1.0, vol))
-            cmd = base_cmd + ["volume", f"{vol:.2f}"]
-            success_msg = f"Set kew volume to approximately {int(vol * 100)}%."
+                playlist_fd, playlist_path = tempfile.mkstemp(suffix=".m3u", prefix="chatgtk_music_")
+                with os.fdopen(playlist_fd, 'w', encoding='utf-8') as f:
+                    f.write("#EXTM3U\n")
+                    for item in items:
+                        # item.path is bytes in beets, decode it
+                        path = item.path
+                        if isinstance(path, bytes):
+                            path = path.decode('utf-8', errors='replace')
+                        f.write(f"{path}\n")
+            except Exception as e:
+                return f"Error creating playlist: {e}"
+
+            # Launch the music player with the playlist.
+            # The user can configure the full command (including arguments) in
+            # the Music Player Executable setting, optionally using a
+            # "<playlist>" placeholder.
+            player_cmd_template = getattr(self, "music_player_path", "/usr/bin/mpv") or "/usr/bin/mpv"
+            try:
+                import shlex
+                parts = shlex.split(player_cmd_template)
+                if not parts:
+                    raise ValueError("Music player command is empty.")
+                if "<playlist>" in player_cmd_template:
+                    # Replace placeholder in each argument.
+                    cmd = [p.replace("<playlist>", playlist_path) for p in parts]
+                else:
+                    # No placeholder: append playlist path as a positional argument.
+                    cmd = parts + [playlist_path]
+            except ValueError as e:
+                # Clean up playlist on error
+                try:
+                    os.unlink(playlist_path)
+                except Exception:
+                    pass
+                return f"Error parsing music player command: {e}"
+
+            try:
+                print(f"Launching music player with command: {cmd}")
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                # Reap the child process in a background thread to avoid zombies
+                def cleanup_player():
+                    proc.wait()
+                    # Clean up playlist file after player exits
+                    try:
+                        os.unlink(playlist_path)
+                    except Exception:
+                        pass
+                threading.Thread(target=cleanup_player, daemon=True).start()
+                
+                return f"Started playing {len(items)} track(s) matching '{query}'{limited_msg}"
+            except FileNotFoundError:
+                # Clean up playlist on error
+                try:
+                    os.unlink(playlist_path)
+                except Exception:
+                    pass
+                return (
+                    f"Error: Music player not found at '{player_path}'. "
+                    "Please check your Music Player Executable path in Settings → Tool Options."
+                )
+            except Exception as e:
+                # Clean up playlist on error
+                try:
+                    os.unlink(playlist_path)
+                except Exception:
+                    pass
+                print(f"Error launching music player: {e}")
+                return f"Error starting music player: {e}"
+
+        # Non-play actions have limited support
+        # Try to use playerctl if available, targeting the configured player
+        player_name = os.path.basename(player_path)
+        
+        if action in ("pause", "resume", "stop", "next", "previous", "volume_up", "volume_down", "set_volume"):
+            try:
+                # Check if playerctl is available
+                subprocess.run(
+                    ["playerctl", "--version"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                return (
+                    f"Action '{action}' requires playerctl for MPRIS control, but playerctl "
+                    "is not installed. Install playerctl via your package manager, or use "
+                    "'play' with a new query to start different music."
+                )
+
+            # Build playerctl command - try to target the player
+            base_cmd = ["playerctl", "-p", player_name]
+
+            if action == "pause":
+                cmd = base_cmd + ["pause"]
+                success_msg = "Paused playback."
+            elif action == "resume":
+                cmd = base_cmd + ["play"]
+                success_msg = "Resumed playback."
+            elif action == "stop":
+                cmd = base_cmd + ["stop"]
+                success_msg = "Stopped playback."
+            elif action == "next":
+                cmd = base_cmd + ["next"]
+                success_msg = "Skipped to next track."
+            elif action == "previous":
+                cmd = base_cmd + ["previous"]
+                success_msg = "Went back to previous track."
+            elif action == "volume_up":
+                cmd = base_cmd + ["volume", "0.05+"]
+                success_msg = "Increased volume."
+            elif action == "volume_down":
+                cmd = base_cmd + ["volume", "0.05-"]
+                success_msg = "Decreased volume."
+            elif action == "set_volume":
+                if volume is None:
+                    return "Error: 'set_volume' action requires a numeric volume value (0-100)."
+                try:
+                    vol = float(volume)
+                except (TypeError, ValueError):
+                    return "Error: volume must be a number between 0 and 100."
+                if vol > 1.0:
+                    vol = vol / 100.0
+                vol = max(0.0, min(1.0, vol))
+                cmd = base_cmd + ["volume", f"{vol:.2f}"]
+                success_msg = f"Set volume to approximately {int(vol * 100)}%."
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    stderr = (result.stderr or "").strip()
+                    stdout = (result.stdout or "").strip()
+                    detail = stderr or stdout or "Unknown error from playerctl."
+                    return f"Error controlling playback via playerctl: {detail}"
+                return success_msg
+            except Exception as e:
+                print(f"Error running playerctl command {cmd}: {e}")
+                return f"Error controlling playback: {e}"
         else:
             return f"Error: unsupported music control action '{action}'."
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                stderr = (result.stderr or "").strip()
-                stdout = (result.stdout or "").strip()
-                detail = stderr or stdout or "Unknown error from playerctl."
-                return f"Error controlling kew via playerctl: {detail}"
-            return success_msg
-        except FileNotFoundError:
-            return (
-                "Error: playerctl is not installed. Install it via your package manager "
-                "to enable music control via MPRIS."
-            )
-        except Exception as e:
-            print(f"Error running playerctl command {cmd}: {e}")
-            return f"Error controlling kew: {e}"
-
-    def control_music_via_kew(self, action, keyword=None, volume=None):
+    def control_music_via_beets(self, action, keyword=None, volume=None):
         """
-        Public wrapper used by AI provider tool handlers to control music via kew.
+        Public wrapper used by AI provider tool handlers to control music via beets.
         """
-        return self._control_music(action, keyword=keyword, volume=volume)
+        return self._control_music_via_beets(action, keyword=keyword, volume=volume)
 
     def _handle_read_aloud_tool(self, text: str) -> str:
         """
@@ -1621,7 +1649,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
 
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
@@ -1659,7 +1687,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
 
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
@@ -1699,7 +1727,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
 
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
@@ -1738,7 +1766,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_kew(action, keyword=keyword, volume=volume)
+                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
 
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):

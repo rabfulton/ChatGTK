@@ -20,7 +20,7 @@ gi.require_version("GtkSource", "4")
 from gi.repository import Gtk, GtkSource
 import sounddevice as sd
 
-from config import BASE_DIR, SETTINGS_CONFIG
+from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG
 from utils import load_settings, apply_settings, parse_color_to_rgba, save_settings
 
 
@@ -776,36 +776,63 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_music_tool_settings, False, True, 0)
         list_box.add(row)
 
-        # Launch kew in its own terminal window
+        # Music Player Executable / Command
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Launch kew in terminal", xalign=0)
-        label.set_hexpand(True)
-        self.switch_kew_terminal = Gtk.Switch()
-        current_launch_in_terminal = bool(getattr(self, "music_launch_in_terminal", False))
-        self.switch_kew_terminal.set_active(current_launch_in_terminal)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_kew_terminal, False, True, 0)
+        label = Gtk.Label(label="Music Player Command", xalign=0)
+        label.set_hexpand(False)
+        self.entry_music_player_path = Gtk.Entry()
+        self.entry_music_player_path.set_hexpand(True)
+        self.entry_music_player_path.set_width_chars(40)
+        self.entry_music_player_path.set_placeholder_text('/usr/bin/mpv --playlist=<playlist>')
+        self.entry_music_player_path.set_text(getattr(self, "music_player_path", "/usr/bin/mpv") or "/usr/bin/mpv")
+        self.entry_music_player_path.set_tooltip_text(
+            'Full command to launch your player. You can include arguments and use '
+            '<playlist> as a placeholder for the generated playlist file. '
+            'If <playlist> is omitted, the playlist path is passed as the last argument.'
+        )
+        hbox.pack_start(label, False, True, 0)
+        hbox.pack_start(self.entry_music_player_path, True, True, 0)
         list_box.add(row)
 
-        # Preferred terminal command prefix
+        # Music Library Directory
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Terminal command prefix", xalign=0)
+        label = Gtk.Label(label="Music Library Directory", xalign=0)
         label.set_hexpand(False)
-        self.entry_terminal_prefix = Gtk.Entry()
-        self.entry_terminal_prefix.set_hexpand(True)
-        self.entry_terminal_prefix.set_width_chars(40)
-        self.entry_terminal_prefix.set_placeholder_text(
-            'e.g. "xfce4-terminal --command=\\"{cmd}\\"" or "gnome-terminal --"'
-        )
-        self.entry_terminal_prefix.set_text(getattr(self, "music_terminal_prefix", "") or "")
+        self.entry_music_library_dir = Gtk.Entry()
+        self.entry_music_library_dir.set_hexpand(True)
+        self.entry_music_library_dir.set_width_chars(40)
+        self.entry_music_library_dir.set_placeholder_text('/home/user/Music')
+        self.entry_music_library_dir.set_text(getattr(self, "music_library_dir", "") or "")
+        self.entry_music_library_dir.set_tooltip_text('Directory where your music files are stored (used by beets)')
         hbox.pack_start(label, False, True, 0)
-        hbox.pack_start(self.entry_terminal_prefix, True, True, 0)
+        hbox.pack_start(self.entry_music_library_dir, True, True, 0)
+        list_box.add(row)
+
+        # Beets Library DB Path (optional, for advanced users)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Beets Library DB (optional)", xalign=0)
+        label.set_hexpand(False)
+        self.entry_music_library_db = Gtk.Entry()
+        self.entry_music_library_db.set_hexpand(True)
+        self.entry_music_library_db.set_width_chars(30)
+        self.entry_music_library_db.set_placeholder_text('Leave empty to use app default')
+        self.entry_music_library_db.set_text(getattr(self, "music_library_db", "") or "")
+        self.entry_music_library_db.set_tooltip_text('Path to beets library.db file (leave empty to use app-generated library)')
+        self.btn_generate_library = Gtk.Button(label="Generate Library")
+        self.btn_generate_library.set_tooltip_text('Scan Music Library Directory and generate a beets library')
+        self.btn_generate_library.connect("clicked", self._on_generate_library_clicked)
+        hbox.pack_start(label, False, True, 0)
+        hbox.pack_start(self.entry_music_library_db, True, True, 0)
+        hbox.pack_start(self.btn_generate_library, False, False, 0)
         list_box.add(row)
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
@@ -1102,6 +1129,142 @@ class SettingsDialog(Gtk.Dialog):
         return False  # Allow the state change to proceed
 
     # -----------------------------------------------------------------------
+    # Beets library generation handler
+    # -----------------------------------------------------------------------
+    def _on_generate_library_clicked(self, widget):
+        """Generate a beets library from the Music Library Directory."""
+        from gi.repository import GLib
+
+        music_dir = self.entry_music_library_dir.get_text().strip()
+        if not music_dir:
+            error_dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Music Library Directory Required"
+            )
+            error_dialog.format_secondary_text(
+                "Please enter a Music Library Directory path before generating a library."
+            )
+            error_dialog.run()
+            error_dialog.destroy()
+            return
+
+        if not os.path.isdir(music_dir):
+            error_dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Invalid Directory"
+            )
+            error_dialog.format_secondary_text(
+                f"The directory does not exist: {music_dir}"
+            )
+            error_dialog.run()
+            error_dialog.destroy()
+            return
+
+        # Determine library path in app folder
+        library_db_path = os.path.join(PARENT_DIR, "music_library.db")
+
+        # Disable the button during generation
+        self.btn_generate_library.set_sensitive(False)
+        self.btn_generate_library.set_label("Generating...")
+
+        def generate_library_thread():
+            """Background thread to generate the beets library."""
+            error_msg = None
+            try:
+                from beets.library import Library
+                from beets import util
+                import beets.autotag
+
+                # Remove existing library if present
+                if os.path.exists(library_db_path):
+                    os.remove(library_db_path)
+
+                # Create a new library
+                lib = Library(library_db_path, directory=music_dir)
+
+                # Walk the music directory and add tracks
+                tracks_added = 0
+                for root, dirs, files in os.walk(music_dir):
+                    for filename in files:
+                        filepath = os.path.join(root, filename)
+                        # Check if it's a music file by extension
+                        ext = os.path.splitext(filename)[1].lower()
+                        if ext in ('.mp3', '.flac', '.ogg', '.m4a', '.wav', '.aac', '.wma', '.opus', '.aiff', '.ape'):
+                            try:
+                                # Import the item into the library
+                                from beets.library import Item
+                                item = Item.from_path(filepath)
+                                lib.add(item)
+                                tracks_added += 1
+                            except Exception as e:
+                                print(f"Could not add {filepath}: {e}")
+                                continue
+
+                # Commit changes
+                lib._close()
+
+                if tracks_added == 0:
+                    error_msg = f"No music files found in {music_dir}"
+                else:
+                    # Success - update UI on main thread
+                    def update_ui_success():
+                        self.entry_music_library_db.set_text(library_db_path)
+                        self.btn_generate_library.set_sensitive(True)
+                        self.btn_generate_library.set_label("Generate Library")
+
+                        success_dialog = Gtk.MessageDialog(
+                            transient_for=self,
+                            flags=0,
+                            message_type=Gtk.MessageType.INFO,
+                            buttons=Gtk.ButtonsType.OK,
+                            text="Library Generated"
+                        )
+                        success_dialog.format_secondary_text(
+                            f"Successfully added {tracks_added} tracks to the library.\n"
+                            f"Library saved to: {library_db_path}"
+                        )
+                        success_dialog.run()
+                        success_dialog.destroy()
+                        return False
+
+                    GLib.idle_add(update_ui_success)
+                    return
+
+            except ImportError:
+                error_msg = "The beets library is not installed. Please install it with: pip install beets"
+            except Exception as e:
+                error_msg = f"Error generating library: {e}"
+
+            # Handle error on main thread
+            def update_ui_error():
+                self.btn_generate_library.set_sensitive(True)
+                self.btn_generate_library.set_label("Generate Library")
+
+                error_dialog = Gtk.MessageDialog(
+                    transient_for=self,
+                    flags=0,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="Library Generation Failed"
+                )
+                error_dialog.format_secondary_text(error_msg)
+                error_dialog.run()
+                error_dialog.destroy()
+                return False
+
+            GLib.idle_add(update_ui_error)
+
+        # Run in background thread
+        thread = threading.Thread(target=generate_library_thread, daemon=True)
+        thread.start()
+
+    # -----------------------------------------------------------------------
     # Collect settings
     # -----------------------------------------------------------------------
     def get_settings(self):
@@ -1141,8 +1304,9 @@ class SettingsDialog(Gtk.Dialog):
             'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
             'image_tool_enabled': self.switch_image_tool_settings.get_active(),
             'music_tool_enabled': self.switch_music_tool_settings.get_active(),
-            'music_launch_in_terminal': self.switch_kew_terminal.get_active(),
-            'music_terminal_prefix': self.entry_terminal_prefix.get_text().strip(),
+            'music_player_path': self.entry_music_player_path.get_text().strip() or '/usr/bin/mpv',
+            'music_library_dir': self.entry_music_library_dir.get_text().strip(),
+            'music_library_db': self.entry_music_library_db.get_text().strip(),
             # Model whitelists
             'openai_model_whitelist': whitelist_str('openai', 'openai_model_whitelist'),
             'gemini_model_whitelist': whitelist_str('gemini', 'gemini_model_whitelist'),

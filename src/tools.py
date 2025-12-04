@@ -40,11 +40,24 @@ IMAGE_TOOL_PROMPT_APPENDIX = (
 
 # Guidance appended to system prompts when the music tool is enabled.
 MUSIC_TOOL_PROMPT_APPENDIX = (
-    "You have access to a control_music tool that can control music playback for the user "
-    "through their kew terminal music player (which uses the standard MPRIS interface). "
-    "Use this tool when the user asks to play, pause, resume, stop, skip, or adjust the "
-    "volume of their music. For play actions, always provide a concise keyword, song title, "
-    "album name, or artist name describing what to play."
+    "You have access to a control_music tool that can play music from the user's local "
+    "beets-managed music library using a local player. Use this tool when the "
+    "user asks to play music.\n\n"
+    "For 'play' actions, construct a **beets query string** in the 'keyword' parameter. "
+    "Beets queries support fields like artist, album, title, genre, year, etc. Examples:\n"
+    "  - 'year:1980..1989' for music from the 1980s\n"
+    "  - 'genre:rock year:1990..1999' for 90s rock\n"
+    "  - 'artist:\"Miles Davis\" year:1959' for Miles Davis tracks from 1959\n"
+    "  - 'genre:jazz' for jazz music\n"
+    "  - 'album:\"Kind of Blue\"' for a specific album\n"
+    "  - 'artist:Beatles' for Beatles songs\n\n"
+    "Translate natural language requests into beets queries. For example:\n"
+    "  - 'Play some 80s music' → keyword='year:1980..1989'\n"
+    "  - 'Play jazz from the 1950s' → keyword='genre:jazz year:1950..1959'\n"
+    "  - 'Play something by Pink Floyd' → keyword='artist:\"Pink Floyd\"'\n\n"
+    "Non-play actions (pause, resume, stop, next, previous) are limited in this implementation. "
+    "Prefer using 'play' and only use other actions when the user explicitly requests them."
+    "Convert artist names to their correct international spelling (e.g., bjork → Björk)."
 )
 
 # Guidance appended to system prompts when the read aloud tool is enabled.
@@ -99,9 +112,10 @@ IMAGE_TOOL_SPEC = ToolSpec(
 MUSIC_TOOL_SPEC = ToolSpec(
     name="control_music",
     description=(
-        "Control music playback on the user's computer using the kew "
-        "terminal music player. Use this when the user asks to play, "
-        "pause, resume, stop, skip, or adjust the volume of music."
+        "Control music playback on the user's computer using a beets-managed "
+        "music library and a local player. Use this when the user asks to play music. "
+        "For play actions, provide a beets query string (e.g. 'year:1980..1989', "
+        "'genre:rock', 'artist:\"Miles Davis\"') in the keyword parameter."
     ),
     parameters={
         "type": "object",
@@ -109,22 +123,24 @@ MUSIC_TOOL_SPEC = ToolSpec(
             "action": {
                 "type": "string",
                 "description": (
-                    "The music control action to perform. One of: "
-                    "'play', 'pause', 'resume', 'stop', 'next', "
-                    "'previous', 'volume_up', 'volume_down', 'set_volume'."
+                    "The music control action to perform. Primarily use 'play'. "
+                    "Other actions ('pause', 'resume', 'stop', 'next', 'previous') "
+                    "have limited support."
                 ),
             },
             "keyword": {
                 "type": "string",
                 "description": (
-                    "For 'play' actions: a keyword, song title, album name, "
-                    "or artist name to search for in the user's music library."
+                    "For 'play' actions: a beets query string to search the music library. "
+                    "Examples: 'year:1980..1989' for 80s music, 'genre:jazz', "
+                    "'artist:\"Pink Floyd\"', 'album:\"Abbey Road\"'."
                 ),
             },
             "volume": {
                 "type": "number",
                 "description": (
-                    "For 'set_volume' actions: desired volume level (0–100)."
+                    "For 'set_volume' actions: desired volume level (0–100). "
+                    "Note: volume control has limited support."
                 ),
             },
         },

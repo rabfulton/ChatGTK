@@ -3,3 +3,4 @@ openai==1.61.0
 sounddevice==0.4.6
 soundfile==0.12.1
 PyGObject>=3.42.0
+beets>=1.6.0
