@@ -169,10 +169,43 @@ def format_headers(text):
     
     return '\n'.join(formatted_lines)
 
+def _linkify(text: str) -> str:
+    """
+    Convert markdown-style links and bare URLs into Pango <a href="..."> links.
+    This should be called *after* escaping for Pango markup so that any '&'
+    characters in query strings are already encoded as &amp;.
+    """
+    if not text:
+        return text
+
+    # 1) Markdown links: [label](https://example.com)
+    md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
+
+    def _md_repl(match):
+        label = match.group(1)
+        href = match.group(2)
+        return f'<a href="{href}">{label}</a>'
+
+    text = md_link_pattern.sub(_md_repl, text)
+
+    # 2) Bare URLs. Avoid wrapping URLs that are already part of an href.
+    url_pattern = re.compile(r'(?<!href=")(https?://[^\s<]+)')
+
+    def _url_repl(match):
+        url = match.group(1)
+        return f'<a href="{url}">{url}</a>'
+
+    text = url_pattern.sub(_url_repl, text)
+    return text
+
+
 def process_text_formatting(text, font_size):
     """Process all inline text formatting (bold, italic, etc.)."""
     # First, escape any existing markup
     text = escape_for_pango_markup(text)
+
+    # Turn markdown links and bare URLs into clickable <a href="..."> tags.
+    text = _linkify(text)
 
     # Handle code within bold text
     pattern0 = r'\*\*`([^`]+)`\*\*'
@@ -194,6 +227,9 @@ def process_inline_markup(text, font_size):
 
     # First, escape any existing markup
     text = escape_for_pango_markup(text)
+
+    # Turn markdown links and bare URLs into clickable <a href="..."> tags.
+    text = _linkify(text)
     
     # Get theme colors for code blocks
     label = Gtk.Label()

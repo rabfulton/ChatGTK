@@ -78,13 +78,12 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - LaTeX formula rendering
 - Customizable settings
 - Conversation history management
-- Image generation using Dall-e-3 model, use the "img:" prefix to quickly access the model.
+- Image generation using both OpenAI's and Googles models.
 - Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
-- Text-to-Speech output using OpenAI's TTS and TTS-HD models
+- Text-to-Speech output using OpenAI's TTS and TTS-HD and audio-preview models
 - Real-time voice conversation support using gpt-4o-realtime-preview model
-- Text to audio output using gpt-4o-audio-preview model
 - Reasoning support for OpenAI's o3 models
-- "export DISABLE_MODEL_FILTER=1" if you require an unfiltered list of models in the app.
+- Tool use including music control, image generation and a read aloud tool that lets you assistant decide when to use TTS.
 - Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, and Anthropic Claude via separate API keys.
 
 ### Tools support (images, music & read aloud)
@@ -116,6 +115,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
     - **Read Aloud Provider**: choose between OpenAI TTS (`tts-1` / `tts-1-hd`) or audio-preview models (`gpt-4o-audio-preview`, `gpt-4o-mini-audio-preview`).
     - **Read Aloud prompt template**: for audio-preview models, customize the prompt used to instruct the model what to say. Use `{text}` as a placeholder for the response text. Default: `Please say the following verbatim in a New York accent: "{text}"`.
   - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
+  - To use the tools just ask your model "Write me a short poem and read it aloud".
 
 ## Screenshots
 

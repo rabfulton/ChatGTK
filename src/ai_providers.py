@@ -148,6 +148,11 @@ class OpenAIProvider(AIProvider):
         Generate a response using the OpenAI Responses API, which supports
         file attachments natively.
         """
+        model_lower = (model or "").lower()
+        # Some Responses-only models (e.g. gpt-4o-mini-search-preview) do not
+        # support temperature. We gate the parameter below based on the model
+        # name to avoid "Model incompatible request argument supplied" errors.
+        is_search_model = "search" in model_lower
         # Build the input for the responses API
         input_items = []
         
@@ -233,7 +238,7 @@ class OpenAIProvider(AIProvider):
         if instructions:
             params["instructions"] = instructions
         
-        if temperature is not None:
+        if temperature is not None and not is_search_model:
             params["temperature"] = temperature
         
         if max_tokens and max_tokens > 0:
@@ -306,6 +311,9 @@ class OpenAIProvider(AIProvider):
         reasoning_models = ["o1-mini", "o1-preview", "o3", "o3-mini"]
         is_reasoning_model = any(r in model_lower for r in reasoning_models)
         is_gpt5_model = model_lower.startswith("gpt-5")
+        # Some specialized models (e.g. gpt-4o-mini-search-preview) do not
+        # support temperature; avoid sending it to prevent 400 errors.
+        is_search_model = "search" in model_lower
         
         params = {}
         
@@ -399,7 +407,7 @@ class OpenAIProvider(AIProvider):
                 'model': model,
                 'messages': processed_messages,
             })
-            if not is_gpt5_model:
+            if not is_gpt5_model and not is_search_model:
                 params['temperature'] = temperature
 
             # Enable tools for modern OpenAI chat models when handlers are
