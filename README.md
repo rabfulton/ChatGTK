@@ -113,8 +113,8 @@ Alternatively you can run the install script to add a desktop entry and set up t
 
 - **Read Aloud tool (`read_aloud`)**
   - Disabled by default; enable via **Enable Read Aloud Tool** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
-  - Allows models to speak text aloud to the user using text-to-speech.
-  - Configure Read Aloud settings via **Settings → General** (near TTS settings):
+  - Allows models to choose to speak text aloud to the user using text-to-speech.
+  - Configure Read Aloud settings via **Settings → Audio** (near TTS settings):
     - **Automatically read responses aloud**: when enabled, all assistant responses are automatically spoken. Note: this option and the Read Aloud Tool are mutually exclusive.
     - **Read Aloud Provider**: choose between OpenAI TTS (`tts-1` / `tts-1-hd`) or audio-preview models (`gpt-4o-audio-preview`, `gpt-4o-mini-audio-preview`).
     - **Read Aloud prompt template**: for audio-preview models, customize the prompt used to instruct the model what to say. Use `{text}` as a placeholder for the response text. Default: `Please say the following verbatim in a New York accent: "{text}"`.
