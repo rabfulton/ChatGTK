@@ -26,6 +26,10 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the music control tool (beets + local player) to text models.
     # When false, models will not be told about the tool and cannot call it.
     'MUSIC_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Master switch for enabling provider-native web search tools (OpenAI web_search
+    # and Gemini google_search). When false, models will not be given access to
+    # these web-grounded tools.
+    'WEB_SEARCH_ENABLED': {'type': bool, 'default': False},
     # Path to the music player executable used for playback (e.g. mpv, vlc).
     'MUSIC_PLAYER_PATH': {'type': str, 'default': '/usr/bin/audacious -p <playlist>'},
     # Directory where music files are stored; used by beets to locate tracks.
@@ -58,7 +62,7 @@ SETTINGS_CONFIG = {
     # These defaults mirror the curated sets previously hardcoded in ai_providers.py.
     'OPENAI_MODEL_WHITELIST': {
         'type': str,
-        'default': 'gpt-3.5-turbo,gpt-4,dall-e-3,gpt-image-1,gpt-4o-mini-realtime-preview,o1-mini,o1-preview,chatgpt-4o-latest,gpt-4-turbo,gpt-4.1,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-realtime,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest,gpt-5-pro'
+        'default': 'gpt-3.5-turbo,gpt-4,dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview,o1-mini,o1-preview,chatgpt-4o-latest,gpt-4-turbo,gpt-4.1,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-realtime,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest,gpt-5-pro'
     },
     'GEMINI_MODEL_WHITELIST': {
         'type': str,

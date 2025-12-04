@@ -717,6 +717,7 @@ class SettingsDialog(Gtk.Dialog):
         known_image_models = [
             "dall-e-3",
             "gpt-image-1",
+            "gpt-image-1-mini",
             "gemini-3-pro-image-preview",
             "gemini-2.5-flash-image",
             "grok-2-image-1212",
@@ -872,6 +873,20 @@ class SettingsDialog(Gtk.Dialog):
         self.switch_read_aloud_tool.set_active(current_read_aloud_tool_enabled)
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
+        list_box.add(row)
+
+        # Enable Web Search (provider-native tools)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Web Search (OpenAI & Gemini)", xalign=0)
+        label.set_hexpand(True)
+        self.switch_web_search_settings = Gtk.Switch()
+        current_web_search_enabled = bool(getattr(self, "web_search_enabled", False))
+        self.switch_web_search_settings.set_active(current_web_search_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_web_search_settings, False, True, 0)
         list_box.add(row)
 
         # Connect signals to enforce mutual exclusivity between auto-read and tool
@@ -1304,6 +1319,7 @@ class SettingsDialog(Gtk.Dialog):
             'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
             'image_tool_enabled': self.switch_image_tool_settings.get_active(),
             'music_tool_enabled': self.switch_music_tool_settings.get_active(),
+            'web_search_enabled': self.switch_web_search_settings.get_active(),
             'music_player_path': self.entry_music_player_path.get_text().strip() or '/usr/bin/mpv',
             'music_library_dir': self.entry_music_library_dir.get_text().strip(),
             'music_library_db': self.entry_music_library_db.get_text().strip(),
@@ -1336,7 +1352,7 @@ class SettingsDialog(Gtk.Dialog):
 # ---------------------------------------------------------------------------
 
 class ToolsDialog(Gtk.Dialog):
-    """Dialog for configuring tool enablement (image, music)."""
+    """Dialog for configuring tool enablement (image, music, web search, read aloud)."""
 
     def __init__(self, parent, **settings):
         super().__init__(title="Tools", transient_for=parent, flags=0)
@@ -1383,6 +1399,20 @@ class ToolsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_music_tool, False, True, 0)
         list_box.add(row)
 
+        # Enable/disable provider-native web search tools for text models
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Web Search (OpenAI & Gemini)", xalign=0)
+        label.set_hexpand(True)
+        self.switch_web_search = Gtk.Switch()
+        current_web_search_enabled = bool(getattr(self, "web_search_enabled", False))
+        self.switch_web_search.set_active(current_web_search_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_web_search, False, True, 0)
+        list_box.add(row)
+
         # Enable/disable read aloud tool for text models
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -1407,6 +1437,7 @@ class ToolsDialog(Gtk.Dialog):
         return {
             "image_tool_enabled": self.switch_image_tool.get_active(),
             "music_tool_enabled": self.switch_music_tool.get_active(),
+            "web_search_enabled": self.switch_web_search.get_active(),
             "read_aloud_tool_enabled": self.switch_read_aloud_tool.get_active(),
         }
 

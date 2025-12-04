@@ -137,24 +137,70 @@ class OpenAIProvider(AIProvider):
                 return True
         return False
     
-    def _generate_with_responses_api(
-        self,
-        messages,
-        model: str,
-        temperature: float = 0.7,
-        max_tokens: int = None,
-    ) -> str:
+    def _supports_web_search_tool(self, model: str) -> bool:
         """
-        Generate a response using the OpenAI Responses API, which supports
-        file attachments natively.
+        Return True if the given OpenAI model supports the built-in web_search
+        tool via the Responses API.
+        
+        Web search is available for modern GPT models that support the Responses
+        API. Older models (gpt-3.5) and specialized models (audio, realtime, image)
+        are excluded.
+        
+        See: https://platform.openai.com/docs/guides/tools/web-search
         """
-        model_lower = (model or "").lower()
-        # Some Responses-only models (e.g. gpt-4o-mini-search-preview) do not
-        # support temperature. We gate the parameter below based on the model
-        # name to avoid "Model incompatible request argument supplied" errors.
-        is_search_model = "search" in model_lower
-        # Build the input for the responses API
+        if not model:
+            return False
+        
+        model_lower = model.lower()
+        
+        # Exclude models that don't support web search
+        excluded_terms = ("audio", "realtime", "image", "dall-e", "whisper", "tts")
+        if any(term in model_lower for term in excluded_terms):
+            return False
+        
+        # Explicit allow-list of models known to support web search via Responses API
+        # This is conservative to avoid sending unsupported tools to older models
+        web_search_models = {
+            # GPT-4o family
+            "gpt-4o",
+            "gpt-4o-mini",
+            "chatgpt-4o-latest",
+            # GPT-4 Turbo
+            "gpt-4-turbo",
+            "gpt-4-turbo-preview",
+            # GPT-5 family
+            "gpt-5.1",
+            "gpt-5.1-chat-latest",
+            "gpt-5-pro",
+        }
+        
+        # Check explicit list first
+        if model in web_search_models or model_lower in web_search_models:
+            return True
+        
+        # Allow any gpt-5.x model
+        if model_lower.startswith("gpt-5"):
+            return True
+        
+        # Allow any gpt-4.x model (4.1, 4.5, etc.) but not older gpt-4
+        if model_lower.startswith("gpt-4."):
+            return True
+        
+        return False
+
+    def _build_responses_input(self, messages) -> tuple:
+        """
+        Convert internal message format to Responses API input format.
+        
+        Returns
+        -------
+        tuple
+            (input_items, instructions) where input_items is a list suitable for
+            the Responses API `input` parameter and instructions is the extracted
+            system message content (or None).
+        """
         input_items = []
+        instructions = None
         
         for msg in messages:
             role = msg.get("role", "user")
@@ -162,14 +208,14 @@ class OpenAIProvider(AIProvider):
             files = msg.get("files", [])
             images = msg.get("images", [])
             
-            # Skip system messages - use instructions parameter instead
+            # Extract system messages for instructions parameter
             if role == "system":
+                instructions = content_text
                 continue
             
             # Map assistant role to the responses API format
             if role == "assistant":
-                # For assistant messages, we just add them as output references
-                # The responses API handles conversation context differently
+                # For assistant messages, we add them as output references
                 input_items.append({
                     "type": "message",
                     "role": "assistant",
@@ -200,7 +246,6 @@ class OpenAIProvider(AIProvider):
                     file_id = self._upload_file(file_path, mime_type)
                 
                 if file_id:
-                    # Note: file_id and filename are mutually exclusive in the API
                     content_parts.append({
                         "type": "input_file",
                         "file_id": file_id,
@@ -222,14 +267,150 @@ class OpenAIProvider(AIProvider):
                     "content": content_parts,
                 })
         
-        # Extract system message for instructions
-        instructions = None
-        for msg in messages:
-            if msg.get("role") == "system":
-                instructions = msg.get("content", "")
-                break
+        return input_items, instructions
+
+    def _build_responses_tools(
+        self,
+        enabled_tools: set,
+        web_search_enabled: bool,
+        model: str,
+    ) -> list:
+        """
+        Build the tools array for the Responses API.
         
-        # Call the responses API
+        Includes both function tools (image/music/read_aloud) and the built-in
+        web_search tool when enabled and supported.
+        """
+        tools = []
+        
+        # Add web_search tool if enabled and model supports it
+        if web_search_enabled:
+            if self._supports_web_search_tool(model):
+                tools.append({"type": "web_search"})
+                print(f"[OpenAIProvider] Web search enabled for model: {model}")
+            else:
+                print(f"[OpenAIProvider] Web search requested but not supported for model: {model}")
+        
+        # Add function tools for image/music/read_aloud
+        # The Responses API uses a similar but slightly different format than
+        # chat.completions - each function tool has type, name, description, parameters
+        from tools import TOOL_REGISTRY
+        for tool_name in sorted(enabled_tools):
+            spec = TOOL_REGISTRY.get(tool_name)
+            if spec:
+                tools.append({
+                    "type": "function",
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.parameters,
+                })
+        
+        return tools
+
+    def _extract_responses_output(self, response) -> tuple:
+        """
+        Extract text content and function calls from a Responses API response.
+        
+        Returns
+        -------
+        tuple
+            (text_content, function_calls) where function_calls is a list of
+            dicts with keys: call_id, name, arguments
+        """
+        text_content = ""
+        function_calls = []
+        
+        if hasattr(response, "output") and response.output:
+            for item in response.output:
+                item_type = getattr(item, "type", None)
+                
+                # Handle message output (contains text)
+                if item_type == "message" and hasattr(item, "content"):
+                    for content_item in item.content:
+                        if hasattr(content_item, "text"):
+                            text_content += content_item.text
+                
+                # Handle function_call output
+                elif item_type == "function_call":
+                    call_id = getattr(item, "call_id", None) or getattr(item, "id", "")
+                    name = getattr(item, "name", "")
+                    arguments = getattr(item, "arguments", "{}")
+                    if name:
+                        function_calls.append({
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": arguments,
+                        })
+        
+        return text_content, function_calls
+
+    def _generate_with_responses_api(
+        self,
+        messages,
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = None,
+        web_search_enabled: bool = False,
+        image_tool_handler=None,
+        music_tool_handler=None,
+        read_aloud_tool_handler=None,
+    ) -> str:
+        """
+        Generate a response using the OpenAI Responses API.
+        
+        This is the primary execution path for OpenAI text models. It supports:
+        - File attachments and images
+        - Web search (for supported models)
+        - Function tools (image generation, music control, read aloud)
+        - Multi-round tool calling
+        
+        Parameters
+        ----------
+        messages : list
+            Conversation messages in internal format.
+        model : str
+            OpenAI model name.
+        temperature : float
+            Sampling temperature.
+        max_tokens : int
+            Maximum output tokens.
+        web_search_enabled : bool
+            Whether to enable the web_search tool.
+        image_tool_handler : callable
+            Handler for generate_image tool calls.
+        music_tool_handler : callable
+            Handler for control_music tool calls.
+        read_aloud_tool_handler : callable
+            Handler for read_aloud tool calls.
+            
+        Returns
+        -------
+        str
+            The assistant's response text, with any tool outputs appended.
+        """
+        model_lower = (model or "").lower()
+        # Some Responses-only models (e.g. gpt-4o-mini-search-preview) do not
+        # support temperature. We gate the parameter below based on the model
+        # name to avoid "Model incompatible request argument supplied" errors.
+        is_search_model = "search" in model_lower
+        is_gpt5_model = model_lower.startswith("gpt-5")
+        
+        # Build input from messages
+        input_items, instructions = self._build_responses_input(messages)
+        
+        # Determine which function tools are enabled
+        enabled_tools = set()
+        if image_tool_handler is not None:
+            enabled_tools.add("generate_image")
+        if music_tool_handler is not None:
+            enabled_tools.add("control_music")
+        if read_aloud_tool_handler is not None:
+            enabled_tools.add("read_aloud")
+        
+        # Build tools array
+        tools = self._build_responses_tools(enabled_tools, web_search_enabled, model)
+        
+        # Build base params
         params = {
             "model": model,
             "input": input_items,
@@ -238,26 +419,80 @@ class OpenAIProvider(AIProvider):
         if instructions:
             params["instructions"] = instructions
         
-        if temperature is not None and not is_search_model:
+        # Temperature handling - some models don't support it
+        if temperature is not None and not is_search_model and not is_gpt5_model:
             params["temperature"] = temperature
         
         if max_tokens and max_tokens > 0:
             params["max_output_tokens"] = max_tokens
         
-        print(f"[OpenAIProvider] Calling responses API with {len(input_items)} input items")
+        if tools:
+            params["tools"] = tools
         
-        response = self.client.responses.create(**params)
+        print(f"[OpenAIProvider] Calling Responses API with {len(input_items)} input items, {len(tools)} tools")
         
-        # Extract the text content from the response
-        text_content = ""
-        if hasattr(response, "output") and response.output:
-            for item in response.output:
-                if hasattr(item, "content") and item.content:
-                    for content_item in item.content:
-                        if hasattr(content_item, "text"):
-                            text_content += content_item.text
+        # If no function tools are enabled, we can do a simple one-shot call
+        if not enabled_tools:
+            response = self.client.responses.create(**params)
+            text_content, _ = self._extract_responses_output(response)
+            return text_content
         
-        return text_content
+        # Tool-aware flow: allow the model to call tools, route those through
+        # handlers, then continue the conversation until we get a final answer.
+        tool_context = ToolContext(
+            image_handler=image_tool_handler,
+            music_handler=music_tool_handler,
+            read_aloud_handler=read_aloud_tool_handler,
+        )
+        
+        max_tool_rounds = 3
+        tool_result_snippets = []
+        current_input = input_items.copy()
+        
+        for round_num in range(max_tool_rounds):
+            response = self.client.responses.create(**{
+                **params,
+                "input": current_input,
+            })
+            
+            text_content, function_calls = self._extract_responses_output(response)
+            
+            if not function_calls:
+                # No function calls - this is the final answer
+                if tool_result_snippets:
+                    # Append tool outputs (e.g. <img> tags) so UI always renders them
+                    return text_content + "\n\n" + "\n\n".join(tool_result_snippets)
+                return text_content
+            
+            # Process each function call
+            for fc in function_calls:
+                parsed_args = parse_tool_arguments(fc["arguments"])
+                tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
+                
+                if tool_result:
+                    tool_result_snippets.append(tool_result)
+                
+                # Add the function call and its result to the conversation
+                # First, add the assistant's function call
+                current_input.append({
+                    "type": "function_call",
+                    "call_id": fc["call_id"],
+                    "name": fc["name"],
+                    "arguments": fc["arguments"],
+                })
+                
+                # Then add the function result
+                current_input.append({
+                    "type": "function_call_output",
+                    "call_id": fc["call_id"],
+                    "output": tool_result or "",
+                })
+        
+        # If we exhausted tool rounds, return what we have
+        final_text = text_content if text_content else ""
+        if tool_result_snippets:
+            return final_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return final_text
     
     def get_available_models(self, disable_filter=False):
         import re
@@ -272,17 +507,200 @@ class OpenAIProvider(AIProvider):
                 return sorted([model.id for model in models])
             
             # Default filtering behavior
-            allowed_models = {"gpt-3.5-turbo", "gpt-4", "dall-e-3", "gpt-image-1",
-                            "gpt-4o-mini-realtime-preview", "o1-mini", "o1-preview",
-                            "chatgpt-4o-latest", "gpt-4-turbo", "gpt-4.1",
-                            "gpt-4o-mini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview",
-                            "gpt-4o","gpt-4o-realtime-preview", "gpt-4", "gpt-realtime",
-                            "o3", "o3-mini", "gpt-5.1", "gpt-5.1-chat-latest", "gpt-5-pro"}
+            allowed_models = {
+                "gpt-3.5-turbo",
+                "gpt-4",
+                "dall-e-3",
+                "gpt-image-1",
+                "gpt-image-1-mini",
+                "gpt-4o-mini-realtime-preview",
+                "o1-mini",
+                "o1-preview",
+                "chatgpt-4o-latest",
+                "gpt-4-turbo",
+                "gpt-4.1",
+                "gpt-4o-mini",
+                "gpt-4o-audio-preview",
+                "gpt-4o-mini-audio-preview",
+                "gpt-4o",
+                "gpt-4o-realtime-preview",
+                "gpt-4",
+                "gpt-realtime",
+                "o3",
+                "o3-mini",
+                "gpt-5.1",
+                "gpt-5.1-chat-latest",
+                "gpt-5-pro",
+            }
             filtered_models = [model.id for model in models if model.id in allowed_models]
             return sorted(filtered_models)
         except Exception as e:
             print(f"Error fetching models: {e}")
             return sorted(["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "dall-e-3"])
+
+    def _requires_chat_completions(self, model: str) -> tuple:
+        """
+        Determine if a model requires the chat.completions API instead of Responses.
+        
+        Returns
+        -------
+        tuple
+            (requires_chat_completions: bool, reason: str)
+            reason is one of: "audio", "reasoning", or ""
+        """
+        model_lower = (model or "").lower()
+        
+        # Audio models require chat.completions for audio output modalities
+        if "audio" in model_lower:
+            return True, "audio"
+        
+        # Reasoning models (o1, o3) require special developer message handling
+        # that we've only tested with chat.completions
+        reasoning_models = ["o1-mini", "o1-preview", "o3", "o3-mini"]
+        if any(r in model_lower for r in reasoning_models):
+            return True, "reasoning"
+        
+        return False, ""
+
+    def _generate_with_chat_completions_audio(
+        self,
+        messages,
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        chat_id: str,
+    ) -> str:
+        """
+        Generate a response using chat.completions for audio-capable models.
+        
+        Audio models require the chat.completions API with special modalities
+        and audio parameters.
+        """
+        # Preprocess messages to handle images
+        processed_messages = []
+        for msg in messages:
+            content = msg.get("content", "")
+            
+            if "images" in msg and msg["images"]:
+                content_parts = [{"type": "text", "text": content}]
+                for img in msg["images"]:
+                    mime_type = img.get("mime_type", "image/jpeg")
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{img['data']}",
+                            "detail": "auto"
+                        }
+                    })
+                processed_messages.append({
+                    "role": msg["role"],
+                    "content": content_parts
+                })
+            else:
+                clean_msg = {k: v for k, v in msg.items() 
+                           if k in ("role", "content", "name")}
+                processed_messages.append(clean_msg)
+        
+        params = {
+            "model": model,
+            "messages": processed_messages,
+            "modalities": ["text", "audio"],
+            "audio": {
+                "voice": "alloy",
+                "format": "wav"
+            }
+        }
+        
+        if temperature is not None:
+            params["temperature"] = temperature
+        if max_tokens and max_tokens > 0:
+            params["max_tokens"] = max_tokens
+        
+        print(f"[OpenAIProvider] Using chat.completions for audio model: {model}")
+        response = self.client.chat.completions.create(**params)
+        
+        text_content = response.choices[0].message.content or ""
+        
+        # Handle audio response
+        if hasattr(response.choices[0].message, 'audio') and response.choices[0].message.audio:
+            try:
+                transcript = response.choices[0].message.audio.transcript or ""
+                text_content = transcript
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                audio_dir = Path('history') / chat_id.replace('.json', '') / 'audio'
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                
+                audio_file = audio_dir / f"response_{timestamp}.wav"
+                audio_bytes = base64.b64decode(response.choices[0].message.audio.data)
+                with open(audio_file, 'wb') as f:
+                    f.write(audio_bytes)
+                
+                def play_audio(file_path):
+                    try:
+                        try:
+                            subprocess.run(['paplay', str(file_path)], check=True)
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            subprocess.run(['aplay', str(file_path)], check=True)
+                    except Exception as e:
+                        print(f"Error playing audio: {e}")
+                
+                threading.Thread(target=play_audio, args=(audio_file,), daemon=True).start()
+                text_content = f"{text_content}\n<audio_file>{audio_file}</audio_file>"
+                
+            except Exception as e:
+                print(f"Error handling audio response: {e}")
+        
+        return text_content
+
+    def _generate_with_chat_completions_reasoning(
+        self,
+        messages,
+        model: str,
+        max_tokens: int,
+    ) -> str:
+        """
+        Generate a response using chat.completions for reasoning models (o1, o3).
+        
+        Reasoning models require special developer message formatting and don't
+        support tools or temperature.
+        """
+        # Format messages for reasoning models
+        formatted_messages = []
+        formatting_flag_added = False
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            # Map system → developer for o1/o3 models
+            if role == "system":
+                role = "developer"
+                if not formatting_flag_added:
+                    if "Formatting re-enabled" not in content:
+                        content = "Formatting re-enabled\n\n" + (content.lstrip() if isinstance(content, str) else content)
+                    formatting_flag_added = True
+
+            if not content:
+                continue
+
+            formatted_messages.append({
+                "role": role,
+                "content": [{"type": "text", "text": content}],
+            })
+
+        params = {
+            "model": model,
+            "messages": formatted_messages,
+            "response_format": {"type": "text"},
+        }
+        
+        if max_tokens and max_tokens > 0:
+            params["max_tokens"] = max_tokens
+        
+        print(f"[OpenAIProvider] Using chat.completions for reasoning model: {model}")
+        response = self.client.chat.completions.create(**params)
+        return response.choices[0].message.content or ""
 
     def generate_chat_completion(
         self,
@@ -291,291 +709,65 @@ class OpenAIProvider(AIProvider):
         temperature=0.7,
         max_tokens=None,
         chat_id=None,
+        web_search_enabled: bool = False,
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
     ):
-        # Check if any message has attached files - if so, use the responses API
-        if self._has_attached_files(messages):
-            print(f"[OpenAIProvider] Using responses API for file attachments")
-            return self._generate_with_responses_api(
-                messages=messages,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+        """
+        Generate a chat completion using the most appropriate API.
         
-        # Check if this is an audio-capable model
-        model_lower = model.lower()
-        is_audio_model = "audio" in model_lower
-        reasoning_models = ["o1-mini", "o1-preview", "o3", "o3-mini"]
-        is_reasoning_model = any(r in model_lower for r in reasoning_models)
-        is_gpt5_model = model_lower.startswith("gpt-5")
-        # Some specialized models (e.g. gpt-4o-mini-search-preview) do not
-        # support temperature; avoid sending it to prevent 400 errors.
-        is_search_model = "search" in model_lower
+        Routing logic:
+        1. Audio models → chat.completions (requires modalities/audio params)
+        2. Reasoning models (o1, o3) → chat.completions (requires developer messages)
+        3. All other models → Responses API (supports web search, tools, files)
         
-        params = {}
+        The Responses API is the primary path as it supports:
+        - Web search (for supported models)
+        - Function tools (image/music/read_aloud)
+        - File attachments
+        - Image inputs
+        """
+        # Determine if we need to use chat.completions
+        needs_chat_completions, reason = self._requires_chat_completions(model)
         
-        if is_reasoning_model:
-            # Format messages with the correct content structure for reasoning models.
-            # For o1/o3 and newer, OpenAI recommends using *developer* messages
-            # instead of legacy system messages:
-            # https://platform.openai.com/docs/api-reference/chat/create
-            #
-            # Our chat pipeline (in ChatGTK._messages_for_model) stores the
-            # conversation instructions – including SYSTEM_PROMPT_APPENDIX and
-            # any tool guidance – as a leading "system" message. To ensure that
-            # these instructions are honored by reasoning models, we convert any
-            # such system message into a developer message here.
-            #
-            # Starting with o1-2024-12-17, reasoning models avoid markdown
-            # formatting by default. To explicitly request markdown output we
-            # follow OpenAI's guidance and include the string
-            # "Formatting re-enabled" on the first line of our developer
-            # message.
-            formatted_messages = []
-            formatting_flag_added = False
-
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-
-                # Map system → developer so o1/o3 obey SYSTEM_PROMPT_APPENDIX
-                # and the rest of the system instructions.
-                if role == "system":
-                    role = "developer"
-
-                    if not formatting_flag_added:
-                        if "Formatting re-enabled" not in content:
-                            # Ensure the required marker is on the first line.
-                            content = "Formatting re-enabled\n\n" + (content.lstrip() if isinstance(content, str) else content)
-                        formatting_flag_added = True
-
-                # Skip messages with no textual content; reasoning models expect
-                # text-only content in this path.
-                if not content:
-                    continue
-
-                formatted_messages.append({
-                    "role": role,
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": content,
-                        }
-                    ],
-                })
-
-            params.update({
-                "model": model,
-                "messages": formatted_messages,
-                # TODO developer messages and reasoning_effort do not seem to be
-                # working here. Revisit this in the future.
-                # "reasoning_effort": "low",  # Can be "low", "medium", or "high"
-                "response_format": {
-                    "type": "text",
-                },
-            })
-        else:
-            # Preprocess messages to handle images and clean keys
-            processed_messages = []
-            for msg in messages:
-                content = msg.get("content", "")
-                
-                if "images" in msg and msg["images"]:
-                    content_parts = [{"type": "text", "text": content}]
-                    for img in msg["images"]:
-                        mime_type = img.get("mime_type", "image/jpeg")
-                        content_parts.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{img['data']}",
-                                "detail": "auto"
-                            }
-                        })
-                    processed_messages.append({
-                        "role": msg["role"],
-                        "content": content_parts
-                    })
-                else:
-                    # Keep only valid keys for OpenAI API
-                    clean_msg = {k: v for k, v in msg.items() if k in ("role", "content", "name", "function_call", "tool_calls", "tool_call_id")}
-                    processed_messages.append(clean_msg)
-
-            params.update({
-                'model': model,
-                'messages': processed_messages,
-            })
-            if not is_gpt5_model and not is_search_model:
-                params['temperature'] = temperature
-
-            # Enable tools for modern OpenAI chat models when handlers are
-            # supplied. We keep this to non-reasoning models for now to avoid
-            # interfering with the special o1/o3 message formats.
-            enabled_tools = set()
-            if image_tool_handler is not None:
-                enabled_tools.add("generate_image")
-            if music_tool_handler is not None:
-                enabled_tools.add("control_music")
-            if read_aloud_tool_handler is not None:
-                enabled_tools.add("read_aloud")
-            tools = build_tools_for_provider(enabled_tools, "openai")
-            if tools:
-                params["tools"] = tools
-                params["tool_choice"] = "auto"
-        
-        if max_tokens and max_tokens > 0:
-            params['max_tokens'] = max_tokens
-        
-        if is_audio_model:
-            # Add audio-specific parameters
-            params.update({
-                'modalities': ["text", "audio"],
-                'audio': {
-                    'voice': "alloy",
-                    'format': "wav"
-                }
-            })
-        print(f"Params: {params}")
-
-        # When no tools are involved we can keep the simple one-shot path.
-        if (image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None) or is_reasoning_model:
-            response = self.client.chat.completions.create(**params)
-            text_content = response.choices[0].message.content or ""
-        else:
-            # Tool-aware flow: allow the model to call tools, route those through
-            # the provided handlers, then give the results back to the model
-            # before returning the final assistant message.
-            tool_aware_messages = params['messages']
-            max_tool_rounds = 3
-            last_response = None
-            tool_result_snippets = []
-
-            for _ in range(max_tool_rounds):
-                last_response = self.client.chat.completions.create(**{
-                    **params,
-                    'messages': tool_aware_messages,
-                })
-                msg = last_response.choices[0].message
-
-                tool_calls = getattr(msg, "tool_calls", None) or []
-                if not tool_calls:
-                    # No tools requested; this is the final assistant answer.
-                    break
-
-                # Append the assistant message that requested tools.
-                tool_aware_messages.append(
-                    {
-                        "role": "assistant",
-                        "content": msg.content or "",
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "type": tc.type,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            for tc in tool_calls
-                        ],
-                    }
+        if needs_chat_completions:
+            if reason == "audio":
+                return self._generate_with_chat_completions_audio(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    chat_id=chat_id or "temp",
                 )
-
-                # For each tool call, invoke the appropriate handler and append a tool result.
-                tool_context = ToolContext(
-                    image_handler=image_tool_handler,
-                    music_handler=music_tool_handler,
-                    read_aloud_handler=read_aloud_tool_handler,
+            elif reason == "reasoning":
+                return self._generate_with_chat_completions_reasoning(
+                    messages=messages,
+                    model=model,
+                    max_tokens=max_tokens,
                 )
-                for tc in tool_calls:
-                    if tc.type != "function":
-                        tool_result_content = "Error: unknown tool requested."
-                    else:
-                        parsed_args = parse_tool_arguments(tc.function.arguments or "{}")
-                        tool_result_content = run_tool_call(tc.function.name, parsed_args, tool_context)
-
-                    # Remember the tool output so we can always surface the
-                    # generated <img> tags to the user, even if the model does
-                    # not echo them back explicitly in its final message.
-                    if tool_result_content:
-                        tool_result_snippets.append(tool_result_content)
-
-                    tool_aware_messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": tc.function.name,
-                            "content": tool_result_content or "",
-                        }
-                    )
-
-            # After the loop, last_response should contain the most recent model
-            # reply (with or without tools).
-            if last_response is None:
-                raise RuntimeError("No response received from OpenAI chat completion.")
-
-            base_text = last_response.choices[0].message.content or ""
-            if tool_result_snippets:
-                # Append tool outputs (which include <img src=\"...\"/> tags)
-                # so the UI can always render the images, regardless of how
-                # the model phrases its final answer.
-                text_content = base_text + "\n\n" + "\n\n".join(tool_result_snippets)
-            else:
-                text_content = base_text
         
-        if is_audio_model and hasattr(response.choices[0].message, 'audio'):
-            try:
-                # Get transcript from audio response
-                transcript = response.choices[0].message.audio.transcript or ""
-                text_content = transcript  # Set the transcript as the main content
-                
-                # Generate unique filename with timestamp
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                
-                # Create audio directory in chat history if it doesn't exist
-                audio_dir = Path('history') / chat_id.replace('.json', '') / 'audio'
-                audio_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Save audio file with timestamp
-                audio_file = audio_dir / f"response_{timestamp}.wav"
-                
-                # Save audio data
-                audio_bytes = base64.b64decode(response.choices[0].message.audio.data)
-                with open(audio_file, 'wb') as f:
-                    f.write(audio_bytes)
-                
-                # Play audio in background
-                def play_audio(file_path):
-                    try:
-                        # Try paplay first
-                        try:
-                            subprocess.run(['paplay', str(file_path)], check=True)
-                        except (subprocess.CalledProcessError, FileNotFoundError):
-                            # Fallback to aplay if paplay fails
-                            subprocess.run(['aplay', str(file_path)], check=True)
-                    except Exception as e:
-                        print(f"Error playing audio: {e}")
-                
-                # Play the initial audio
-                threading.Thread(target=play_audio, args=(audio_file,), daemon=True).start()
-                
-                # Add audio file path to the response for replay functionality
-                text_content = f"{text_content}\n<audio_file>{audio_file}</audio_file>"
-                
-            except Exception as e:
-                print(f"Error handling audio response: {e}")
-        
-        return text_content
+        # Default path: use Responses API for everything else
+        # This handles standard chat, files, images, tools, and web search
+        print(f"[OpenAIProvider] Using Responses API for model: {model}")
+        return self._generate_with_responses_api(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            web_search_enabled=web_search_enabled,
+            image_tool_handler=image_tool_handler,
+            music_tool_handler=music_tool_handler,
+            read_aloud_tool_handler=read_aloud_tool_handler,
+        )
     
     def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
         """
         Generate or edit an image using OpenAI image models.
         - For models like `dall-e-3` this performs text → image generation.
-        - For `gpt-image-1` with `image_data` this performs image → image editing.
+        - For `gpt-image-1`/`gpt-image-1-mini` with `image_data` this performs image → image editing.
         """
-        if model == "gpt-image-1" and image_data:
+        if model in ("gpt-image-1", "gpt-image-1-mini") and image_data:
             # Image edit: decode the attached image and send it to the images.edit endpoint
             raw_bytes = base64.b64decode(image_data)
             
@@ -732,6 +924,7 @@ class GrokProvider(AIProvider):
         temperature=0.7,
         max_tokens=None,
         chat_id=None,
+        web_search_enabled: bool = False,
         response_meta=None,
         image_tool_handler=None,
         music_tool_handler=None,
@@ -989,6 +1182,7 @@ class ClaudeProvider(AIProvider):
         max_tokens=None,
         chat_id=None,
         response_meta=None,
+        web_search_enabled: bool = False,
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
@@ -1288,6 +1482,7 @@ class GeminiProvider(AIProvider):
         max_tokens=None,
         chat_id=None,
         response_meta=None,
+        web_search_enabled: bool = False,
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
@@ -1323,6 +1518,20 @@ class GeminiProvider(AIProvider):
             generation_config["max_output_tokens"] = max_tokens
         if generation_config:
             payload["generation_config"] = generation_config
+
+        # Optionally enable Google grounding with Search for supported models,
+        # following the Gemini API docs:
+        # https://ai.google.dev/gemini-api/docs/google-search
+        def _supports_google_search_tool(model_name: str) -> bool:
+            if not model_name:
+                return False
+            name = model_name.lower()
+            # Google Search grounding is available for Gemini 2.x+ models; we avoid
+            # attaching it to legacy 1.5 models that rely on google_search_retrieval.
+            return name.startswith("gemini-2.") or name.startswith("gemini-3.")
+
+        if web_search_enabled and _supports_google_search_tool(model):
+            payload.setdefault("tools", []).append({"google_search": {}})
 
         # When tool handlers are provided, expose corresponding function
         # declarations to Gemini using its functionDeclarations schema,

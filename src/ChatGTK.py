@@ -692,7 +692,7 @@ class OpenAIGTKClient(Gtk.Window):
         # OpenAI image models.
         if provider_name == 'openai':
             image_data = None
-            if model == "gpt-image-1" and has_attached_images:
+            if model in ("gpt-image-1", "gpt-image-1-mini") and has_attached_images:
                 image_data = last_msg["images"][0]["data"]
             return provider.generate_image(prompt, chat_id, model, image_data)
 
@@ -1661,6 +1661,7 @@ class OpenAIGTKClient(Gtk.Window):
                     "temperature": float(self.temperament),
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
+                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
                 }
                 if image_tool_handler is not None:
                     kwargs["image_tool_handler"] = image_tool_handler
@@ -1700,6 +1701,7 @@ class OpenAIGTKClient(Gtk.Window):
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "response_meta": response_meta,
+                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
                 }
                 if image_tool_handler is not None:
                     kwargs["image_tool_handler"] = image_tool_handler
@@ -1739,6 +1741,7 @@ class OpenAIGTKClient(Gtk.Window):
                     "temperature": float(self.temperament),
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
+                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
                 }
                 if image_tool_handler is not None:
                     kwargs["image_tool_handler"] = image_tool_handler
@@ -1779,6 +1782,7 @@ class OpenAIGTKClient(Gtk.Window):
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "response_meta": assistant_provider_meta,
+                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
                 }
                 if image_tool_handler is not None:
                     kwargs["image_tool_handler"] = image_tool_handler

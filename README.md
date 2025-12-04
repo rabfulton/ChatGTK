@@ -83,10 +83,11 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - Text-to-Speech output using OpenAI's TTS and TTS-HD and audio-preview models
 - Real-time voice conversation support using gpt-4o-realtime-preview model
 - Reasoning support for OpenAI's o3 models
-- Tool use including music control, image generation and a read aloud tool that lets you assistant decide when to use TTS.
+- Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS.
 - Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, and Anthropic Claude via separate API keys.
+- Web search grounding for OpenAI and Gemini models to provide up-to-date, cited answers.
 
-### Tools support (images, music & read aloud)
+### Tools support (images, music, web search & read aloud)
 
 - **Image tool (`generate_image`)**
   - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
@@ -116,6 +117,12 @@ Alternatively you can run the install script to add a desktop entry and set up t
     - **Read Aloud prompt template**: for audio-preview models, customize the prompt used to instruct the model what to say. Use `{text}` as a placeholder for the response text. Default: `Please say the following verbatim in a New York accent: "{text}"`.
   - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
   - To use the tools just ask your model "Write me a short poem and read it aloud".
+
+- **Web search (provider-native tools)**
+  - Disabled by default; enable via **Enable Web Search** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
+  - For **OpenAI models**, this uses the built-in `web_search` tool described in the OpenAI tools docs ([OpenAI web search guide](https://platform.openai.com/docs/guides/tools/web-search?api-mode=responses)).
+  - For **Gemini models**, this uses Grounding with Google Search via the `google_search` tool as documented in the Gemini API ([Gemini Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search)).
+  - Only models that support these tools will be configured to use them; when enabled, the assistant can automatically call web search when it needs fresh, real‑world information and return grounded answers with citations.
 
 ## Screenshots
 
@@ -149,11 +156,29 @@ Alternatively you can run the install script to add a desktop entry and set up t
   - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
   - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
 
+## Technical Notes
+
+### OpenAI API Backend
+
+ChatGTK uses OpenAI's **Responses API** as the primary execution path for most OpenAI models. This provides:
+- Support for web search grounding (for gpt-4o, gpt-4-turbo, gpt-5.x models)
+- Native file attachment handling (PDFs)
+- Function tools (image generation, music control, read aloud)
+
+Some models still use the older **chat.completions API**:
+- **Audio models** (`gpt-4o-audio-preview`, `gpt-4o-mini-audio-preview`) require chat.completions for audio output modalities
+- **Reasoning models** (`o1-mini`, `o1-preview`, `o3`, `o3-mini`) require special developer message formatting via chat.completions
+- **Realtime models** use a separate WebSocket API
+
+For more details, see the [OpenAI Responses API migration guide](https://platform.openai.com/docs/guides/migrate-to-responses).
+
 ## FAQ
 
 **gpt-image-1 is not working**<br>
 OpenAI requires identity verification for some of their models. You can verify your identity [here](https://platform.openai.com/settings/organization/general).<br>
 **Music tool is not working**<br>
 Set your **Music Library Directory** in **Settings → Tool Options**, then click the **Generate Library** button to scan your music files. Verify your **Music Player Executable** path is correct (default: `/usr/bin/audacious -p <playlist>`). Alternatively, if you already have a beets library, you can specify its path in the **Beets Library DB** field.<br>
+**Web search is not working**<br>
+Web search is only supported on certain models. For OpenAI, supported models include: `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, and `gpt-5.x` models. For Gemini, supported models include `gemini-2.x` and `gemini-3.x` models. Older models like `gpt-3.5-turbo` or `gemini-1.5` do not support web search.<br>
 
 <a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>

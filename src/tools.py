@@ -396,6 +396,7 @@ class ToolManager:
     IMAGE_ONLY_MODELS = {
         "dall-e-3",
         "gpt-image-1",
+        "gpt-image-1-mini",
         "gemini-3-pro-image-preview",
         "gemini-2.5-flash-image",
     }
@@ -463,7 +464,7 @@ class ToolManager:
         lower = model_name.lower()
 
         if provider_name == "openai":
-            return lower in ("dall-e-3", "gpt-image-1")
+            return lower in ("dall-e-3", "gpt-image-1", "gpt-image-1-mini")
         if provider_name == "gemini":
             return lower in ("gemini-3-pro-image-preview", "gemini-2.5-flash-image")
         if provider_name == "grok":
