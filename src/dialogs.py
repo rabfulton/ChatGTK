@@ -70,6 +70,10 @@ def _add_listbox_row_margins(row, top=4, bottom=4):
     """
     row.set_margin_top(top)
     row.set_margin_bottom(bottom)
+    # Also add small horizontal margins so row contents don't sit flush
+    # against any theme-drawn borders around the ListBox.
+    row.set_margin_start(6)
+    row.set_margin_end(6)
     return row
 
 
@@ -84,10 +88,10 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     """
     list_box = Gtk.ListBox()
     list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-    list_box.set_margin_top(12)
+    list_box.set_margin_top(0)
     list_box.set_margin_bottom(0)
-    list_box.set_margin_start(12)
-    list_box.set_margin_end(12)
+    list_box.set_margin_start(0)
+    list_box.set_margin_end(0)
 
     entries = {}
 
@@ -310,10 +314,10 @@ class SettingsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(12)
+        list_box.set_margin_top(0)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
         scroll.add(list_box)
 
         # AI Name
@@ -552,10 +556,10 @@ class SettingsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(12)
+        list_box.set_margin_top(0)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
         scroll.add(list_box)
 
         # Microphone
@@ -749,10 +753,10 @@ class SettingsDialog(Gtk.Dialog):
         # Some themes provide inner padding around stack pages, others do not.
         # By setting margins here, the Tool Options page will always have
         # comfortable spacing from the sidebar and window edges.
-        list_box.set_margin_top(12)
+        list_box.set_margin_top(0)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
         scroll.add(list_box)
 
         # ---- Image Tool section ----
@@ -1870,10 +1874,10 @@ class ToolsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(12)
+        list_box.set_margin_top(0)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(12)
-        list_box.set_margin_end(12)
+        list_box.set_margin_start(0)
+        list_box.set_margin_end(0)
         box.pack_start(list_box, True, True, 0)
 
         # Enable/disable image tool for text models
