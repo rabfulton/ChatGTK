@@ -13,3 +13,6 @@ debug_failed.tex
 *.pdf
 !screenshots/*.pdf
 WARP.md
+PKGBUILD
+aur.txt
+.SRCINFO

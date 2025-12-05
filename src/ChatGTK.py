@@ -16,18 +16,18 @@ import mimetypes
 import base64
 import time
 from latex_utils import (
-    tex_to_png, 
-    process_tex_markup, 
-    insert_tex_image, 
-    cleanup_temp_files, 
+    tex_to_png,
+    process_tex_markup,
+    insert_tex_image,
+    cleanup_temp_files,
     is_latex_installed,
-    export_chat_to_pdf
+    export_chat_to_pdf,
 )
 from utils import (
-    load_settings, 
-    save_settings, 
-    generate_chat_name, 
-    save_chat_history, 
+    load_settings,
+    save_settings,
+    generate_chat_name,
+    save_chat_history,
     load_chat_history,
     list_chat_histories,
     get_chat_metadata,
@@ -39,7 +39,8 @@ from utils import (
     insert_resized_image,
     apply_settings,
     get_object_settings,
-    convert_settings_for_save
+    convert_settings_for_save,
+    load_api_keys,
 )
 from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
 from markup_utils import (
@@ -117,7 +118,10 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_history = [create_system_message(self.system_message)]
         self.providers = {}
         self.model_provider_map = {}
-        self.api_keys = {'openai': '', 'gemini': '', 'grok': '', 'claude': ''}
+        # Load any API keys saved from a previous session; individual providers
+        # will be initialized below using either environment variables or these
+        # persisted values.
+        self.api_keys = load_api_keys()
         
         # Initialize ToolManager with current settings
         self.tool_manager = ToolManager(
@@ -206,7 +210,8 @@ class OpenAIGTKClient(Gtk.Window):
         self.combo_model = Gtk.ComboBoxText()
         self.combo_model.connect('changed', self.on_model_changed)
         
-        # Check for API keys in environment variables and initialize providers if they exist
+        # Check for API keys in environment variables and initialize providers if they exist.
+        # Environment variables take precedence over saved keys for the current run.
         env_openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
         env_gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
         env_grok_key = os.environ.get('GROK_API_KEY', '').strip()
@@ -217,24 +222,32 @@ class OpenAIGTKClient(Gtk.Window):
             or os.environ.get('ANTHROPIC_API_KEY', '').strip()
         )
         env_perplexity_key = os.environ.get('PERPLEXITY_API_KEY', '').strip()
-        if env_openai_key:
-            self.api_keys['openai'] = env_openai_key
-            self.initialize_provider('openai', env_openai_key)
-        if env_gemini_key:
-            self.api_keys['gemini'] = env_gemini_key
-            self.initialize_provider('gemini', env_gemini_key)
-        if env_grok_key:
-            self.api_keys['grok'] = env_grok_key
-            self.initialize_provider('grok', env_grok_key)
-        if env_claude_key:
-            self.api_keys['claude'] = env_claude_key
+
+        # Choose the effective key for each provider: environment overrides saved.
+        openai_key = env_openai_key or self.api_keys.get('openai', '').strip()
+        gemini_key = env_gemini_key or self.api_keys.get('gemini', '').strip()
+        grok_key = env_grok_key or self.api_keys.get('grok', '').strip()
+        claude_key = env_claude_key or self.api_keys.get('claude', '').strip()
+        perplexity_key = env_perplexity_key or self.api_keys.get('perplexity', '').strip()
+
+        if openai_key:
+            self.api_keys['openai'] = openai_key
+            self.initialize_provider('openai', openai_key)
+        if gemini_key:
+            self.api_keys['gemini'] = gemini_key
+            self.initialize_provider('gemini', gemini_key)
+        if grok_key:
+            self.api_keys['grok'] = grok_key
+            self.initialize_provider('grok', grok_key)
+        if claude_key:
+            self.api_keys['claude'] = claude_key
             # Ensure both environment variables are set for consistency.
-            os.environ['CLAUDE_API_KEY'] = env_claude_key
-            os.environ['ANTHROPIC_API_KEY'] = env_claude_key
-            self.initialize_provider('claude', env_claude_key)
-        if env_perplexity_key:
-            self.api_keys['perplexity'] = env_perplexity_key
-            self.initialize_provider('perplexity', env_perplexity_key)
+            os.environ['CLAUDE_API_KEY'] = claude_key
+            os.environ['ANTHROPIC_API_KEY'] = claude_key
+            self.initialize_provider('claude', claude_key)
+        if perplexity_key:
+            self.api_keys['perplexity'] = perplexity_key
+            self.initialize_provider('perplexity', perplexity_key)
         
         if self.providers:
             self.fetch_models_async()

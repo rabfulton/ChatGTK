@@ -4,13 +4,16 @@ from datetime import datetime
 from pathlib import Path
 import re
 import gi
-from config import SETTINGS_FILE, HISTORY_DIR, SETTINGS_CONFIG
+from config import SETTINGS_FILE, HISTORY_DIR, SETTINGS_CONFIG, API_KEYS_FILE
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GdkPixbuf
 from gi.repository import Gdk
 
 # Create DEFAULT_SETTINGS from SETTINGS_CONFIG
 DEFAULT_SETTINGS = {key: config['default'] for key, config in SETTINGS_CONFIG.items()}
+
+# Known API key fields we persist in a separate JSON file under PARENT_DIR.
+API_KEY_FIELDS = ['openai', 'gemini', 'grok', 'claude', 'perplexity']
 
 def apply_settings(obj, settings):
     """Apply settings to object attributes (converting to lowercase)"""
@@ -78,6 +81,51 @@ def save_settings(settings_dict):
                 f.write(f"{key}={value}\n")
     except Exception as e:
         print(f"Error saving settings: {e}")
+
+
+def load_api_keys():
+    """
+    Load saved API keys from disk.
+
+    Returns a dict keyed by provider name (openai, gemini, grok, claude, perplexity),
+    defaulting to empty strings when no file or value exists.
+    """
+    keys = {k: '' for k in API_KEY_FIELDS}
+    try:
+        with open(API_KEYS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for name in API_KEY_FIELDS:
+                value = data.get(name, '')
+                if value is None:
+                    value = ''
+                keys[name] = str(value).strip()
+    except FileNotFoundError:
+        # No keys saved yet – this is fine.
+        pass
+    except Exception as e:
+        print(f"Error loading API keys: {e}")
+    return keys
+
+
+def save_api_keys(api_keys: dict):
+    """
+    Persist API keys to disk in a small JSON file under PARENT_DIR.
+
+    Only the known provider fields are written; all values are stored as strings.
+    """
+    try:
+        Path(API_KEYS_FILE).parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        for name in API_KEY_FIELDS:
+            value = api_keys.get(name, '')
+            if value is None:
+                value = ''
+            data[name] = str(value).strip()
+        with open(API_KEYS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving API keys: {e}")
 
 def ensure_history_dir():
     """Ensure the history directory exists."""

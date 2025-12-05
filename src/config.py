@@ -41,6 +41,10 @@ PARENT_DIR = _default_data_root()
 SETTINGS_FILE = os.path.join(PARENT_DIR, "settings.cfg")
 HISTORY_DIR = os.path.join(PARENT_DIR, "history")
 MODEL_CACHE_FILE = os.path.join(PARENT_DIR, "model_cache.json")
+# Separate file for persisting API keys across sessions. This keeps
+# secrets out of the main settings.cfg while still using the same
+# per-user data root.
+API_KEYS_FILE = os.path.join(PARENT_DIR, "api_keys.json")
 CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
 
 # Define settings configuration with their types and defaults

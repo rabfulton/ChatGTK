@@ -22,7 +22,7 @@ from gi.repository import Gtk, GtkSource
 import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
-from utils import load_settings, apply_settings, parse_color_to_rgba, save_settings
+from utils import load_settings, apply_settings, parse_color_to_rgba, save_settings, save_api_keys
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +84,10 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     """
     list_box = Gtk.ListBox()
     list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-    list_box.set_margin_top(0)
+    list_box.set_margin_top(12)
     list_box.set_margin_bottom(0)
-    list_box.set_margin_start(0)
-    list_box.set_margin_end(0)
+    list_box.set_margin_start(12)
+    list_box.set_margin_end(12)
 
     entries = {}
 
@@ -99,11 +99,12 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     label = Gtk.Label(label="OpenAI API Key", xalign=0)
     label.set_hexpand(True)
     entry_openai = Gtk.Entry()
+    entry_openai.set_hexpand(True)
     entry_openai.set_visibility(False)
     entry_openai.set_placeholder_text("sk-...")
     entry_openai.set_text(openai_key)
     hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_openai, False, True, 0)
+    hbox.pack_start(entry_openai, True, True, 0)
     list_box.add(row)
     entries['openai'] = entry_openai
 
@@ -115,11 +116,12 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     label = Gtk.Label(label="Gemini API Key", xalign=0)
     label.set_hexpand(True)
     entry_gemini = Gtk.Entry()
+    entry_gemini.set_hexpand(True)
     entry_gemini.set_visibility(False)
     entry_gemini.set_placeholder_text("AI...")
     entry_gemini.set_text(gemini_key)
     hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_gemini, False, True, 0)
+    hbox.pack_start(entry_gemini, True, True, 0)
     list_box.add(row)
     entries['gemini'] = entry_gemini
 
@@ -131,11 +133,12 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     label = Gtk.Label(label="Grok API Key", xalign=0)
     label.set_hexpand(True)
     entry_grok = Gtk.Entry()
+    entry_grok.set_hexpand(True)
     entry_grok.set_visibility(False)
     entry_grok.set_placeholder_text("gsk-...")
     entry_grok.set_text(grok_key)
     hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_grok, False, True, 0)
+    hbox.pack_start(entry_grok, True, True, 0)
     list_box.add(row)
     entries['grok'] = entry_grok
 
@@ -147,11 +150,12 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     label = Gtk.Label(label="Claude API Key", xalign=0)
     label.set_hexpand(True)
     entry_claude = Gtk.Entry()
+    entry_claude.set_hexpand(True)
     entry_claude.set_visibility(False)
     entry_claude.set_placeholder_text("sk-ant-...")
     entry_claude.set_text(claude_key)
     hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_claude, False, True, 0)
+    hbox.pack_start(entry_claude, True, True, 0)
     list_box.add(row)
     entries['claude'] = entry_claude
 
@@ -163,11 +167,12 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     label = Gtk.Label(label="Perplexity API Key", xalign=0)
     label.set_hexpand(True)
     entry_perplexity = Gtk.Entry()
+    entry_perplexity.set_hexpand(True)
     entry_perplexity.set_visibility(False)
     entry_perplexity.set_placeholder_text("pplx-...")
     entry_perplexity.set_text(perplexity_key)
     hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_perplexity, False, True, 0)
+    hbox.pack_start(entry_perplexity, True, True, 0)
     list_box.add(row)
     entries['perplexity'] = entry_perplexity
 
@@ -305,10 +310,10 @@ class SettingsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(0)
+        list_box.set_margin_top(12)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(0)
-        list_box.set_margin_end(0)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
         scroll.add(list_box)
 
         # AI Name
@@ -547,10 +552,10 @@ class SettingsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(0)
+        list_box.set_margin_top(12)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(0)
-        list_box.set_margin_end(0)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
         scroll.add(list_box)
 
         # Microphone
@@ -740,10 +745,14 @@ class SettingsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(0)
+        # Add explicit margins so layout is consistent across themes/desktops.
+        # Some themes provide inner padding around stack pages, others do not.
+        # By setting margins here, the Tool Options page will always have
+        # comfortable spacing from the sidebar and window edges.
+        list_box.set_margin_top(12)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(0)
-        list_box.set_margin_end(0)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
         scroll.add(list_box)
 
         # ---- Image Tool section ----
@@ -1058,10 +1067,7 @@ class SettingsDialog(Gtk.Dialog):
         self.entry_system_message.set_can_focus(True)
         self.entry_system_message.set_accepts_tab(True)
 
-        # The previous code tried to set inner padding on the Gtk.TextView's text area using CSS
-        # selector "textview text" -- this does not work in Gtk3 (and also not as expected in Gtk4).
         # Native CSS padding for the text area isn't supported in Gtk3; use set_left_margin()/set_right_margin()/set_top_margin()/set_bottom_margin() on the buffer.
-
         # Set padding by using Gtk.TextView's own margin APIs for the buffer.
         self.entry_system_message.set_left_margin(12)
         self.entry_system_message.set_right_margin(12)
@@ -1299,7 +1305,7 @@ class SettingsDialog(Gtk.Dialog):
         # Main container for the page
         page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         page_box.set_margin_top(12)
-        page_box.set_margin_bottom(12)
+        page_box.set_margin_bottom(0)
         page_box.set_margin_start(12)
         page_box.set_margin_end(12)
 
@@ -1499,6 +1505,20 @@ class SettingsDialog(Gtk.Dialog):
             claude_key=keys.get('claude', ''),
             perplexity_key=keys.get('perplexity', ''),
         )
+        # Add a final row in the same ListBox for the Save button
+        button_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(button_row, top=12, bottom=4)
+        button_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        button_row.add(button_hbox)
+        button_hbox.pack_start(Gtk.Box(), True, True, 0)  # spacer
+        self.btn_save_api_keys = Gtk.Button(label="Save API Keys")
+        self.btn_save_api_keys.set_tooltip_text(
+            "Save the current API keys so they are available next time you start ChatGTK."
+        )
+        self.btn_save_api_keys.connect("clicked", self._on_save_api_keys_clicked)
+        button_hbox.pack_start(self.btn_save_api_keys, False, False, 0)
+        list_box.add(button_row)
+
         self.stack.add_named(list_box, "API Keys")
 
     # -----------------------------------------------------------------------
@@ -1806,6 +1826,31 @@ class SettingsDialog(Gtk.Dialog):
             'perplexity': self.api_key_entries['perplexity'].get_text().strip(),
         }
 
+    def _on_save_api_keys_clicked(self, widget):
+        """
+        Persist the current API keys to the per-user API keys file.
+
+        This does not close the dialog; it simply writes the keys so they can
+        be loaded automatically on the next run of the application.
+        """
+        keys = self.get_api_keys()
+        save_api_keys(keys)
+
+        # Give the user a small confirmation message.
+        msg = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text="API Keys Saved",
+        )
+        msg.format_secondary_text(
+            "Your API keys have been saved and will be restored automatically "
+            "the next time you start ChatGTK."
+        )
+        msg.run()
+        msg.destroy()
+
 
 # ---------------------------------------------------------------------------
 # ToolsDialog – unchanged
@@ -1825,10 +1870,10 @@ class ToolsDialog(Gtk.Dialog):
 
         list_box = Gtk.ListBox()
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.set_margin_top(0)
+        list_box.set_margin_top(12)
         list_box.set_margin_bottom(0)
-        list_box.set_margin_start(0)
-        list_box.set_margin_end(0)
+        list_box.set_margin_start(12)
+        list_box.set_margin_end(12)
         box.pack_start(list_box, True, True, 0)
 
         # Enable/disable image tool for text models
