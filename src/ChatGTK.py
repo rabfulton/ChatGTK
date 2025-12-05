@@ -2,6 +2,7 @@
 import os
 os.environ['AUDIODEV'] = 'pulse'  # Force use of PulseAudio
 import gi
+import json
 import re
 import threading
 import os  # Import os to read/write environment variables and settings
@@ -93,6 +94,9 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Apply all settings as attributes
         apply_settings(self, loaded)
+        
+        # Initialize system prompts from settings (before conversation_history)
+        self._init_system_prompts_from_settings()
         
         # Initialize window
         self.set_default_size(self.window_width, self.window_height)
@@ -226,6 +230,13 @@ class OpenAIGTKClient(Gtk.Window):
             self.update_model_list(default_models, self.default_model)
 
         hbox_top.pack_start(self.combo_model, False, False, 0)
+
+        # System prompt selector (only visible when multiple prompts exist)
+        self.combo_system_prompt = Gtk.ComboBoxText()
+        # Connect signal first, then refresh (refresh blocks/unblocks the handler)
+        self.combo_system_prompt.connect("changed", self.on_system_prompt_changed)
+        self._refresh_system_prompt_combo()
+        hbox_top.pack_start(self.combo_system_prompt, False, False, 0)
 
         # Settings button
         btn_settings = Gtk.Button(label="Settings")
@@ -398,6 +409,110 @@ class OpenAIGTKClient(Gtk.Window):
             combo.set_active(0)
         finally:
             self._updating_model = False
+
+    # -----------------------------------------------------------------------
+    # System prompts management
+    # -----------------------------------------------------------------------
+
+    def _init_system_prompts_from_settings(self):
+        """
+        Initialize system prompts from settings.
+        
+        Parses SYSTEM_PROMPTS_JSON and sets up self.system_prompts (list of dicts)
+        and self.active_system_prompt_id. Also updates self.system_message to
+        the active prompt's content for backward compatibility.
+        """
+        prompts = []
+        raw = getattr(self, "system_prompts_json", "") or ""
+        if raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    for p in parsed:
+                        if isinstance(p, dict) and "id" in p and "name" in p and "content" in p:
+                            prompts.append(p)
+            except json.JSONDecodeError:
+                pass
+        
+        # Fallback: synthesize a single prompt from system_message
+        if not prompts:
+            prompts = [{
+                "id": "default",
+                "name": "Default",
+                "content": getattr(self, "system_message", "You are a helpful assistant.")
+            }]
+        
+        self.system_prompts = prompts
+        
+        # Determine active prompt ID
+        active_id = getattr(self, "active_system_prompt_id", "") or ""
+        valid_ids = {p["id"] for p in self.system_prompts}
+        if active_id not in valid_ids:
+            active_id = self.system_prompts[0]["id"] if self.system_prompts else ""
+        self.active_system_prompt_id = active_id
+        
+        # Update system_message to the active prompt's content
+        active_prompt = self._get_system_prompt_by_id(active_id)
+        if active_prompt:
+            self.system_message = active_prompt["content"]
+
+    def _get_system_prompt_by_id(self, prompt_id):
+        """Return the system prompt dict with the given ID, or None."""
+        for p in getattr(self, "system_prompts", []):
+            if p["id"] == prompt_id:
+                return p
+        return None
+
+    def _refresh_system_prompt_combo(self):
+        """
+        Refresh the system prompt combo box from self.system_prompts.
+        
+        Shows the combo only when there is more than one prompt.
+        """
+        # Block signal to avoid triggering on_system_prompt_changed during refresh
+        self.combo_system_prompt.handler_block_by_func(self.on_system_prompt_changed)
+        try:
+            self.combo_system_prompt.remove_all()
+            for prompt in getattr(self, "system_prompts", []):
+                self.combo_system_prompt.append(prompt["id"], prompt["name"])
+            
+            # Set active to the current active_system_prompt_id
+            active_id = getattr(self, "active_system_prompt_id", "")
+            if active_id:
+                self.combo_system_prompt.set_active_id(active_id)
+            elif self.system_prompts:
+                self.combo_system_prompt.set_active(0)
+            
+            # Only show if multiple prompts
+            if len(getattr(self, "system_prompts", [])) > 1:
+                self.combo_system_prompt.set_visible(True)
+                self.combo_system_prompt.set_no_show_all(False)
+            else:
+                self.combo_system_prompt.set_visible(False)
+                self.combo_system_prompt.set_no_show_all(True)
+        finally:
+            self.combo_system_prompt.handler_unblock_by_func(self.on_system_prompt_changed)
+
+    def on_system_prompt_changed(self, combo):
+        """Handle system prompt selection changes."""
+        new_id = combo.get_active_id()
+        if not new_id or new_id == getattr(self, "active_system_prompt_id", ""):
+            return
+        
+        prompt = self._get_system_prompt_by_id(new_id)
+        if not prompt:
+            return
+        
+        # Update in-memory state
+        self.active_system_prompt_id = new_id
+        self.system_message = prompt["content"]
+        
+        # Update the system message in the current conversation history
+        if self.conversation_history and self.conversation_history[0].get("role") == "system":
+            self.conversation_history[0]["content"] = prompt["content"]
+        
+        # Persist the change
+        save_settings(convert_settings_for_save(get_object_settings(self)))
 
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
@@ -1093,6 +1208,14 @@ class OpenAIGTKClient(Gtk.Window):
             new_settings = dialog.get_settings()
             apply_settings(self, new_settings)
             save_settings(convert_settings_for_save(get_object_settings(self)))
+
+            # Re-initialize system prompts from updated settings and refresh the combo
+            self._init_system_prompts_from_settings()
+            self._refresh_system_prompt_combo()
+            
+            # Update the system message in the current conversation if it exists
+            if self.conversation_history and self.conversation_history[0].get("role") == "system":
+                self.conversation_history[0]["content"] = self.system_message
 
             # Keep the ToolManager in sync with any updated tool options.
             self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
@@ -2168,6 +2291,23 @@ class OpenAIGTKClient(Gtk.Window):
                     if model_store[i][0] == saved_model:
                         self.combo_model.set_active(i)
                         break
+            
+            # Sync system prompt selector with the loaded chat's system message
+            if history and history[0].get("role") == "system":
+                loaded_system_content = history[0].get("content", "")
+                self.system_message = loaded_system_content
+                # Try to find a matching prompt by content
+                matched_id = None
+                for p in getattr(self, "system_prompts", []):
+                    if p["content"] == loaded_system_content:
+                        matched_id = p["id"]
+                        break
+                if matched_id:
+                    self.active_system_prompt_id = matched_id
+                    # Update combo without triggering the change handler
+                    self.combo_system_prompt.handler_block_by_func(self.on_system_prompt_changed)
+                    self.combo_system_prompt.set_active_id(matched_id)
+                    self.combo_system_prompt.handler_unblock_by_func(self.on_system_prompt_changed)
             
             # Clear and reload chat display
             for child in self.conversation_box.get_children():

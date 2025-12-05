@@ -934,16 +934,80 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     # System Prompts page
     # -----------------------------------------------------------------------
+    def _parse_system_prompts_json(self):
+        """
+        Parse the system_prompts_json attribute into a list of prompt dicts.
+        Falls back to a single 'default' prompt built from system_message if
+        the JSON is empty or invalid.
+        """
+        prompts = []
+        raw = getattr(self, "system_prompts_json", "") or ""
+        if raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    for p in parsed:
+                        if isinstance(p, dict) and "id" in p and "name" in p and "content" in p:
+                            prompts.append(p)
+            except json.JSONDecodeError:
+                pass
+        # Fallback: synthesize a single prompt from system_message
+        if not prompts:
+            prompts = [{
+                "id": "default",
+                "name": "Default",
+                "content": getattr(self, "system_message", "You are a helpful assistant.")
+            }]
+        return prompts
+
     def _build_system_prompts_page(self):
+        """Build a page for managing multiple named system prompts."""
+        # Parse prompts from settings
+        self._system_prompts_list = self._parse_system_prompts_json()
+        
+        # Determine active prompt ID
+        active_id = getattr(self, "active_system_prompt_id", "") or ""
+        # Validate that active_id exists in the list
+        valid_ids = {p["id"] for p in self._system_prompts_list}
+        if active_id not in valid_ids:
+            active_id = self._system_prompts_list[0]["id"] if self._system_prompts_list else ""
+        self._active_prompt_id = active_id
+
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         vbox.set_margin_top(12)
-        vbox.set_margin_bottom(12)
+        vbox.set_margin_bottom(0)
         vbox.set_margin_start(12)
         vbox.set_margin_end(12)
 
-        label = Gtk.Label(label="System Prompt", xalign=0)
-        vbox.pack_start(label, False, False, 0)
+        # --- Header row: Prompt selector + Add/Rename/Delete buttons ---
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        
+        label = Gtk.Label(label="Prompt:", xalign=0)
+        header_box.pack_start(label, False, False, 0)
+        
+        self._prompt_combo = Gtk.ComboBoxText()
+        self._populate_prompt_combo()
+        self._prompt_combo.connect("changed", self._on_prompt_combo_changed)
+        header_box.pack_start(self._prompt_combo, False, False, 0)
+        
+        # Spacer
+        header_box.pack_start(Gtk.Box(), True, True, 0)
+        
+        btn_add = Gtk.Button(label="Add")
+        btn_add.connect("clicked", self._on_add_prompt_clicked)
+        header_box.pack_start(btn_add, False, False, 0)
+        
+        btn_rename = Gtk.Button(label="Rename")
+        btn_rename.connect("clicked", self._on_rename_prompt_clicked)
+        header_box.pack_start(btn_rename, False, False, 0)
+        
+        self._btn_delete_prompt = Gtk.Button(label="Delete")
+        self._btn_delete_prompt.connect("clicked", self._on_delete_prompt_clicked)
+        header_box.pack_start(self._btn_delete_prompt, False, False, 0)
+        
+        vbox.pack_start(header_box, False, False, 0)
 
+        # --- Text editor for the selected prompt ---
         frame = Gtk.Frame()
         frame.set_shadow_type(Gtk.ShadowType.IN)
 
@@ -953,14 +1017,26 @@ class SettingsDialog(Gtk.Dialog):
 
         self.entry_system_message = Gtk.TextView()
         self.entry_system_message.set_wrap_mode(Gtk.WrapMode.WORD)
-        self.entry_system_message.set_margin_start(6)
-        self.entry_system_message.set_margin_end(6)
-        self.entry_system_message.set_margin_top(6)
-        self.entry_system_message.set_margin_bottom(6)
+
+        # Set outer margins on the TextView widget itself
+        self.entry_system_message.set_margin_start(0)
+        self.entry_system_message.set_margin_end(0)
+        self.entry_system_message.set_margin_top(0)
+        self.entry_system_message.set_margin_bottom(0)
         self.entry_system_message.set_editable(True)
         self.entry_system_message.set_cursor_visible(True)
         self.entry_system_message.set_can_focus(True)
         self.entry_system_message.set_accepts_tab(True)
+
+        # The previous code tried to set inner padding on the Gtk.TextView's text area using CSS
+        # selector "textview text" -- this does not work in Gtk3 (and also not as expected in Gtk4).
+        # Native CSS padding for the text area isn't supported in Gtk3; use set_left_margin()/set_right_margin()/set_top_margin()/set_bottom_margin() on the buffer.
+
+        # Set padding by using Gtk.TextView's own margin APIs for the buffer.
+        self.entry_system_message.set_left_margin(12)
+        self.entry_system_message.set_right_margin(12)
+        self.entry_system_message.set_top_margin(12)
+        self.entry_system_message.set_bottom_margin(12)
 
         text_scroll.set_can_focus(False)
         frame.set_can_focus(False)
@@ -974,14 +1050,188 @@ class SettingsDialog(Gtk.Dialog):
 
         self.entry_system_message.connect("focus-in-event", on_focus_in)
         self.entry_system_message.connect("button-press-event", on_button_press)
+        
+        # Connect buffer changed to save content back to the prompt list
+        self.entry_system_message.get_buffer().connect("changed", self._on_prompt_content_changed)
 
-        self.entry_system_message.get_buffer().set_text(self.system_message)
+        # Load active prompt content
+        self._load_prompt_content()
 
         text_scroll.add(self.entry_system_message)
         frame.add(text_scroll)
         vbox.pack_start(frame, True, True, 0)
+        
+        # Update delete button sensitivity
+        self._update_delete_button_sensitivity()
 
         self.stack.add_named(vbox, "System Prompts")
+
+    def _populate_prompt_combo(self):
+        """Populate the prompt combo box from _system_prompts_list."""
+        self._prompt_combo.remove_all()
+        for prompt in self._system_prompts_list:
+            self._prompt_combo.append(prompt["id"], prompt["name"])
+        # Set active
+        if self._active_prompt_id:
+            self._prompt_combo.set_active_id(self._active_prompt_id)
+        elif self._system_prompts_list:
+            self._prompt_combo.set_active(0)
+
+    def _load_prompt_content(self):
+        """Load the content of the active prompt into the TextView."""
+        prompt = self._get_prompt_by_id(self._active_prompt_id)
+        content = prompt["content"] if prompt else ""
+        buf = self.entry_system_message.get_buffer()
+        # Block signal temporarily to avoid feedback loop
+        buf.handler_block_by_func(self._on_prompt_content_changed)
+        buf.set_text(content)
+        buf.handler_unblock_by_func(self._on_prompt_content_changed)
+
+    def _get_prompt_by_id(self, prompt_id):
+        """Return the prompt dict with the given ID, or None."""
+        for p in self._system_prompts_list:
+            if p["id"] == prompt_id:
+                return p
+        return None
+
+    def _on_prompt_combo_changed(self, combo):
+        """Handle selection change in the prompt combo box."""
+        new_id = combo.get_active_id()
+        if new_id and new_id != self._active_prompt_id:
+            self._active_prompt_id = new_id
+            self._load_prompt_content()
+            self._update_delete_button_sensitivity()
+
+    def _on_prompt_content_changed(self, buffer):
+        """Update the prompt list when the user edits the content."""
+        prompt = self._get_prompt_by_id(self._active_prompt_id)
+        if prompt:
+            start = buffer.get_start_iter()
+            end = buffer.get_end_iter()
+            prompt["content"] = buffer.get_text(start, end, True)
+
+    def _update_delete_button_sensitivity(self):
+        """Disable delete button if only one prompt remains."""
+        self._btn_delete_prompt.set_sensitive(len(self._system_prompts_list) > 1)
+
+    def _on_add_prompt_clicked(self, button):
+        """Add a new prompt with a user-provided name."""
+        dialog = Gtk.Dialog(
+            title="Add System Prompt",
+            transient_for=self,
+            flags=Gtk.DialogFlags.MODAL,
+        )
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Add", Gtk.ResponseType.OK)
+        dialog.set_default_size(300, 100)
+        
+        box = dialog.get_content_area()
+        box.set_spacing(6)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Name:")
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("New Prompt")
+        entry.set_activates_default(True)
+        hbox.pack_start(label, False, False, 0)
+        hbox.pack_start(entry, True, True, 0)
+        box.pack_start(hbox, False, False, 0)
+        
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.show_all()
+        
+        response = dialog.run()
+        name = entry.get_text().strip()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK and name:
+            # Generate a unique ID
+            import time
+            new_id = f"prompt_{int(time.time() * 1000)}"
+            new_prompt = {
+                "id": new_id,
+                "name": name,
+                "content": "You are a helpful assistant."
+            }
+            self._system_prompts_list.append(new_prompt)
+            self._active_prompt_id = new_id
+            self._populate_prompt_combo()
+            self._load_prompt_content()
+            self._update_delete_button_sensitivity()
+
+    def _on_rename_prompt_clicked(self, button):
+        """Rename the currently selected prompt."""
+        prompt = self._get_prompt_by_id(self._active_prompt_id)
+        if not prompt:
+            return
+        
+        dialog = Gtk.Dialog(
+            title="Rename System Prompt",
+            transient_for=self,
+            flags=Gtk.DialogFlags.MODAL,
+        )
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Rename", Gtk.ResponseType.OK)
+        dialog.set_default_size(300, 100)
+        
+        box = dialog.get_content_area()
+        box.set_spacing(6)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Name:")
+        entry = Gtk.Entry()
+        entry.set_text(prompt["name"])
+        entry.set_activates_default(True)
+        hbox.pack_start(label, False, False, 0)
+        hbox.pack_start(entry, True, True, 0)
+        box.pack_start(hbox, False, False, 0)
+        
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.show_all()
+        
+        response = dialog.run()
+        new_name = entry.get_text().strip()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK and new_name:
+            prompt["name"] = new_name
+            self._populate_prompt_combo()
+
+    def _on_delete_prompt_clicked(self, button):
+        """Delete the currently selected prompt (if more than one exists)."""
+        if len(self._system_prompts_list) <= 1:
+            return
+        
+        prompt = self._get_prompt_by_id(self._active_prompt_id)
+        if not prompt:
+            return
+        
+        # Confirm deletion
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=Gtk.DialogFlags.MODAL,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Delete prompt \"{prompt['name']}\"?"
+        )
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.YES:
+            self._system_prompts_list.remove(prompt)
+            # Select the first remaining prompt
+            self._active_prompt_id = self._system_prompts_list[0]["id"] if self._system_prompts_list else ""
+            self._populate_prompt_combo()
+            self._load_prompt_content()
+            self._update_delete_button_sensitivity()
 
     # -----------------------------------------------------------------------
     # Lazy builder for Model Whitelist page
@@ -1453,8 +1703,12 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     def get_settings(self):
         """Return updated settings from dialog."""
-        buffer = self.entry_system_message.get_buffer()
-        system_message = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
+        # Get active prompt content for backward compatibility (system_message)
+        active_prompt = self._get_prompt_by_id(self._active_prompt_id)
+        system_message = active_prompt["content"] if active_prompt else ""
+        
+        # Serialize the full prompts list to JSON
+        system_prompts_json = json.dumps(self._system_prompts_list)
 
         # Build whitelist strings from checkboxes, but only if the Model
         # Whitelist page was actually built/visited. Otherwise, preserve the
@@ -1476,6 +1730,8 @@ class SettingsDialog(Gtk.Dialog):
             'ai_color': self.btn_ai_color.get_rgba().to_string(),
             'default_model': self.entry_default_model.get_text(),
             'system_message': system_message,
+            'system_prompts_json': system_prompts_json,
+            'active_system_prompt_id': self._active_prompt_id,
             'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
             'tts_voice': self.combo_tts.get_active_text(),

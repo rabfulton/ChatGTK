@@ -42,6 +42,14 @@ SETTINGS_CONFIG = {
     'SETTINGS_DIALOG_WIDTH': {'type': int, 'default': 800},
     'SETTINGS_DIALOG_HEIGHT': {'type': int, 'default': 600},
     'SYSTEM_MESSAGE': {'type': str, 'default': 'You are a helpful assistant.'},
+    # JSON-encoded list of named system prompts. Each entry is a dict with keys:
+    # "id" (unique identifier), "name" (display name), "content" (prompt text).
+    # Example: [{"id":"default","name":"Default","content":"You are a helpful assistant."}]
+    # If empty or invalid, a single prompt is synthesized from SYSTEM_MESSAGE.
+    'SYSTEM_PROMPTS_JSON': {'type': str, 'default': ''},
+    # The ID of the currently active system prompt from SYSTEM_PROMPTS_JSON.
+    # If empty or not found, the first prompt in the list is used.
+    'ACTIVE_SYSTEM_PROMPT_ID': {'type': str, 'default': ''},
     'TEMPERAMENT': {'type': float, 'default': 1.0},
     'MICROPHONE': {'type': str, 'default': 'default'},
     'TTS_VOICE': {'type': str, 'default': 'alloy'},
