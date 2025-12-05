@@ -1,10 +1,43 @@
 import os
+from pathlib import Path
 
-# Base directory of the project
+# Base directory of the project source files (location of ChatGTK.py, icon.png, etc.)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+def _default_data_root() -> str:
+    """
+    Determine a writable data root for ChatGTK.
+
+    Priority:
+      1. CHATGTK_DATA_DIR environment variable (explicit override)
+      2. Legacy layout: parent of BASE_DIR if it already contains settings/history
+      3. XDG data directory: $XDG_DATA_HOME/chatgtk or ~/.local/share/chatgtk
+    """
+    # 1) Explicit override for packagers/advanced users
+    override = os.environ.get("CHATGTK_DATA_DIR")
+    if override:
+        return override
+
+    # 2) Legacy behavior: use project root if it already has data files
+    legacy_root = os.path.dirname(BASE_DIR)
+    if (
+        os.path.exists(os.path.join(legacy_root, "settings.cfg"))
+        or os.path.isdir(os.path.join(legacy_root, "history"))
+        or os.path.exists(os.path.join(legacy_root, "model_cache.json"))
+    ):
+        return legacy_root
+
+    # 3) Default to XDG data directory
+    home = str(Path.home())
+    xdg_data_home = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local", "share"))
+    return os.path.join(xdg_data_home, "chatgtk")
+
+
+# Writable application data root (per-user by default)
+PARENT_DIR = _default_data_root()
+
 # Paths
-PARENT_DIR = os.path.dirname(BASE_DIR)
 SETTINGS_FILE = os.path.join(PARENT_DIR, "settings.cfg")
 HISTORY_DIR = os.path.join(PARENT_DIR, "history")
 MODEL_CACHE_FILE = os.path.join(PARENT_DIR, "model_cache.json")
