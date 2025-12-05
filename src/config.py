@@ -98,4 +98,8 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the read_aloud tool to text models.
     # When false, models will not be told about the tool and cannot call it.
     'READ_ALOUD_TOOL_ENABLED': {'type': bool, 'default': False},
+    # When enabled, closing or minimizing the main window can hide it to the
+    # system tray instead of keeping it in the taskbar. A tray icon is shown
+    # which can be used to restore or quit the application.
+    'MINIMIZE_TO_TRAY_ENABLED': {'type': bool, 'default': False},
 }

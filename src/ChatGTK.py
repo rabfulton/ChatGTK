@@ -75,7 +75,11 @@ gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GLib, Pango, GtkSource
+from gi.repository import Gtk, GLib, Pango, GtkSource, Gdk
+
+# Note: System tray APIs are effectively deprecated across GTK3, but
+# Gtk.StatusIcon remains the most practical option for cross-desktop
+# “minimize to tray” behavior with a left-click activate action.
 
 class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
@@ -100,6 +104,12 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Initialize window
         self.set_default_size(self.window_width, self.window_height)
+
+        # Tray icon / indicator (created lazily when needed)
+        self.tray_icon = None
+        self.tray_menu = None
+        # Flag to prevent minimize events during restoration
+        self._restoring_from_tray = False
 
         # Initialize chat state
         self.current_chat_id = None  # None means this is a new, unsaved chat
@@ -325,9 +335,144 @@ class OpenAIGTKClient(Gtk.Window):
         self.refresh_history_list()
         self.apply_sidebar_styles()
 
-        # Connect window size handlers
+        # Connect window event handlers
         self.connect("configure-event", self.on_configure_event)
+        self.connect("delete-event", self.on_delete_event)
+        self.connect("window-state-event", self.on_window_state_event)
         self.connect("destroy", self.on_destroy)
+
+    def _build_tray_menu(self):
+        """
+        Build (or rebuild) the tray context menu used by both AppIndicator and
+        Gtk.StatusIcon backends.
+        """
+        menu = Gtk.Menu()
+
+        item_show = Gtk.MenuItem(label="Show ChatGTK")
+        item_show.connect("activate", lambda *_: self.restore_from_tray())
+        menu.append(item_show)
+
+        item_quit = Gtk.MenuItem(label="Quit")
+        item_quit.connect("activate", self.on_tray_quit)
+        menu.append(item_quit)
+
+        menu.show_all()
+        self.tray_menu = menu
+        return menu
+
+    def _ensure_tray_icon(self):
+        """
+        Lazily create the system tray icon if minimize-to-tray is enabled.
+
+        Uses Gtk.StatusIcon, which is deprecated at the toolkit level but still
+        the most practical way to provide a tray icon with a working left-click
+        activate action in GTK3 apps across many Linux desktops.
+        """
+        if self.tray_icon is not None:
+            return
+
+        try:
+            icon_path = Path(BASE_DIR) / "icon.png"
+            icon_name_or_path = str(icon_path) if icon_path.exists() else "applications-system"
+
+            status_icon = Gtk.StatusIcon()
+            if icon_path.exists():
+                status_icon.set_from_file(icon_name_or_path)
+            else:
+                status_icon.set_from_icon_name(icon_name_or_path)
+
+            status_icon.set_title("ChatGTK")
+            status_icon.set_tooltip_text("ChatGTK")
+            status_icon.connect("activate", self.on_tray_activate)
+            status_icon.connect("popup-menu", self.on_tray_popup_menu)
+            self.tray_icon = status_icon
+        except Exception as e:
+            print(f"Could not create system tray icon: {e}")
+            self.tray_icon = None
+
+    def on_delete_event(self, widget, event):
+        """
+        Intercept window-close events. When minimize-to-tray is enabled,
+        hide the window and keep the app running in the tray.
+        """
+        if bool(getattr(self, "minimize_to_tray_enabled", False)):
+            self._ensure_tray_icon()
+            if self.tray_icon is not None:
+                # Hide the window and remove it from the taskbar
+                self.hide()
+                self.set_skip_taskbar_hint(True)
+                return True  # prevent destroy / main_quit
+        return False  # default behavior (destroy)
+
+    def on_window_state_event(self, widget, event):
+        """
+        When minimize-to-tray is enabled, intercept minimize and hide the window
+        immediately to prevent it from appearing in the taskbar.
+        """
+        if not bool(getattr(self, "minimize_to_tray_enabled", False)):
+            return False
+
+        # If we're currently restoring from tray, ignore minimize events
+        if self._restoring_from_tray:
+            return True
+
+        changed = event.changed_mask
+        new_state = event.new_window_state
+
+        if changed & Gdk.WindowState.ICONIFIED and (new_state & Gdk.WindowState.ICONIFIED):
+            self._ensure_tray_icon()
+            if self.tray_icon is not None:
+                # Immediately hide and skip taskbar - don't let WM iconify first
+                self.hide()
+                self.set_skip_taskbar_hint(True)
+                # Prevent the window manager from processing the iconify event
+                return True
+
+        return False
+
+    def on_tray_activate(self, icon):
+        """
+        Primary tray icon activation (usually left-click): restore window.
+        """
+        self.restore_from_tray()
+
+    def on_tray_popup_menu(self, icon, button, time):
+        """
+        Right-click on tray icon: show a small menu with Show/Hide and Quit.
+        """
+        menu = self.tray_menu or self._build_tray_menu()
+        menu.popup(None, None, Gtk.StatusIcon.position_menu, icon, button, time)
+
+    def restore_from_tray(self):
+        """
+        Common logic to restore the window from the system tray.
+        """
+        # Set flag to prevent minimize events during restoration
+        self._restoring_from_tray = True
+
+        try:
+            # Remove taskbar skip hint so window appears in taskbar
+            self.set_skip_taskbar_hint(False)
+            # Show the window and bring it to front
+            self.show_all()
+            self.present()
+        finally:
+            # Clear the flag after a short delay to allow the window to stabilize
+            def clear_flag():
+                self._restoring_from_tray = False
+                return False
+            GLib.timeout_add(500, clear_flag)  # 500ms delay
+
+    def on_tray_quit(self, *args):
+        """
+        Quit the application from the tray icon menu.
+        """
+        if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
+            try:
+                self.tray_icon.set_visible(False)
+            except Exception:
+                pass
+        self.destroy()
 
     def on_destroy(self, widget):
         """Save settings and cleanup before closing."""
@@ -340,6 +485,12 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
         to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
         save_settings(convert_settings_for_save(to_save))
+        # Hide tray icon on exit (only for StatusIcon backend)
+        if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
+            try:
+                self.tray_icon.set_visible(False)
+            except Exception:
+                pass
         cleanup_temp_files()
         Gtk.main_quit()
 

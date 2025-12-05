@@ -1,8 +1,6 @@
-# ChatGTK - OpenAI / Gemini / Grok / Claude Chat Client
+# ChatGTK - A Linux GTK Chat Client
 
 A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, and Anthropic Claude APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
-
-Disclaimer: Written almost entirely by AI, I accept no responsibility for what happens to your computer if you choose to run this code!
 
 ## Installation
 
@@ -11,7 +9,9 @@ git clone https://github.com/rabfulton/ChatGTK
 cd ChatGTK
 pip install -r requirements.txt
 ```
-Or use your package manager to install the dependencies. The application when launched from the terminal will complain about which dependencies are missing.
+Or use your package manager to install the dependencies. 
+The application when launched from the terminal will complain about which dependencies are missing. 
+You otionally require `texlive` and `dvipng` if you want mathematics to render nicely and the `beets` package for the music control functionality.
 
 ## Usage
 
@@ -22,7 +22,7 @@ The application looks for the following environment variables:
 - `GROK_API_KEY` (optional, used for xAI Grok models)
 - `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional, used for Anthropic Claude models via the OpenAI SDK compatibility layer)
 
-You can also manage API keys from within the app via the **API Keys** button in the top bar; any keys set in the environment will be picked up automatically on launch.
+You will need at least one API key for the application to function. You can also manage API keys from within the app via the **API Keys** button in the top bar; any keys set in the environment will be picked up automatically on launch.
 
 ### Getting API keys
 
@@ -77,6 +77,7 @@ Alternatively you can run the install script to add a desktop entry and set up t
 - Syntax highlighting for code blocks
 - LaTeX formula rendering
 - Customizable settings
+- Support for system prompt switching
 - Conversation history management
 - Image generation using both OpenAI's and Googles models.
 - Export chats to PDF by right-clicking on a chat and selecting "Export Chat"

@@ -506,6 +506,20 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.scale_temp, False, True, 0)
         list_box.add(row)
 
+        # Minimize to tray
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Minimize to system tray", xalign=0)
+        label.set_hexpand(True)
+        self.switch_minimize_to_tray = Gtk.Switch()
+        current_minimize_to_tray = bool(getattr(self, "minimize_to_tray_enabled", False))
+        self.switch_minimize_to_tray.set_active(current_minimize_to_tray)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_minimize_to_tray, False, True, 0)
+        list_box.add(row)
+
         self.stack.add_named(scroll, "General")
 
     # -----------------------------------------------------------------------
@@ -1760,6 +1774,8 @@ class SettingsDialog(Gtk.Dialog):
             'read_aloud_audio_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
             # Conversation buffer length (string: "ALL", "0", "10", etc.)
             'conversation_buffer_length': (self.entry_conv_buffer.get_text() or "ALL").strip(),
+            # Window / tray behavior
+            'minimize_to_tray_enabled': self.switch_minimize_to_tray.get_active(),
         }
 
     def get_api_keys(self):
