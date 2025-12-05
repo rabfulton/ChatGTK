@@ -2,7 +2,31 @@
 
 A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, and Anthropic Claude APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
 
-## Installation
+## Features
+
+- Clean GTK3 interface
+- Voice to text input using Whisper API
+- Syntax highlighting for code blocks
+- LaTeX formula rendering
+- Customizable settings
+- Support for system prompt switching
+- Conversation history management
+- Image generation using both OpenAI's and Googles models.
+- Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
+- Text-to-Speech output using OpenAI's TTS and TTS-HD and audio-preview models
+- Real-time voice conversation support using gpt-4o-realtime-preview model
+- Reasoning support for OpenAI's o3 models
+- Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS.
+- Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, and Anthropic Claude via separate API keys.
+- Web search grounding for OpenAI and Gemini models to provide up-to-date, cited answers.
+
+### Installation from AUR
+
+If you are on Arch Linux or a derivative, you can install ChatGTK from the AUR:
+
+AUR package: [chatgtk_client-git](https://aur.archlinux.org/packages/chatgtk_client-git)
+
+### Manual Installation
 
 ```bash
 git clone https://github.com/rabfulton/ChatGTK
@@ -17,12 +41,44 @@ You otionally require `texlive` and `dvipng` if you want mathematics to render n
 
 The application looks for the following environment variables:
 
-- `OPENAI_API_KEY` (required for OpenAI models)
-- `GEMINI_API_KEY` (optional, used for Google Gemini models)
-- `GROK_API_KEY` (optional, used for xAI Grok models)
-- `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional, used for Anthropic Claude models via the OpenAI SDK compatibility layer)
+- `OPENAI_API_KEY` (required for some audio functions)
+- `GEMINI_API_KEY` (optional)
+- `GROK_API_KEY` (optional)
+- `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional)
 
-You will need at least one API key for the application to function. You can also manage API keys from within the app via the **API Keys** button in the top bar; any keys set in the environment will be picked up automatically on launch.
+You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page.
+
+## Screenshots
+
+*Syntax highlighting*
+![Code Feature](screenshots/syntax_highlight.jpg)
+
+*Support for Equations*
+![Formulae Feature](screenshots/formula.jpg)
+
+*Image Generation*
+![Image Generation](screenshots/images.jpg)
+
+## Python Packages
+- openai>=1.0.0
+- PyGObject>=3.42.0
+- sounddevice>=0.4.6
+- soundfile>=0.12.1
+- numpy>=1.24.0
+- pathlib>=1.0.1
+- beets>=1.6.0 (optional, for music control tool)
+
+## System Dependencies
+- python3
+- gtk-3.0
+- gtksourceview4
+- pulseaudio
+- texlive (for LaTeX support)
+- dvipng (for LaTeX rendering)
+- Optional, for music control tool:
+  - A music player such as `vlc` (configurable in Settings)
+  - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
+  - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
 
 ### Getting API keys
 
@@ -70,23 +126,6 @@ Alternatively you can run the install script to add a desktop entry and set up t
 ```bash
 ./install.sh
 ```
-## Features
-
-- Clean GTK3 interface
-- Voice to text input using Whisper API
-- Syntax highlighting for code blocks
-- LaTeX formula rendering
-- Customizable settings
-- Support for system prompt switching
-- Conversation history management
-- Image generation using both OpenAI's and Googles models.
-- Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
-- Text-to-Speech output using OpenAI's TTS and TTS-HD and audio-preview models
-- Real-time voice conversation support using gpt-4o-realtime-preview model
-- Reasoning support for OpenAI's o3 models
-- Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS.
-- Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, and Anthropic Claude via separate API keys.
-- Web search grounding for OpenAI and Gemini models to provide up-to-date, cited answers.
 
 ### Tools support (images, music, web search & read aloud)
 
@@ -124,38 +163,6 @@ Alternatively you can run the install script to add a desktop entry and set up t
   - For **OpenAI models**, this uses the built-in `web_search` tool described in the OpenAI tools docs ([OpenAI web search guide](https://platform.openai.com/docs/guides/tools/web-search?api-mode=responses)).
   - For **Gemini models**, this uses Grounding with Google Search via the `google_search` tool as documented in the Gemini API ([Gemini Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search)).
   - Only models that support these tools will be configured to use them; when enabled, the assistant can automatically call web search when it needs fresh, real‑world information and return grounded answers with citations.
-
-## Screenshots
-
-*Syntax highlighting*
-![Code Feature](screenshots/syntax_highlight.jpg)
-
-*Support for Equations*
-![Formulae Feature](screenshots/formula.jpg)
-
-*Image Generation*
-![Image Generation](screenshots/images.jpg)
-
-## Python Packages
-- openai>=1.0.0
-- PyGObject>=3.42.0
-- sounddevice>=0.4.6
-- soundfile>=0.12.1
-- numpy>=1.24.0
-- pathlib>=1.0.1
-- beets>=1.6.0 (optional, for music control tool)
-
-## System Dependencies
-- python3
-- gtk-3.0
-- gtksourceview4
-- pulseaudio
-- texlive (for LaTeX support)
-- dvipng (for LaTeX rendering)
-- Optional, for music control tool:
-  - A music player such as `vlc` (configurable in Settings)
-  - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
-  - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
 
 ## Technical Notes
 
