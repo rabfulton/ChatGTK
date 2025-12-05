@@ -7,6 +7,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
 SETTINGS_FILE = os.path.join(PARENT_DIR, "settings.cfg")
 HISTORY_DIR = os.path.join(PARENT_DIR, "history")
+MODEL_CACHE_FILE = os.path.join(PARENT_DIR, "model_cache.json")
 CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
 
 # Define settings configuration with their types and defaults
@@ -38,10 +39,10 @@ SETTINGS_CONFIG = {
     'MUSIC_LIBRARY_DB': {'type': str, 'default': ''},
     'WINDOW_WIDTH': {'type': int, 'default': 800},
     'WINDOW_HEIGHT': {'type': int, 'default': 600},
-    'SETTINGS_DIALOG_WIDTH': {'type': int, 'default': 950},
-    'SETTINGS_DIALOG_HEIGHT': {'type': int, 'default': 800},
+    'SETTINGS_DIALOG_WIDTH': {'type': int, 'default': 800},
+    'SETTINGS_DIALOG_HEIGHT': {'type': int, 'default': 600},
     'SYSTEM_MESSAGE': {'type': str, 'default': 'You are a helpful assistant.'},
-    'TEMPERAMENT': {'type': float, 'default': 0.7},
+    'TEMPERAMENT': {'type': float, 'default': 1.0},
     'MICROPHONE': {'type': str, 'default': 'default'},
     'TTS_VOICE': {'type': str, 'default': 'alloy'},
     'TTS_HD': {'type': bool, 'default': False},

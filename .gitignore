@@ -1,6 +1,7 @@
 settings.cfg
 todo.txt
 music_library.db
+model_cache.json
 ChatGTK.code-workspace
 Backups/
 temp/

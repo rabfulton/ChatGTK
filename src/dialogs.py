@@ -7,6 +7,7 @@ This module contains:
 - APIKeyDialog: For managing API keys for different providers (legacy, kept for compatibility).
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -20,8 +21,43 @@ gi.require_version("GtkSource", "4")
 from gi.repository import Gtk, GtkSource
 import sounddevice as sd
 
-from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG
+from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
 from utils import load_settings, apply_settings, parse_color_to_rgba, save_settings
+
+
+# ---------------------------------------------------------------------------
+# Model cache helpers – persist available models per provider to disk
+# ---------------------------------------------------------------------------
+
+def load_model_cache() -> dict:
+    """
+    Load the model cache from disk.
+    Returns a dict keyed by provider ID (e.g. 'openai', 'gemini', 'grok', 'claude'),
+    each value being a list of model ID strings.
+    Returns an empty dict if the cache file does not exist or is invalid.
+    """
+    if not os.path.exists(MODEL_CACHE_FILE):
+        return {}
+    try:
+        with open(MODEL_CACHE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception as e:
+        print(f"Warning: could not load model cache: {e}")
+    return {}
+
+
+def save_model_cache(cache: dict) -> None:
+    """
+    Save the model cache to disk.
+    `cache` should be a dict keyed by provider ID, each value a list of model IDs.
+    """
+    try:
+        with open(MODEL_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        print(f"Warning: could not save model cache: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -954,9 +990,10 @@ class SettingsDialog(Gtk.Dialog):
         """
         Ensure the Model Whitelist page is built.
 
-        We delay constructing this page until it is first selected in order to
-        avoid performing potentially slow provider.get_available_models()
-        network calls during dialog initialization.
+        We delay constructing this page until it is first selected. If the
+        on-disk model cache already contains model lists, no network calls are
+        made and the page loads quickly. Otherwise, provider APIs are queried
+        and results cached to disk for future sessions.
         """
         if not getattr(self, "_model_whitelist_built", False):
             self._build_model_whitelist_page()
@@ -967,37 +1004,104 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     # Model Whitelist page
     # -----------------------------------------------------------------------
+
+    # Provider info used by the Model Whitelist page
+    # (display_name, provider_key, whitelist_attr, env_key)
+    _PROVIDER_INFO = [
+        ("OpenAI", "openai", "openai_model_whitelist", "OPENAI_API_KEY"),
+        ("Gemini", "gemini", "gemini_model_whitelist", "GEMINI_API_KEY"),
+        ("Grok", "grok", "grok_model_whitelist", "GROK_API_KEY"),
+        ("Claude", "claude", "claude_model_whitelist", "CLAUDE_API_KEY"),
+    ]
+
     def _build_model_whitelist_page(self):
+        # Main container for the page
+        page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        page_box.set_margin_top(12)
+        page_box.set_margin_bottom(12)
+        page_box.set_margin_start(12)
+        page_box.set_margin_end(12)
+
+        # --- Header row: Provider filter dropdown + Refresh button ---
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_box.set_margin_bottom(6)
+
+        # Provider filter combo box
+        filter_label = Gtk.Label(label="Provider:")
+        header_box.pack_start(filter_label, False, False, 0)
+
+        self._provider_filter_combo = Gtk.ComboBoxText()
+        self._provider_filter_combo.append("all", "All Providers")
+        for display_name, provider_key, _, _ in self._PROVIDER_INFO:
+            self._provider_filter_combo.append(provider_key, display_name)
+        self._provider_filter_combo.set_active_id("all")
+        self._provider_filter_combo.connect("changed", self._on_provider_filter_changed)
+        header_box.pack_start(self._provider_filter_combo, False, False, 0)
+
+        # Spacer
+        header_box.pack_start(Gtk.Box(), True, True, 0)
+
+        # Refresh button
+        self._refresh_models_btn = Gtk.Button(label="Refresh Models")
+        self._refresh_models_btn.connect("clicked", self._on_refresh_models_clicked)
+        header_box.pack_start(self._refresh_models_btn, False, False, 0)
+
+        page_box.pack_start(header_box, False, False, 0)
+
+        # --- Scrolled area for provider model checkboxes ---
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
 
-        outer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        outer_box.set_margin_top(12)
-        outer_box.set_margin_bottom(12)
-        outer_box.set_margin_start(12)
-        outer_box.set_margin_end(12)
-        scroll.add(outer_box)
+        self._whitelist_outer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        scroll.add(self._whitelist_outer_box)
+        page_box.pack_start(scroll, True, True, 0)
 
-        # Provider info: (display_name, settings_attr, env_var_for_key)
-        provider_info = [
-            ("OpenAI", "openai", "openai_model_whitelist", "OPENAI_API_KEY"),
-            ("Gemini", "gemini", "gemini_model_whitelist", "GEMINI_API_KEY"),
-            ("Grok", "grok", "grok_model_whitelist", "GROK_API_KEY"),
-            ("Claude", "claude", "claude_model_whitelist", "CLAUDE_API_KEY"),
-        ]
+        # Track widgets per provider for filtering: {provider_key: [widgets...]}
+        self._model_widgets_by_provider = {}
 
-        for display_name, provider_key, whitelist_attr, env_key in provider_info:
+        # Populate the provider sections
+        self._populate_model_whitelist_sections()
+
+        self.stack.add_named(page_box, "Model Whitelist")
+
+    def _populate_model_whitelist_sections(self, preserve_selections=False):
+        """
+        (Re)build the provider model checkbox sections inside `_whitelist_outer_box`.
+
+        If `preserve_selections` is True, capture current checkbox states before
+        clearing and re-apply them where models still exist.
+        """
+        # Optionally capture existing selections
+        previous_selections = {}
+        if preserve_selections and self.model_checkboxes:
+            for pkey, cbs in self.model_checkboxes.items():
+                previous_selections[pkey] = {mid for mid, cb in cbs.items() if cb.get_active()}
+
+        # Clear existing children and reset tracking structures
+        for child in self._whitelist_outer_box.get_children():
+            self._whitelist_outer_box.remove(child)
+        self.model_checkboxes = {}
+        self._model_widgets_by_provider = {}
+
+        for display_name, provider_key, whitelist_attr, _ in self._PROVIDER_INFO:
+            widgets_for_provider = []
+
             # Section label
             section_label = Gtk.Label(xalign=0)
             section_label.set_markup(f"<b>{display_name}</b>")
-            outer_box.pack_start(section_label, False, False, 0)
+            self._whitelist_outer_box.pack_start(section_label, False, False, 0)
+            widgets_for_provider.append(section_label)
 
-            # Determine available models
+            # Determine available models (from disk cache or network)
             available_models = self._get_available_models_for_provider(provider_key)
 
-            # Parse current whitelist
-            whitelist_str = getattr(self, whitelist_attr, "") or ""
-            whitelist_set = set(m.strip() for m in whitelist_str.split(",") if m.strip())
+            # Determine which models should be checked
+            if preserve_selections and provider_key in previous_selections:
+                whitelist_set = previous_selections[provider_key]
+            else:
+                whitelist_str = getattr(self, whitelist_attr, "") or ""
+                whitelist_set = set(m.strip() for m in whitelist_str.split(",") if m.strip())
 
             # Split into enabled and disabled, sort each alphabetically
             enabled_models = sorted([m for m in available_models if m in whitelist_set])
@@ -1009,33 +1113,98 @@ class SettingsDialog(Gtk.Dialog):
                 cb = Gtk.CheckButton(label=model_id)
                 cb.set_active(model_id in whitelist_set)
                 cb.set_margin_start(12)
-                outer_box.pack_start(cb, False, False, 0)
+                self._whitelist_outer_box.pack_start(cb, False, False, 0)
                 self.model_checkboxes[provider_key][model_id] = cb
+                widgets_for_provider.append(cb)
 
             # Separator between providers
             sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
             sep.set_margin_top(6)
             sep.set_margin_bottom(6)
-            outer_box.pack_start(sep, False, False, 0)
+            self._whitelist_outer_box.pack_start(sep, False, False, 0)
+            widgets_for_provider.append(sep)
 
-        self.stack.add_named(scroll, "Model Whitelist")
+            self._model_widgets_by_provider[provider_key] = widgets_for_provider
 
-    def _get_available_models_for_provider(self, provider_key):
+        # First show all newly added widgets, then apply the filter so that
+        # a non-"all" selection is respected even after refresh.
+        self._whitelist_outer_box.show_all()
+        self._apply_provider_filter()
+
+    def _apply_provider_filter(self):
+        """Show/hide provider sections based on the current filter selection."""
+        selected_id = self._provider_filter_combo.get_active_id() or "all"
+        for provider_key, widgets in self._model_widgets_by_provider.items():
+            visible = (selected_id == "all" or selected_id == provider_key)
+            for widget in widgets:
+                widget.set_visible(visible)
+
+    def _on_provider_filter_changed(self, combo):
+        """Handler for provider filter combo box changes."""
+        self._apply_provider_filter()
+
+    def _on_refresh_models_clicked(self, button):
+        """Handler for the Refresh Models button."""
+        from gi.repository import GLib
+
+        button.set_sensitive(False)
+        button.set_label("Refreshing...")
+
+        def do_refresh():
+            try:
+                # Force refresh for all providers
+                for _, provider_key, _, _ in self._PROVIDER_INFO:
+                    self._get_available_models_for_provider(provider_key, force_refresh=True)
+            except Exception as e:
+                print(f"Error refreshing models: {e}")
+
+            def finish_refresh():
+                self._populate_model_whitelist_sections(preserve_selections=True)
+                button.set_sensitive(True)
+                button.set_label("Refresh Models")
+                return False
+
+            GLib.idle_add(finish_refresh)
+
+        threading.Thread(target=do_refresh, daemon=True).start()
+
+    def _get_available_models_for_provider(self, provider_key, force_refresh=False):
         """
         Return a list of available models for the given provider.
-        Tries to fetch from the provider API; falls back to defaults from SETTINGS_CONFIG.
+
+        By default, reads from the on-disk cache (self._model_cache). If the
+        cache is empty for this provider, or if `force_refresh` is True,
+        fetches models from the provider API (or falls back to SETTINGS_CONFIG
+        defaults) and updates the disk cache.
         """
+        # Ensure we have an in-memory copy of the disk cache
+        if not hasattr(self, '_model_cache') or self._model_cache is None:
+            self._model_cache = load_model_cache()
+
+        cached = self._model_cache.get(provider_key)
+        if cached and not force_refresh:
+            return cached
+
+        # Need to fetch from provider (network call) or fall back to defaults
+        models = []
         provider = self.providers.get(provider_key)
         if provider:
             try:
-                return provider.get_available_models(disable_filter=True)
+                models = provider.get_available_models(disable_filter=True)
             except Exception as e:
                 print(f"Error fetching models for {provider_key}: {e}")
 
-        # Fallback: parse the default whitelist from SETTINGS_CONFIG
-        config_key = f"{provider_key.upper()}_MODEL_WHITELIST"
-        default_str = SETTINGS_CONFIG.get(config_key, {}).get('default', '')
-        return [m.strip() for m in default_str.split(",") if m.strip()]
+        # If still empty, fall back to SETTINGS_CONFIG defaults
+        if not models:
+            config_key = f"{provider_key.upper()}_MODEL_WHITELIST"
+            default_str = SETTINGS_CONFIG.get(config_key, {}).get('default', '')
+            models = [m.strip() for m in default_str.split(",") if m.strip()]
+
+        # Update in-memory and disk cache
+        self._model_cache[provider_key] = models
+        save_model_cache(self._model_cache)
+
+        return models
 
     # -----------------------------------------------------------------------
     # API Keys page
