@@ -2884,15 +2884,9 @@ class OpenAIGTKClient(Gtk.Window):
                 background: none;
                 border: none;
             }
-            scrollbar {
-                background: transparent;
-                border: none;
-            }
-            scrollbar slider {
-                min-width: 0px;
-                min-height: 0px;
-                background: transparent;
-            }
+            /* Note: do not override scrollbar width/height so that
+             * scrollbars follow the system theme and remain easy to grab.
+             */
         """
         try:
             css_provider.load_from_data(css.encode())
