@@ -77,7 +77,7 @@ def _add_listbox_row_margins(row, top=4, bottom=4):
 # Helper: build the API keys editor (reused in SettingsDialog and APIKeyDialog)
 # ---------------------------------------------------------------------------
 
-def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=''):
+def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key='', perplexity_key=''):
     """
     Build and return a Gtk.Box containing API key entry fields.
     Also returns references to the entry widgets in a dict.
@@ -154,6 +154,22 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     hbox.pack_start(entry_claude, False, True, 0)
     list_box.add(row)
     entries['claude'] = entry_claude
+
+    # Perplexity API Key
+    row = Gtk.ListBoxRow()
+    _add_listbox_row_margins(row)
+    hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    row.add(hbox)
+    label = Gtk.Label(label="Perplexity API Key", xalign=0)
+    label.set_hexpand(True)
+    entry_perplexity = Gtk.Entry()
+    entry_perplexity.set_visibility(False)
+    entry_perplexity.set_placeholder_text("pplx-...")
+    entry_perplexity.set_text(perplexity_key)
+    hbox.pack_start(label, True, True, 0)
+    hbox.pack_start(entry_perplexity, False, True, 0)
+    list_box.add(row)
+    entries['perplexity'] = entry_perplexity
 
     return list_box, entries
 
@@ -1276,6 +1292,7 @@ class SettingsDialog(Gtk.Dialog):
         ("Gemini", "gemini", "gemini_model_whitelist", "GEMINI_API_KEY"),
         ("Grok", "grok", "grok_model_whitelist", "GROK_API_KEY"),
         ("Claude", "claude", "claude_model_whitelist", "CLAUDE_API_KEY"),
+        ("Perplexity", "perplexity", "perplexity_model_whitelist", "PERPLEXITY_API_KEY"),
     ]
 
     def _build_model_whitelist_page(self):
@@ -1480,6 +1497,7 @@ class SettingsDialog(Gtk.Dialog):
             gemini_key=keys.get('gemini', ''),
             grok_key=keys.get('grok', ''),
             claude_key=keys.get('claude', ''),
+            perplexity_key=keys.get('perplexity', ''),
         )
         self.stack.add_named(list_box, "API Keys")
 
@@ -1785,6 +1803,7 @@ class SettingsDialog(Gtk.Dialog):
             'gemini': self.api_key_entries['gemini'].get_text().strip(),
             'grok': self.api_key_entries['grok'].get_text().strip(),
             'claude': self.api_key_entries['claude'].get_text().strip(),
+            'perplexity': self.api_key_entries['perplexity'].get_text().strip(),
         }
 
 
@@ -1949,7 +1968,7 @@ class PromptEditorDialog(Gtk.Dialog):
 class APIKeyDialog(Gtk.Dialog):
     """Dialog for managing API keys for different providers."""
 
-    def __init__(self, parent, openai_key='', gemini_key='', grok_key='', claude_key=''):
+    def __init__(self, parent, openai_key='', gemini_key='', grok_key='', claude_key='', perplexity_key=''):
         super().__init__(title="API Keys", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 300)
@@ -1962,6 +1981,7 @@ class APIKeyDialog(Gtk.Dialog):
             gemini_key=gemini_key,
             grok_key=grok_key,
             claude_key=claude_key,
+            perplexity_key=perplexity_key,
         )
         box.pack_start(list_box, True, True, 0)
 
@@ -1977,4 +1997,5 @@ class APIKeyDialog(Gtk.Dialog):
             'gemini': self.entries['gemini'].get_text().strip(),
             'grok': self.entries['grok'].get_text().strip(),
             'claude': self.entries['claude'].get_text().strip(),
+            'perplexity': self.entries['perplexity'].get_text().strip(),
         }

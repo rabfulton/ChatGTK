@@ -216,6 +216,7 @@ class OpenAIGTKClient(Gtk.Window):
             os.environ.get('CLAUDE_API_KEY', '').strip()
             or os.environ.get('ANTHROPIC_API_KEY', '').strip()
         )
+        env_perplexity_key = os.environ.get('PERPLEXITY_API_KEY', '').strip()
         if env_openai_key:
             self.api_keys['openai'] = env_openai_key
             self.initialize_provider('openai', env_openai_key)
@@ -231,6 +232,9 @@ class OpenAIGTKClient(Gtk.Window):
             os.environ['CLAUDE_API_KEY'] = env_claude_key
             os.environ['ANTHROPIC_API_KEY'] = env_claude_key
             self.initialize_provider('claude', env_claude_key)
+        if env_perplexity_key:
+            self.api_keys['perplexity'] = env_perplexity_key
+            self.initialize_provider('perplexity', env_perplexity_key)
         
         if self.providers:
             self.fetch_models_async()
@@ -724,6 +728,10 @@ class OpenAIGTKClient(Gtk.Window):
             # Basic Claude chat models via the OpenAI SDK compatibility layer.
             # See `https://platform.claude.com/docs/en/api/openai-sdk`.
             return ["claude-sonnet-4-5", "claude-3-5-sonnet-latest"]
+        if provider_name == 'perplexity':
+            # Perplexity Sonar models with built-in web search.
+            # See https://docs.perplexity.ai/guides/chat-completions-guide
+            return ["sonar", "sonar-pro", "sonar-reasoning"]
         return ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
 
     def initialize_provider(self, provider_name, api_key):
@@ -856,6 +864,87 @@ class OpenAIGTKClient(Gtk.Window):
         messages = [msg.copy() for msg in limited_history]
         messages[0]["content"] = new_prompt
         return messages
+
+    def _clean_messages_for_perplexity(self, messages):
+        """
+        Clean messages to ensure proper alternation for Perplexity API.
+        
+        Perplexity requires that after the optional system message(s), user and
+        assistant messages must strictly alternate, starting with a user message.
+        """
+        if not messages:
+            return messages
+
+        cleaned = []
+        
+        # First, extract system messages and other messages
+        system_messages = []
+        other_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                # Keep system message with clean structure
+                system_messages.append({
+                    "role": "system",
+                    "content": content,
+                })
+            elif content:  # Skip empty non-system messages
+                other_messages.append({
+                    "role": role,
+                    "content": content,
+                })
+        
+        # Add system messages first
+        cleaned.extend(system_messages)
+        
+        # Process non-system messages to ensure strict alternation
+        # Perplexity requires: user, assistant, user, assistant, ... ending with user
+        alternating = []
+        expected_role = "user"  # Must start with user after system
+        
+        for msg in other_messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            if role == expected_role:
+                # Correct role - add it
+                alternating.append({"role": role, "content": content})
+                expected_role = "assistant" if role == "user" else "user"
+            elif role == "user" and expected_role == "user":
+                # Another user message when we expected user - merge with previous if exists
+                if alternating and alternating[-1]["role"] == "user":
+                    alternating[-1]["content"] += "\n\n" + content
+                else:
+                    alternating.append({"role": role, "content": content})
+                    expected_role = "assistant"
+            elif role == "assistant" and expected_role == "assistant":
+                # Another assistant message when we expected assistant - merge
+                if alternating and alternating[-1]["role"] == "assistant":
+                    alternating[-1]["content"] += "\n\n" + content
+                else:
+                    alternating.append({"role": role, "content": content})
+                    expected_role = "user"
+            elif role == "user" and expected_role == "assistant":
+                # Got user when expecting assistant - skip the missing assistant and add user
+                # This handles cases where assistant response was empty/missing
+                alternating.append({"role": role, "content": content})
+                expected_role = "assistant"
+            elif role == "assistant" and expected_role == "user":
+                # Got assistant when expecting user - skip this assistant message
+                # The first message after system must be user
+                continue
+        
+        # Ensure we have at least one user message and it ends with user
+        if not alternating:
+            return messages  # Return original if something went wrong
+        
+        # If the last message is assistant, that's fine for Perplexity
+        # (they want alternation, ending with user is for the request)
+        
+        cleaned.extend(alternating)
+        return cleaned
 
     def get_provider_name_for_model(self, model_name):
         if not model_name:
@@ -1344,6 +1433,7 @@ class OpenAIGTKClient(Gtk.Window):
             'gemini': os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')),
             'grok': os.environ.get('GROK_API_KEY', self.api_keys.get('grok', '')),
             'claude': os.environ.get('CLAUDE_API_KEY', self.api_keys.get('claude', '')),
+            'perplexity': os.environ.get('PERPLEXITY_API_KEY', self.api_keys.get('perplexity', '')),
         }
 
         # Pass ai_provider, providers dict, and api_keys to the settings dialog
@@ -1400,6 +1490,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.api_keys['gemini'] = new_keys['gemini']
         self.api_keys['grok'] = new_keys['grok']
         self.api_keys['claude'] = new_keys['claude']
+        self.api_keys['perplexity'] = new_keys.get('perplexity', '')
 
         # Update environment variables and providers
         if new_keys['openai']:
@@ -1431,6 +1522,13 @@ class OpenAIGTKClient(Gtk.Window):
             os.environ.pop('CLAUDE_API_KEY', None)
             os.environ.pop('ANTHROPIC_API_KEY', None)
             self.providers.pop('claude', None)
+
+        if new_keys.get('perplexity'):
+            os.environ['PERPLEXITY_API_KEY'] = new_keys['perplexity']
+            self.initialize_provider('perplexity', new_keys['perplexity'])
+        else:
+            os.environ.pop('PERPLEXITY_API_KEY', None)
+            self.providers.pop('perplexity', None)
 
     def on_open_tools(self, widget):
         # Open the tools dialog for configuring image/music tools.
@@ -1694,6 +1792,9 @@ class OpenAIGTKClient(Gtk.Window):
         elif provider_name == 'claude':
             env_var = 'CLAUDE_API_KEY'
             provider_label = "Claude"
+        elif provider_name == 'perplexity':
+            env_var = 'PERPLEXITY_API_KEY'
+            provider_label = "Perplexity"
         else:
             env_var = 'OPENAI_API_KEY'
             provider_label = "OpenAI"
@@ -2064,6 +2165,27 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["music_tool_handler"] = music_tool_handler
                 if read_aloud_tool_handler is not None:
                     kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
+
+                answer = provider.generate_chat_completion(**kwargs)
+            elif provider_name == 'perplexity':
+                # Chat completion for Perplexity Sonar models.
+                # Perplexity models have built-in web search and don't support
+                # function tools in the same way as other providers.
+                # See https://docs.perplexity.ai/guides/chat-completions-guide
+                messages_to_send = self._messages_for_model(model)
+
+                # Perplexity requires strict alternation between user and assistant
+                # messages after the system message. Clean the messages to ensure
+                # proper format.
+                messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
+
+                kwargs = {
+                    "messages": messages_to_send,
+                    "model": model,
+                    "temperature": float(self.temperament),
+                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
+                    "chat_id": self.current_chat_id,
+                }
 
                 answer = provider.generate_chat_completion(**kwargs)
             else:

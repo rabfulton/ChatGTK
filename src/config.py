@@ -85,6 +85,10 @@ SETTINGS_CONFIG = {
         'type': str,
         'default': 'claude-sonnet-4-5,claude-haiku-4-5,claude-opus-4-5,claude-3-5-sonnet-latest,claude-3-5-haiku-latest'
     },
+    'PERPLEXITY_MODEL_WHITELIST': {
+        'type': str,
+        'default': 'sonar,sonar-pro,sonar-reasoning'
+    },
     # Read Aloud settings – automatically speak assistant responses.
     # When enabled, each new assistant message is read aloud using the selected provider.
     'READ_ALOUD_ENABLED': {'type': bool, 'default': False},

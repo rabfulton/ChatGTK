@@ -1349,6 +1349,103 @@ class ClaudeProvider(AIProvider):
         raise NotImplementedError("Claude provider does not support TTS yet.")
 
 
+class PerplexityProvider(AIProvider):
+    """
+    AI provider implementation for Perplexity AI models.
+    Uses the OpenAI-compatible HTTP API at https://api.perplexity.ai.
+    
+    See: https://docs.perplexity.ai/guides/chat-completions-guide
+    """
+
+    BASE_URL = "https://api.perplexity.ai"
+
+    def __init__(self):
+        self.client = None
+
+    def initialize(self, api_key: str):
+        """Initialize the Perplexity client using the OpenAI SDK with a custom base URL."""
+        self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
+
+    def get_available_models(self, disable_filter: bool = False):
+        """
+        Return Perplexity models.
+        
+        Perplexity's API does not provide a models.list endpoint, so we return
+        a curated set of known Sonar models.
+        """
+        # Curated set of Perplexity Sonar models
+        allowed_models = {
+            "sonar",
+            "sonar-pro",
+            "sonar-reasoning",
+        }
+
+        # Allow disabling filtering via parameter or env var
+        env_val = os.getenv('DISABLE_MODEL_FILTER', '')
+        disable_filter = disable_filter or env_val.strip().lower() in ('true', '1', 'yes')
+        if disable_filter:
+            return sorted(allowed_models)
+
+        return sorted(allowed_models)
+
+    def generate_chat_completion(
+        self,
+        messages,
+        model,
+        temperature=0.7,
+        max_tokens=None,
+        chat_id=None,
+        response_meta=None,
+        web_search_enabled: bool = False,
+        image_tool_handler=None,
+        music_tool_handler=None,
+        read_aloud_tool_handler=None,
+    ):
+        """
+        Generate a chat completion using Perplexity models via the OpenAI-compatible
+        /chat/completions endpoint.
+        
+        Note: Perplexity Sonar models have built-in web search capabilities.
+        """
+        if not self.client:
+            raise RuntimeError("Perplexity client not initialized")
+
+        # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
+        # Note: Perplexity does not support image inputs currently.
+        processed_messages = []
+        for msg in messages:
+            clean_msg = {
+                k: v
+                for k, v in msg.items()
+                if k in ("role", "content", "name")
+            }
+            processed_messages.append(clean_msg)
+
+        params = {
+            "model": model,
+            "messages": processed_messages,
+        }
+        if temperature is not None:
+            params["temperature"] = float(temperature)
+        if max_tokens and max_tokens > 0:
+            params["max_tokens"] = int(max_tokens)
+
+        # Perplexity doesn't support function calling tools in the same way as OpenAI,
+        # so we use a simple one-shot path.
+        response = self.client.chat.completions.create(**params)
+        return response.choices[0].message.content or ""
+
+    def generate_image(self, prompt, chat_id, model=None, image_data=None, mime_type=None):
+        """Perplexity does not support image generation."""
+        raise NotImplementedError("Perplexity provider does not support image generation.")
+
+    def transcribe_audio(self, audio_file):
+        raise NotImplementedError("Perplexity provider does not support audio transcription.")
+
+    def generate_speech(self, text, voice):
+        raise NotImplementedError("Perplexity provider does not support TTS.")
+
+
 class GeminiProvider(AIProvider):
     """AI provider implementation for Google's Gemini API."""
     
@@ -2189,6 +2286,7 @@ def get_ai_provider(provider_name: str) -> AIProvider:
         'gemini': GeminiProvider,
         'grok': GrokProvider,
         'claude': ClaudeProvider,
+        'perplexity': PerplexityProvider,
     }
     
     provider_class = providers.get(provider_name)
