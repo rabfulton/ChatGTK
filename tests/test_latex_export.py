@@ -159,6 +159,17 @@ And some text after."""
         assert r'\&' in restored
         assert r'\%' in restored
     
+    def test_header_with_bold_text(self):
+        """Headers that contain markdown bold should render bold text, not raw ** markers."""
+        content = "### **Bold Heading**"
+        result = format_message_content(content)
+        
+        # Should be converted to a subsubsection with bold content
+        assert r'\subsubsection*' in result
+        assert r'\textbf{Bold Heading}' in result
+        # The raw markdown markers should not appear
+        assert '**Bold Heading**' not in result
+    
     def test_latex_command_protection(self):
         """Existing LaTeX commands should be protected from escaping."""
         regions = ProtectedRegions()

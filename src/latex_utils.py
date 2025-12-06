@@ -514,12 +514,31 @@ class ProtectedRegions:
         Extract markdown headers and replace with tokens.
         Converts to LaTeX sectioning commands.
         Title text is escaped to handle special LaTeX characters.
+        Also supports markdown bold/italic inside headers (e.g. ### **Title**).
         """
         def header_repl(match):
             level = len(match.group(1))
             title = match.group(2).strip()
-            # Escape special characters in the title
-            title = escape_latex_text_simple(title)
+
+            # First, process markdown bold/italic inside the header title.
+            # This converts **text** / *text* to \textbf{} / \textit{} while
+            # escaping special characters inside those regions and preserving
+            # any existing tokens (math, code, etc.).
+            title = process_bold_italic(title)
+
+            # Protect any LaTeX commands we just created so they are not escaped.
+            title = self.protect_latex_commands(title)
+
+            # Now escape remaining plain text while preserving tokens.
+            segments = self.split_by_tokens(title)
+            escaped_parts = []
+            for is_token, segment in segments:
+                if is_token:
+                    escaped_parts.append(segment)
+                else:
+                    escaped_parts.append(escape_latex_text_simple(segment))
+            title = ''.join(escaped_parts)
+
             if level == 1:
                 cmd = f"\\section*{{{title}}}"
             elif level == 2:
