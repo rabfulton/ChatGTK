@@ -1290,8 +1290,12 @@ class OpenAIGTKClient(Gtk.Window):
                 return f"Error starting music player: {e}"
 
         # Non-play actions have limited support
-        # Try to use playerctl if available, targeting the configured player
-        player_name = os.path.basename(player_path)
+        # Try to use playerctl if available, targeting the configured player.
+        # For playerctl we only want the base executable name, without any
+        # command-line switches. For example, "mpv --playlist" should become
+        # just "mpv" when used as the player name.
+        player_name_source = str(player_path).strip().split()[0]
+        player_name = os.path.basename(player_name_source)
         
         if action in ("pause", "resume", "stop", "next", "previous", "volume_up", "volume_down", "set_volume"):
             try:
