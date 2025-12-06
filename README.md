@@ -37,6 +37,14 @@ Or use your package manager to install the dependencies.
 The application when launched from the terminal will complain about which dependencies are missing. 
 You otionally require `texlive` and `dvipng` if you want mathematics to render nicely and the `beets` package for the music control functionality.
 
+```bash
+./chatgtk.sh
+```
+Optionally run the install script to add a desktop entry and set up the environment variables for you.
+```bash
+./install.sh
+```
+
 ## Usage
 
 The application looks for the following environment variables:
@@ -125,14 +133,6 @@ You will need at least one API key for the application to function. Alternativel
     ```bash
     export PERPLEXITY_API_KEY="your-perplexity-key"
     ```
-
-```bash
-./chatgtk.sh
-```
-Alternatively you can run the install script to add a desktop entry and set up the environment.
-```bash
-./install.sh
-```
 
 ### Tools support (images, music, web search & read aloud)
 
