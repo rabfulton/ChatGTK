@@ -1375,18 +1375,25 @@ class OpenAIGTKClient(Gtk.Window):
         Handle read_aloud tool calls from AI models.
         
         This is called when a model invokes the read_aloud tool to speak text
-        to the user. It uses the same read_aloud_text method but blocks until
-        playback is complete so the tool returns a proper status.
+        to the user. Uses the unified TTS settings (tts_voice_provider, tts_voice,
+        tts_hd, tts_prompt_template) and blocks until playback is complete so 
+        the tool returns a proper status.
         """
         if not text:
             return "No text provided to read aloud."
         
         try:
-            # Get the provider setting
-            provider = getattr(self, 'read_aloud_provider', 'tts') or 'tts'
+            # Use unified TTS settings (tts_voice_provider)
+            provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
             
-            if provider == 'tts':
+            if provider == 'openai':
                 success = self._synthesize_and_play_tts(
+                    text,
+                    chat_id=self.current_chat_id,
+                    stop_event=None
+                )
+            elif provider == 'gemini':
+                success = self._synthesize_and_play_gemini_tts(
                     text,
                     chat_id=self.current_chat_id,
                     stop_event=None
@@ -1399,7 +1406,7 @@ class OpenAIGTKClient(Gtk.Window):
                     stop_event=None
                 )
             else:
-                return f"Unknown read aloud provider: {provider}"
+                return f"Unknown TTS provider: {provider}"
             
             if success:
                 return "Text was read aloud successfully."
@@ -2944,6 +2951,9 @@ class OpenAIGTKClient(Gtk.Window):
     def create_speech_button(self, full_text):
         """
         Create a play/stop button for TTS playback or audio file replay.
+        
+        Uses the same TTS cache as automatic read-aloud, so if a response was
+        already read aloud, clicking the play button will replay the cached audio.
         """
         btn_speak = Gtk.Button()
         button_size = self.font_size * 2
@@ -2955,6 +2965,7 @@ class OpenAIGTKClient(Gtk.Window):
         btn_speak.set_tooltip_text("Play response")
         
         is_playing = False
+        stop_event = None
         
         # Convert list to string if necessary
         if isinstance(full_text, list):
@@ -2967,102 +2978,53 @@ class OpenAIGTKClient(Gtk.Window):
         initial_audio_path = audio_file_match.group(1) if audio_file_match else None
         
         def on_speak_clicked(widget):
-            nonlocal is_playing
+            nonlocal is_playing, stop_event
             if not is_playing:
                 is_playing = True
+                stop_event = threading.Event()
                 btn_speak.set_image(icon_stop)
                 btn_speak.set_tooltip_text("Stop playback")
                 
-                # Track if generation/playback was completed
-                generation_completed = False
-                
                 def speak_thread():
-                    nonlocal is_playing, generation_completed
+                    nonlocal is_playing
                     try:
-                        # Reset audio_file_path for each playback attempt
-                        audio_file_path = initial_audio_path
-                        # Remove audio file tag from text if present
-                        clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text_content).strip()
-                        
                         # Check for existing audio file from "audio model"
-                        if audio_file_path and Path(audio_file_path).exists():
+                        if initial_audio_path and Path(initial_audio_path).exists():
                             # Play existing audio file (from audio model)
-                            self.current_playback_process = subprocess.Popen(['paplay', str(audio_file_path)])
+                            self.current_playback_process = subprocess.Popen(['paplay', str(initial_audio_path)])
                             self.current_playback_process.wait()
-                            generation_completed = True
                             return
                         
-                        # We do not have Audio model, use TTS
-                        if self.current_chat_id:
-                            # Get audio directory
-                            audio_dir = get_chat_dir(self.current_chat_id) / 'audio'
-                            # Generate a hash of the message text for uniqueness
-                            import hashlib
-                            text_hash = hashlib.md5(text_content.encode()).hexdigest()[:8]
-
-                            # Determine TTS provider and build cache filename accordingly
-                            tts_provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
-                            current_mode = "ttshd" if self.tts_hd else "tts"
-                            # Include provider in filename to separate OpenAI and Gemini caches
-                            existing_file = audio_dir / f"{tts_provider}_{current_mode}_{self.tts_voice}_{text_hash}.wav"
-                            
-                            if existing_file.exists():
-                                # Play existing TTS file
-                                self.current_playback_process = subprocess.Popen(['paplay', str(existing_file)])
-                                self.current_playback_process.wait()
-                                generation_completed = True
-                                return
+                        # Check for cached TTS audio using the shared cache path helper
+                        cached_file = self._get_tts_cache_path(text_content, self.current_chat_id)
+                        if cached_file and cached_file.exists():
+                            # Play cached audio (may have been generated by auto read-aloud)
+                            self.current_playback_process = subprocess.Popen(['paplay', str(cached_file)])
+                            self.current_playback_process.wait()
+                            return
                         
-                            # No existing file found, generate new one
-                            audio_dir.mkdir(parents=True, exist_ok=True)
-                            
-                            # Generate filename with timestamp and TTS settings
-                            audio_file = existing_file
-                            
-                            if tts_provider == 'gemini':
-                                # Use Gemini TTS
-                                gemini_provider = self.providers.get('gemini')
-                                if not gemini_provider:
-                                    api_key = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')).strip()
-                                    if api_key:
-                                        gemini_provider = self.initialize_provider('gemini', api_key)
-                                
-                                if not gemini_provider:
-                                    raise RuntimeError("Gemini API key not configured. Please add your Gemini API key in Settings > API Keys.")
-                                
-                                # Generate speech using Gemini TTS
-                                audio_bytes = gemini_provider.generate_speech(clean_text, self.tts_voice)
-                                
-                                if not is_playing:
-                                    return
-                                
-                                # Write audio to cache file
-                                with open(audio_file, 'wb') as f:
-                                    f.write(audio_bytes)
-                            else:
-                                # Use OpenAI TTS (existing behavior)
-                                with ai_provider.audio.speech.with_streaming_response.create(
-                                    model="tts-1-hd" if self.tts_hd else "tts-1",
-                                    voice=self.tts_voice,
-                                    input=clean_text
-                                ) as response:
-                                    with open(audio_file, 'wb') as f:
-                                        for chunk in response.iter_bytes():
-                                            if not is_playing:  # Check if stopped
-                                                break
-                                            f.write(chunk)
-                            
-                            if is_playing:  # Only keep and play if not stopped
-                                # Update audio file path for future playback
-                                audio_file_path = str(audio_file)
-                                
-                                # Play the generated audio
-                                self.current_playback_process = subprocess.Popen(['paplay', str(audio_file)])
-                                self.current_playback_process.wait()
-                                generation_completed = True
-                            else:
-                                # Clean up partial file if stopped
-                                audio_file.unlink(missing_ok=True)
+                        # No cached file, use TTS synthesis based on current provider
+                        provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+                        
+                        if provider == 'openai':
+                            self._synthesize_and_play_tts(
+                                text_content,
+                                chat_id=self.current_chat_id,
+                                stop_event=stop_event
+                            )
+                        elif provider == 'gemini':
+                            self._synthesize_and_play_gemini_tts(
+                                text_content,
+                                chat_id=self.current_chat_id,
+                                stop_event=stop_event
+                            )
+                        elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
+                            self._synthesize_and_play_audio_preview(
+                                text_content,
+                                chat_id=self.current_chat_id,
+                                model_id=provider,
+                                stop_event=stop_event
+                            )
                     
                     except Exception as e:
                         GLib.idle_add(self.append_message, 'ai', f"Error playing audio: {str(e)}")
@@ -3075,8 +3037,13 @@ class OpenAIGTKClient(Gtk.Window):
             else:
                 # Stop playback
                 is_playing = False
-                if hasattr(self, 'current_playback_process'):
-                    self.current_playback_process.terminate()
+                if stop_event:
+                    stop_event.set()
+                if hasattr(self, 'current_playback_process') and self.current_playback_process:
+                    try:
+                        self.current_playback_process.terminate()
+                    except Exception:
+                        pass
                 btn_speak.set_image(icon_play)
                 btn_speak.set_tooltip_text("Play response")
         
@@ -3084,18 +3051,79 @@ class OpenAIGTKClient(Gtk.Window):
         return btn_speak
 
     # -----------------------------------------------------------------------
-    # Read Aloud Helpers – synthesize and play text via TTS or audio-preview
+    # TTS Helpers – synthesize and play text via TTS or audio-preview
     # -----------------------------------------------------------------------
+
+    def _get_tts_cache_path(self, text: str, chat_id: str) -> Path:
+        """
+        Get the cache file path for TTS audio based on current settings.
+        
+        This method computes a consistent cache path that can be used by both
+        the play button and automatic read-aloud to share cached audio files.
+        
+        The cache key includes:
+        - The text (cleaned of audio file tags)
+        - The TTS provider
+        - The TTS voice
+        - The TTS HD mode (for OpenAI)
+        - The prompt template hash (for Gemini and audio-preview models)
+        
+        Returns the Path to the cache file, or None if no chat_id is provided.
+        """
+        import hashlib
+        
+        if not chat_id:
+            return None
+        
+        # Clean the text of any audio file tags
+        clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
+        if not clean_text:
+            return None
+        
+        # Get current TTS settings
+        provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+        voice = getattr(self, 'tts_voice', None) or 'alloy'
+        hd_mode = self.tts_hd if provider == 'openai' else False
+        template = getattr(self, 'tts_prompt_template', '') or ''
+        
+        # Build cache key components
+        if provider == 'openai':
+            mode = "ttshd" if hd_mode else "tts"
+            cache_key = f"{clean_text}"
+            prefix = f"openai_{mode}_{voice}"
+        elif provider == 'gemini':
+            # Include template in cache key for Gemini since it affects output
+            if template and '{text}' in template:
+                prompt_text = template.replace('{text}', clean_text)
+            else:
+                prompt_text = clean_text
+            cache_key = f"{prompt_text}_{voice}"
+            prefix = f"gemini_{voice}"
+        else:
+            # audio-preview models - include template and model in cache
+            if template and '{text}' in template:
+                prompt_text = template.replace('{text}', clean_text)
+            else:
+                prompt_text = f'Please say the following verbatim: "{clean_text}"'
+            cache_key = f"{prompt_text}_{voice}_{provider}"
+            prefix = f"{provider}_{voice}"
+        
+        # Generate hash
+        text_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
+        
+        # Get audio directory
+        audio_dir = get_chat_dir(chat_id) / 'audio'
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        
+        return audio_dir / f"{prefix}_{text_hash}.wav"
 
     def _synthesize_and_play_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
         """
         Synthesize text using OpenAI TTS and play it.
         
-        Uses the existing TTS voice/HD settings and caches audio files per chat.
+        Uses the unified tts_voice setting and caches audio files per chat.
         Returns True if playback completed successfully, False otherwise.
         """
-        import hashlib
-        
         # Get the OpenAI provider for TTS
         openai_provider = self.providers.get('openai')
         if not openai_provider:
@@ -3104,7 +3132,7 @@ class OpenAIGTKClient(Gtk.Window):
                 openai_provider = self.initialize_provider('openai', api_key)
         
         if not openai_provider:
-            print("Read Aloud: OpenAI provider not available for TTS")
+            print("TTS: OpenAI provider not available")
             return False
         
         try:
@@ -3113,16 +3141,12 @@ class OpenAIGTKClient(Gtk.Window):
             if not clean_text:
                 return True  # Nothing to say
             
-            # Get audio directory for caching
-            if chat_id:
-                audio_dir = get_chat_dir(chat_id) / 'audio'
-                audio_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Generate a hash of the message text for uniqueness
-                text_hash = hashlib.md5(clean_text.encode()).hexdigest()[:8]
-                current_mode = "ttshd" if self.tts_hd else "tts"
-                audio_file = audio_dir / f"read_aloud_{current_mode}_{self.tts_voice}_{text_hash}.wav"
-                
+            # Get the unified TTS voice setting
+            voice = getattr(self, 'tts_voice', None) or 'alloy'
+            
+            # Use shared cache path helper
+            audio_file = self._get_tts_cache_path(text, chat_id)
+            if audio_file:
                 # Check for cached file
                 if audio_file.exists():
                     self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
@@ -3131,12 +3155,14 @@ class OpenAIGTKClient(Gtk.Window):
             else:
                 # No chat_id, use a temp file
                 import tempfile
-                audio_file = Path(tempfile.gettempdir()) / f"read_aloud_{hash(clean_text)}.wav"
+                import hashlib
+                text_hash = hashlib.md5(clean_text.encode()).hexdigest()[:8]
+                audio_file = Path(tempfile.gettempdir()) / f"tts_openai_{text_hash}.wav"
             
             # Generate TTS audio
             with openai_provider.audio.speech.with_streaming_response.create(
                 model="tts-1-hd" if self.tts_hd else "tts-1",
-                voice=self.tts_voice,
+                voice=voice,
                 input=clean_text
             ) as response:
                 with open(audio_file, 'wb') as f:
@@ -3175,7 +3201,7 @@ class OpenAIGTKClient(Gtk.Window):
                 openai_provider = self.initialize_provider('openai', api_key)
         
         if not openai_provider:
-            print("Read Aloud: OpenAI provider not available for audio-preview")
+            print("TTS: OpenAI provider not available for audio-preview")
             return False
         
         try:
@@ -3184,15 +3210,33 @@ class OpenAIGTKClient(Gtk.Window):
             if not clean_text:
                 return True  # Nothing to say
             
-            # Build the prompt using the configured template
-            template = getattr(self, 'read_aloud_audio_prompt_template', '') or 'Please say the following verbatim in a New York accent: "{text}"'
+            # Build the prompt using the unified TTS prompt template
+            template = getattr(self, 'tts_prompt_template', '') or 'Please say the following verbatim: "{text}"'
             prompt = template.replace('{text}', clean_text)
+            
+            # Get the unified TTS voice setting
+            voice = getattr(self, 'tts_voice', None) or 'alloy'
+            
+            # Use shared cache path helper
+            audio_file = self._get_tts_cache_path(text, chat_id)
+            if audio_file:
+                # Check for cached file
+                if audio_file.exists():
+                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+                    self.current_read_aloud_process.wait()
+                    return True
+            else:
+                # No chat_id, use a temp file
+                import tempfile
+                import hashlib
+                text_hash = hashlib.md5(f"{prompt}_{voice}_{model_id}".encode()).hexdigest()[:8]
+                audio_file = Path(tempfile.gettempdir()) / f"tts_audio_preview_{text_hash}.wav"
             
             # Call the audio-preview model
             response = openai_provider.client.chat.completions.create(
                 model=model_id,
                 modalities=["text", "audio"],
-                audio={"voice": self.tts_voice, "format": "wav"},
+                audio={"voice": voice, "format": "wav"},
                 messages=[
                     {"role": "user", "content": prompt}
                 ]
@@ -3206,16 +3250,6 @@ class OpenAIGTKClient(Gtk.Window):
                 audio_data = response.choices[0].message.audio.data
                 audio_bytes = base64.b64decode(audio_data)
                 
-                # Save to file
-                if chat_id:
-                    audio_dir = get_chat_dir(chat_id) / 'audio'
-                    audio_dir.mkdir(parents=True, exist_ok=True)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    audio_file = audio_dir / f"read_aloud_audio_preview_{timestamp}.wav"
-                else:
-                    import tempfile
-                    audio_file = Path(tempfile.gettempdir()) / f"read_aloud_audio_preview_{hash(clean_text)}.wav"
-                
                 with open(audio_file, 'wb') as f:
                     f.write(audio_bytes)
                 
@@ -3228,20 +3262,99 @@ class OpenAIGTKClient(Gtk.Window):
                 self.current_read_aloud_process.wait()
                 return True
             else:
-                print("Read Aloud: No audio in response from audio-preview model")
+                print("TTS: No audio in response from audio-preview model")
                 return False
                 
         except Exception as e:
-            print(f"Read Aloud audio-preview error: {e}")
+            print(f"TTS audio-preview error: {e}")
+            return False
+
+    def _synthesize_and_play_gemini_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
+        """
+        Synthesize text using Gemini TTS with controllable speech.
+        
+        Builds a prompt using the configured template for controllable speech styles.
+        Uses the unified tts_voice setting and caches audio files per chat.
+        Returns True if playback completed successfully, False otherwise.
+        """
+        # Get the Gemini provider for TTS
+        gemini_provider = self.providers.get('gemini')
+        if not gemini_provider:
+            api_key = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')).strip()
+            if api_key:
+                gemini_provider = self.initialize_provider('gemini', api_key)
+        
+        if not gemini_provider:
+            print("TTS: Gemini provider not available")
+            return False
+        
+        try:
+            # Clean the text of any audio file tags
+            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
+            if not clean_text:
+                return True  # Nothing to say
+            
+            # Build the prompt using the unified TTS prompt template for controllable speech
+            # Gemini TTS supports prompt-based style control (e.g., "Say cheerfully:", "Read slowly:")
+            template = getattr(self, 'tts_prompt_template', '') or ''
+            if template and '{text}' in template:
+                prompt_text = template.replace('{text}', clean_text)
+            else:
+                # No template or invalid template, just use the text directly
+                prompt_text = clean_text
+            
+            # Get the unified TTS voice setting (should be a Gemini voice when provider is gemini)
+            voice = getattr(self, 'tts_voice', None) or 'Kore'
+            
+            # Use shared cache path helper
+            audio_file = self._get_tts_cache_path(text, chat_id)
+            if audio_file:
+                # Check for cached file
+                if audio_file.exists():
+                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+                    self.current_read_aloud_process.wait()
+                    return True
+            else:
+                # No chat_id, use a temp file
+                import tempfile
+                import hashlib
+                cache_key = f"{prompt_text}_{voice}"
+                text_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
+                audio_file = Path(tempfile.gettempdir()) / f"tts_gemini_{text_hash}.wav"
+            
+            if stop_event and stop_event.is_set():
+                return False
+            
+            # Generate TTS audio using Gemini
+            audio_bytes = gemini_provider.generate_speech(prompt_text, voice)
+            
+            if stop_event and stop_event.is_set():
+                return False
+            
+            # Save the audio file
+            with open(audio_file, 'wb') as f:
+                f.write(audio_bytes)
+            
+            if stop_event and stop_event.is_set():
+                audio_file.unlink(missing_ok=True)
+                return False
+            
+            # Play the generated audio
+            self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+            self.current_read_aloud_process.wait()
+            return True
+            
+        except Exception as e:
+            print(f"TTS Gemini error: {e}")
             return False
 
     def read_aloud_text(self, text: str, *, chat_id: str = None):
         """
-        Read the given text aloud using the configured speech provider.
+        Read the given text aloud using the unified TTS settings.
         
         This is the main entry point for the Read Aloud feature. It checks
         if read aloud is enabled and dispatches to the appropriate synthesis
-        method based on the configured provider.
+        method based on the configured TTS provider (tts_voice_provider).
         
         Runs in a background thread to avoid blocking the UI.
         """
@@ -3260,11 +3373,18 @@ class OpenAIGTKClient(Gtk.Window):
         self.read_aloud_stop_event = threading.Event()
         
         def read_aloud_thread():
-            provider = getattr(self, 'read_aloud_provider', 'tts') or 'tts'
+            # Use unified TTS settings (tts_voice_provider)
+            provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
             
             try:
-                if provider == 'tts':
+                if provider == 'openai':
                     self._synthesize_and_play_tts(
+                        text,
+                        chat_id=chat_id,
+                        stop_event=self.read_aloud_stop_event
+                    )
+                elif provider == 'gemini':
+                    self._synthesize_and_play_gemini_tts(
                         text,
                         chat_id=chat_id,
                         stop_event=self.read_aloud_stop_event
@@ -3277,7 +3397,7 @@ class OpenAIGTKClient(Gtk.Window):
                         stop_event=self.read_aloud_stop_event
                     )
                 else:
-                    print(f"Read Aloud: Unknown provider '{provider}'")
+                    print(f"Read Aloud: Unknown TTS provider '{provider}'")
             except Exception as e:
                 print(f"Read Aloud error: {e}")
             finally:

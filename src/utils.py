@@ -40,6 +40,44 @@ def convert_settings_for_save(settings):
             converted[key] = str(value)
     return converted
 
+def _migrate_legacy_tts_settings(settings):
+    """
+    Migrate legacy READ_ALOUD_* settings to unified TTS_* settings.
+    
+    This handles backward compatibility for users upgrading from older versions
+    that had separate Read Aloud settings. The new unified TTS settings are used
+    by the play button, automatic read-aloud, and the read-aloud tool.
+    """
+    # Map legacy READ_ALOUD_PROVIDER values to new TTS_VOICE_PROVIDER values
+    legacy_provider_map = {
+        'tts': 'openai',
+        'gemini-tts': 'gemini',
+        'gpt-4o-audio-preview': 'gpt-4o-audio-preview',
+        'gpt-4o-mini-audio-preview': 'gpt-4o-mini-audio-preview',
+    }
+    
+    # Migrate READ_ALOUD_PROVIDER -> TTS_VOICE_PROVIDER if TTS provider is still default
+    legacy_provider = settings.get('READ_ALOUD_PROVIDER', 'tts')
+    if settings.get('TTS_VOICE_PROVIDER') == DEFAULT_SETTINGS.get('TTS_VOICE_PROVIDER', 'openai'):
+        if legacy_provider in legacy_provider_map:
+            new_provider = legacy_provider_map[legacy_provider]
+            if new_provider != 'openai':  # Only migrate if it was non-default
+                settings['TTS_VOICE_PROVIDER'] = new_provider
+    
+    # Migrate READ_ALOUD_VOICE -> TTS_VOICE if TTS voice is still default
+    legacy_voice = settings.get('READ_ALOUD_VOICE', 'alloy')
+    if settings.get('TTS_VOICE') == DEFAULT_SETTINGS.get('TTS_VOICE', 'alloy'):
+        if legacy_voice != 'alloy':  # Only migrate if it was non-default
+            settings['TTS_VOICE'] = legacy_voice
+    
+    # Migrate READ_ALOUD_AUDIO_PROMPT_TEMPLATE -> TTS_PROMPT_TEMPLATE if not set
+    legacy_template = settings.get('READ_ALOUD_AUDIO_PROMPT_TEMPLATE', '')
+    default_legacy_template = SETTINGS_CONFIG.get('READ_ALOUD_AUDIO_PROMPT_TEMPLATE', {}).get('default', '')
+    if not settings.get('TTS_PROMPT_TEMPLATE') and legacy_template and legacy_template != default_legacy_template:
+        settings['TTS_PROMPT_TEMPLATE'] = legacy_template
+    
+    return settings
+
 def load_settings():
     """Load settings with type conversion based on config."""
     settings = DEFAULT_SETTINGS.copy()
@@ -69,6 +107,9 @@ def load_settings():
         print(f"Settings file not found at: {SETTINGS_FILE}")
     except Exception as e:
         print(f"Error loading settings: {e}")
+    
+    # Apply migration for legacy TTS settings
+    settings = _migrate_legacy_tts_settings(settings)
     
     return settings
 

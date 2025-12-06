@@ -593,16 +593,22 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.combo_mic, False, True, 0)
         list_box.add(row)
 
-        # TTS Voice Provider
+        # TTS Voice Provider (unified - used by play button, auto read-aloud, and read-aloud tool)
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="TTS Voice Provider", xalign=0)
+        label = Gtk.Label(label="Text-to-Speech Model", xalign=0)
         label.set_hexpand(True)
         self.combo_tts_provider = Gtk.ComboBoxText()
 
-        tts_providers = [("openai", "OpenAI"), ("gemini", "Gemini")]
+        # All TTS provider options (unified for all speech synthesis)
+        tts_providers = [
+            ("openai", "OpenAI TTS (tts-1 / tts-1-hd)"),
+            ("gemini", "Gemini TTS"),
+            ("gpt-4o-audio-preview", "gpt-4o-audio-preview"),
+            ("gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview"),
+        ]
         for provider_id, display_name in tts_providers:
             self.combo_tts_provider.append(provider_id, display_name)
 
@@ -636,18 +642,42 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
 
-        # HD Voice Toggle
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
+        # HD Voice Toggle (only applies to OpenAI TTS)
+        self.row_hd_voice = Gtk.ListBoxRow()
+        _add_listbox_row_margins(self.row_hd_voice)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
+        self.row_hd_voice.add(hbox)
         label = Gtk.Label(label="TTS HD Voice", xalign=0)
         label.set_hexpand(True)
+        label.set_tooltip_text("Use tts-1-hd model for higher quality (OpenAI TTS only)")
         self.switch_hd = Gtk.Switch()
         self.switch_hd.set_active(self.tts_hd)
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.switch_hd, False, True, 0)
-        list_box.add(row)
+        list_box.add(self.row_hd_voice)
+
+        # Speech Prompt Template (for Gemini TTS and audio-preview models)
+        self.row_prompt_template = Gtk.ListBoxRow()
+        _add_listbox_row_margins(self.row_prompt_template)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.row_prompt_template.add(hbox)
+        label = Gtk.Label(label="Speech Prompt Template", xalign=0)
+        label.set_hexpand(False)
+        label.set_tooltip_text('Use {text} as placeholder for the response text. Only applies to Gemini TTS and audio-preview models.')
+        self.entry_audio_prompt_template = Gtk.Entry()
+        self.entry_audio_prompt_template.set_hexpand(True)
+        self.entry_audio_prompt_template.set_width_chars(50)
+        default_template = 'Say cheerfully: {text}'
+        self.entry_audio_prompt_template.set_placeholder_text(default_template)
+        current_template = getattr(self, "tts_prompt_template", "") or getattr(self, "read_aloud_audio_prompt_template", "") or ""
+        self.entry_audio_prompt_template.set_text(current_template)
+        self.entry_audio_prompt_template.set_tooltip_text('Use {text} as placeholder for the response text. Only applies to Gemini TTS and audio-preview models.')
+        hbox.pack_start(label, False, True, 0)
+        hbox.pack_start(self.entry_audio_prompt_template, True, True, 0)
+        list_box.add(self.row_prompt_template)
+
+        # Update visibility of HD Voice and Prompt Template based on current provider
+        self._update_tts_option_visibility()
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
@@ -663,55 +693,7 @@ class SettingsDialog(Gtk.Dialog):
         row.set_activatable(False)
         list_box.add(row)
 
-        # Read Aloud Provider
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Read Aloud Provider", xalign=0)
-        label.set_hexpand(True)
-        self.combo_read_aloud_provider = Gtk.ComboBoxText()
-
-        read_aloud_providers = [
-            ("tts", "OpenAI TTS (tts-1 / tts-1-hd)"),
-            ("gpt-4o-audio-preview", "gpt-4o-audio-preview"),
-            ("gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview"),
-        ]
-        for provider_id, display_name in read_aloud_providers:
-            self.combo_read_aloud_provider.append(provider_id, display_name)
-
-        current_provider = getattr(self, "read_aloud_provider", "tts") or "tts"
-        provider_ids = [p[0] for p in read_aloud_providers]
-        if current_provider in provider_ids:
-            self.combo_read_aloud_provider.set_active(provider_ids.index(current_provider))
-        else:
-            self.combo_read_aloud_provider.set_active(0)
-
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.combo_read_aloud_provider, False, True, 0)
-        list_box.add(row)
-
-        # Audio-preview prompt template
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Prompt Template (Auidio Preview Only)", xalign=0)
-        label.set_hexpand(False)
-        label.set_tooltip_text('Use {text} as placeholder for the response text (for audio-preview models)')
-        self.entry_audio_prompt_template = Gtk.Entry()
-        self.entry_audio_prompt_template.set_hexpand(True)
-        self.entry_audio_prompt_template.set_width_chars(50)
-        default_template = 'Please say the following verbatim in a New York accent: "{text}"'
-        self.entry_audio_prompt_template.set_placeholder_text(default_template)
-        current_template = getattr(self, "read_aloud_audio_prompt_template", "") or ""
-        self.entry_audio_prompt_template.set_text(current_template)
-        self.entry_audio_prompt_template.set_tooltip_text('Use {text} as placeholder for the response text (for audio-preview models)')
-        hbox.pack_start(label, False, True, 0)
-        hbox.pack_start(self.entry_audio_prompt_template, True, True, 0)
-        list_box.add(row)
-
-        # Read Aloud - Automatically read responses aloud
+        # Automatically read responses aloud
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -723,6 +705,20 @@ class SettingsDialog(Gtk.Dialog):
         self.switch_read_aloud.set_active(current_read_aloud_enabled)
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.switch_read_aloud, False, True, 0)
+        list_box.add(row)
+
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
         list_box.add(row)
 
         # Realtime Voice
@@ -968,6 +964,31 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
         list_box.add(row)
+
+        # --- Separator (as its own ListBoxRow, so it's visible) ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        # Make separator row not selectable/focusable:
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # ---- Music Tool section ----
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Web Search Tool</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
 
         # Enable Web Search (provider-native tools)
         row = Gtk.ListBoxRow()
@@ -1687,9 +1708,11 @@ class SettingsDialog(Gtk.Dialog):
         # Get the selected provider
         provider_id = self.combo_tts_provider.get_active_id() or "openai"
 
+        # Gemini TTS uses Gemini voices, all others use OpenAI voices
         if provider_id == "gemini":
             voices = self.GEMINI_TTS_VOICES
         else:
+            # OpenAI TTS and audio-preview models use the same OpenAI voices
             voices = self.OPENAI_TTS_VOICES
 
         for voice in voices:
@@ -1704,9 +1727,28 @@ class SettingsDialog(Gtk.Dialog):
         else:
             self.combo_tts.set_active(0)
 
+    def _update_tts_option_visibility(self):
+        """Show/hide HD Voice and Prompt Template rows based on the selected TTS provider."""
+        provider_id = self.combo_tts_provider.get_active_id() or "openai"
+        
+        # HD Voice only applies to OpenAI TTS (tts-1 / tts-1-hd)
+        if hasattr(self, 'row_hd_voice'):
+            if provider_id == "openai":
+                self.row_hd_voice.show()
+            else:
+                self.row_hd_voice.hide()
+        
+        # Prompt Template only applies to Gemini TTS and audio-preview models
+        if hasattr(self, 'row_prompt_template'):
+            if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview"):
+                self.row_prompt_template.show()
+            else:
+                self.row_prompt_template.hide()
+
     def _on_tts_provider_changed(self, combo):
         """Handle TTS provider selection change."""
         self._populate_tts_voices()
+        self._update_tts_option_visibility()
 
     # -----------------------------------------------------------------------
     # Read Aloud mutual exclusivity handlers
@@ -1915,11 +1957,11 @@ class SettingsDialog(Gtk.Dialog):
             'gemini_model_whitelist': whitelist_str('gemini', 'gemini_model_whitelist'),
             'grok_model_whitelist': whitelist_str('grok', 'grok_model_whitelist'),
             'claude_model_whitelist': whitelist_str('claude', 'claude_model_whitelist'),
-            # Read Aloud settings
+            # Read Aloud settings (uses unified TTS settings above)
             'read_aloud_enabled': self.switch_read_aloud.get_active(),
             'read_aloud_tool_enabled': self.switch_read_aloud_tool.get_active(),
-            'read_aloud_provider': self.combo_read_aloud_provider.get_active_id() or 'tts',
-            'read_aloud_audio_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
+            # Speech prompt template for Gemini TTS and audio-preview models
+            'tts_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
             # Conversation buffer length (string: "ALL", "0", "10", etc.)
             'conversation_buffer_length': (self.entry_conv_buffer.get_text() or "ALL").strip(),
             # Window / tray behavior

@@ -89,10 +89,14 @@ SETTINGS_CONFIG = {
     'ACTIVE_SYSTEM_PROMPT_ID': {'type': str, 'default': ''},
     'TEMPERAMENT': {'type': float, 'default': 1.0},
     'MICROPHONE': {'type': str, 'default': 'default'},
-    # TTS Voice Provider: 'openai' uses OpenAI TTS (tts-1/tts-1-hd), 'gemini' uses Gemini TTS.
+    # TTS Voice Provider: 'openai' uses OpenAI TTS (tts-1/tts-1-hd), 'gemini' uses Gemini TTS,
+    # 'gpt-4o-audio-preview' or 'gpt-4o-mini-audio-preview' uses audio-preview models.
+    # This is the unified TTS setting used by the play button, auto read-aloud, and read-aloud tool.
     'TTS_VOICE_PROVIDER': {'type': str, 'default': 'openai'},
     'TTS_VOICE': {'type': str, 'default': 'alloy'},
     'TTS_HD': {'type': bool, 'default': False},
+    # Speech prompt template for Gemini TTS and audio-preview models. Use {text} as placeholder.
+    'TTS_PROMPT_TEMPLATE': {'type': str, 'default': ''},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},
     'SIDEBAR_VISIBLE': {'type': bool, 'default': True},
     'SIDEBAR_WIDTH': {'type': int, 'default': 200},
@@ -131,9 +135,11 @@ SETTINGS_CONFIG = {
     # Read Aloud settings – automatically speak assistant responses.
     # When enabled, each new assistant message is read aloud using the selected provider.
     'READ_ALOUD_ENABLED': {'type': bool, 'default': False},
-    # Provider for read-aloud: 'tts' uses OpenAI tts-1/tts-1-hd, or use an audio-preview model.
+    # Provider for read-aloud: 'tts' uses OpenAI tts-1/tts-1-hd, 'gemini-tts' uses Gemini TTS, or use an audio-preview model.
     'READ_ALOUD_PROVIDER': {'type': str, 'default': 'tts'},
-    # Prompt template for audio-preview models. {text} is replaced with the response text.
+    # Voice for read-aloud. Should match the selected provider (OpenAI voices for tts/audio-preview, Gemini voices for gemini-tts).
+    'READ_ALOUD_VOICE': {'type': str, 'default': 'alloy'},
+    # Prompt template for Gemini TTS and audio-preview models. {text} is replaced with the response text.
     'READ_ALOUD_AUDIO_PROMPT_TEMPLATE': {
         'type': str,
         'default': 'Please say the following verbatim in a New York accent: "{text}"'
