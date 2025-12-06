@@ -876,6 +876,165 @@ class GrokProvider(AIProvider):
         # Reuse the OpenAI client with a different base_url.
         self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
 
+    # ------------------------------------------------------------------
+    # Helpers for Responses API + web search
+    # ------------------------------------------------------------------
+
+    def _supports_web_search_tool(self, model: str) -> bool:
+        """
+        Return True if the given Grok model should be offered the web_search/x_search tools.
+
+        xAI's documentation indicates that modern Grok chat models support the Responses
+        API with built-in web search tools. We conservatively enable web search for
+        non-image Grok models.
+        """
+        if not model:
+            return False
+
+        model_lower = model.lower()
+
+        # Skip obvious non-chat models.
+        if "image" in model_lower:
+            return False
+
+        return model_lower.startswith("grok-")
+
+    def _build_responses_input(self, messages):
+        """
+        Convert internal message format to Responses API input format for Grok.
+
+        This mirrors the OpenAI Responses input structure but omits file uploads,
+        since Grok integration currently does not support PDF/file attachments.
+
+        Returns
+        -------
+        tuple
+            (input_items, instructions)
+        """
+        input_items = []
+        instructions = None
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content_text = msg.get("content", "")
+            images = msg.get("images", [])
+
+            # Extract system messages for the instructions parameter.
+            if role == "system":
+                instructions = content_text
+                continue
+
+            # For now, skip assistant messages when building Responses input.
+            # xAI's current Responses API rejects assistant-side `output_text`
+            # style inputs, so we only send user/system content.
+            if role == "assistant":
+                continue
+
+            # Build content parts for user messages.
+            content_parts = []
+
+            if content_text:
+                content_parts.append(
+                    {
+                        "type": "input_text",
+                        "text": content_text,
+                    }
+                )
+
+            # Add image attachments (convert to base64 data URL format).
+            for img in images:
+                img_data = img.get("data", "")
+                img_mime = img.get("mime_type", "image/jpeg")
+                if img_data:
+                    content_parts.append(
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:{img_mime};base64,{img_data}",
+                        }
+                    )
+
+            if content_parts:
+                input_items.append(
+                    {
+                        "type": "message",
+                        "role": role,
+                        "content": content_parts,
+                    }
+                )
+
+        return input_items, instructions
+
+    def _extract_responses_output(self, response) -> str:
+        """
+        Extract concatenated text content from a Grok Responses API response.
+
+        For Grok web search we currently ignore function_call outputs and only
+        care about the textual answer.
+        """
+        text_content = ""
+
+        if hasattr(response, "output") and response.output:
+            for item in response.output:
+                item_type = getattr(item, "type", None)
+
+                # Handle message output (contains text).
+                if item_type == "message" and hasattr(item, "content"):
+                    for content_item in item.content:
+                        if hasattr(content_item, "text"):
+                            text_content += content_item.text
+
+        return text_content
+
+    def _generate_with_responses_api(
+        self,
+        messages,
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = None,
+        web_search_enabled: bool = False,
+    ) -> str:
+        """
+        Generate a response using xAI's Responses API for Grok models.
+
+        This path is used primarily to enable web search via the built-in
+        `web_search` and `x_search` tools when the web search toggle is on.
+        """
+        if not self.client:
+            raise RuntimeError("Grok client not initialized")
+
+        input_items, instructions = self._build_responses_input(messages)
+
+        tools = []
+        if web_search_enabled and self._supports_web_search_tool(model):
+            # xAI supports both `web_search` and `x_search` tools per docs.
+            tools.append({"type": "web_search"})
+            tools.append({"type": "x_search"})
+
+        params = {
+            "model": model,
+            "input": input_items,
+        }
+
+        if instructions:
+            params["instructions"] = instructions
+
+        if temperature is not None:
+            params["temperature"] = float(temperature)
+
+        if max_tokens and max_tokens > 0:
+            params["max_output_tokens"] = int(max_tokens)
+
+        if tools:
+            params["tools"] = tools
+
+        print(
+            f"[GrokProvider] Calling Responses API with {len(input_items)} input items, "
+            f"{len(tools)} tools (web_search_enabled={web_search_enabled})"
+        )
+
+        response = self.client.responses.create(**params)
+        return self._extract_responses_output(response)
+
     def get_available_models(self, disable_filter: bool = False):
         """
         Return Grok models. If the xAI models.list endpoint is available,
@@ -924,6 +1083,7 @@ class GrokProvider(AIProvider):
         temperature=0.7,
         max_tokens=None,
         chat_id=None,
+        # response_meta kept for interface compatibility; not used by Grok.
         web_search_enabled: bool = False,
         response_meta=None,
         image_tool_handler=None,
@@ -932,10 +1092,29 @@ class GrokProvider(AIProvider):
     ):
         """
         Generate a chat completion using Grok text models.
-        This intentionally keeps to the standard OpenAI chat.completions schema.
+
+        Routing logic:
+        - When web_search is enabled and the model supports it (and no function
+          tools are in play), use the Responses API with web_search/x_search.
+        - Otherwise, fall back to the standard chat.completions schema with
+          optional function tools (image/music/read_aloud).
         """
         if not self.client:
             raise RuntimeError("Grok client not initialized")
+
+        # Decide whether to route via the Responses API for web search.
+        has_function_tools = any(
+            handler is not None
+            for handler in (image_tool_handler, music_tool_handler, read_aloud_tool_handler)
+        )
+        if web_search_enabled and not has_function_tools and self._supports_web_search_tool(model):
+            return self._generate_with_responses_api(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                web_search_enabled=web_search_enabled,
+            )
 
         # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
         # Also support image input using the same structure as OpenAI vision models.

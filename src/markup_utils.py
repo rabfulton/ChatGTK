@@ -178,7 +178,7 @@ def _linkify(text: str) -> str:
     if not text:
         return text
 
-    # 1) Markdown links: [label](https://example.com)
+    # 1) Standard markdown links: [label](https://example.com)
     md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
 
     def _md_repl(match):
@@ -189,11 +189,24 @@ def _linkify(text: str) -> str:
     text = md_link_pattern.sub(_md_repl, text)
 
     # 2) Bare URLs. Avoid wrapping URLs that are already part of an href.
-    url_pattern = re.compile(r'(?<!href=")(https?://[^\s<]+)')
+    # We intentionally stop the URL before a '[' so that Grok-style footnote
+    # patterns like `https://example.com)[[2]](https://...)` do not get merged
+    # into a single long link. Trailing punctuation is trimmed in the
+    # replacement step.
+    url_pattern = re.compile(r'(?<!href=")(https?://[^\s<\[]+)')
 
     def _url_repl(match):
         url = match.group(1)
-        return f'<a href="{url}">{url}</a>'
+
+        # Trim trailing punctuation that should not be part of the URL.
+        # This handles patterns like `(https://example.com)` where the closing
+        # `)` or `]` (and some other punctuation) is rendered outside the link.
+        trailing = ""
+        while url and url[-1] in ")]>.,;!?":
+            trailing = url[-1] + trailing
+            url = url[:-1]
+
+        return f'<a href="{url}">{url}</a>{trailing}'
 
     text = url_pattern.sub(_url_repl, text)
     return text

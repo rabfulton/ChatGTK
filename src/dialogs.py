@@ -959,7 +959,7 @@ class SettingsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Enable Web Search (OpenAI & Gemini)", xalign=0)
+        label = Gtk.Label(label="Enable Web Search", xalign=0)
         label.set_hexpand(True)
         self.switch_web_search_settings = Gtk.Switch()
         current_web_search_enabled = bool(getattr(self, "web_search_enabled", False))
