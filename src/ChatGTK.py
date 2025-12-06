@@ -2191,6 +2191,10 @@ class OpenAIGTKClient(Gtk.Window):
                 # See https://docs.perplexity.ai/guides/chat-completions-guide
                 messages_to_send = self._messages_for_model(model)
 
+                # This will collect provider-specific metadata such as web
+                # search results so we can persist them with the message.
+                response_meta = {}
+
                 # Perplexity requires strict alternation between user and assistant
                 # messages after the system message. Clean the messages to ensure
                 # proper format.
@@ -2202,9 +2206,34 @@ class OpenAIGTKClient(Gtk.Window):
                     "temperature": float(self.temperament),
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
+                    "response_meta": response_meta,
                 }
 
                 answer = provider.generate_chat_completion(**kwargs)
+                assistant_provider_meta = response_meta or None
+
+                # If Perplexity returned web search results, append a human-readable
+                # "Sources" section to the answer so users can see and click them.
+                perplexity_meta = (response_meta or {}).get("perplexity", {})
+                search_results = perplexity_meta.get("search_results") if isinstance(perplexity_meta, dict) else None
+                if search_results:
+                    lines = []
+                    for idx, res in enumerate(search_results, start=1):
+                        title = res.get("title") or "Source"
+                        url = res.get("url") or ""
+                        date = res.get("date") or ""
+
+                        line = f"{idx}. {title}"
+                        if date:
+                            line += f" ({date})"
+                        if url:
+                            line += f" — {url}"
+                        lines.append(line)
+
+                    if lines:
+                        suffix = "Sources:\n" + "\n".join(lines)
+                        # Keep a blank line between the model answer and the sources block.
+                        answer = (answer.rstrip() + "\n\n" + suffix).rstrip()
             else:
                 raise ValueError(f"Unsupported provider: {provider_name}")
 

@@ -1,6 +1,6 @@
 # ChatGTK - A Linux GTK Chat Client
 
-A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, and Anthropic Claude APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
+A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity Sonar and Anthropic Claude APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
 
 ## Features
 
@@ -41,10 +41,11 @@ You otionally require `texlive` and `dvipng` if you want mathematics to render n
 
 The application looks for the following environment variables:
 
-- `OPENAI_API_KEY` (required for some audio functions)
+- `OPENAI_API_KEY` (Currently required for some audio functions)
 - `GEMINI_API_KEY` (optional)
 - `GROK_API_KEY` (optional)
 - `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional)
+- `PERPLEXITY_API_KEY` (optional)
 
 You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page.
 
@@ -107,7 +108,7 @@ You will need at least one API key for the application to function. Alternativel
     export GROK_API_KEY="your-grok-key"
     ```
  
-- **Anthropic Claude API key (via OpenAI SDK compatibility)**  
+- **Anthropic Claude API key**  
   - Sign up or log in at [Anthropic Console](https://console.anthropic.com/) or [Claude platform](https://platform.claude.com/).  
   - Create an API key for Claude models (e.g. `claude-sonnet-4-5`, `claude-haiku-4-5`).  
   - Set the key (either of these is accepted by the app):
@@ -118,6 +119,12 @@ You will need at least one API key for the application to function. Alternativel
   ```
   - Claude support is implemented using Anthropic's OpenAI SDK compatibility layer as documented at  
     `https://platform.claude.com/docs/en/api/openai-sdk`.
+- **Perplexity Sonar API key**
+  - create an API key at [Perplexity](https://perplexity.ai/account/api/keys)
+  - set the key:
+    ```bash
+    export PERPLEXITY_API_KEY="your-perplexity-key"
+    ```
 
 ```bash
 ./chatgtk.sh

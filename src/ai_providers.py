@@ -1612,7 +1612,49 @@ class PerplexityProvider(AIProvider):
         # Perplexity doesn't support function calling tools in the same way as OpenAI,
         # so we use a simple one-shot path.
         response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content or ""
+        content = response.choices[0].message.content or ""
+
+        # Capture web search results (if any) into provider metadata so they can be
+        # persisted with chat history and rendered alongside the answer.
+        #
+        # Per the Perplexity docs:
+        # https://docs.perplexity.ai/guides/chat-completions-guide
+        # responses include a `search_results` field with title / URL / date.
+        if response_meta is not None:
+            try:
+                search_results = getattr(response, "search_results", None)
+            except Exception:
+                search_results = None
+
+            if search_results:
+                normalized_results = []
+                for item in search_results:
+                    # `item` may be a plain dict or an object with attributes.
+                    if isinstance(item, dict):
+                        title = item.get("title")
+                        url = item.get("url")
+                        date = item.get("date")
+                    else:
+                        title = getattr(item, "title", None)
+                        url = getattr(item, "url", None)
+                        date = getattr(item, "date", None)
+
+                    norm = {}
+                    if title is not None:
+                        norm["title"] = str(title)
+                    if url is not None:
+                        norm["url"] = str(url)
+                    if date is not None:
+                        norm["date"] = str(date)
+
+                    if norm:
+                        normalized_results.append(norm)
+
+                if normalized_results:
+                    perplexity_meta = response_meta.setdefault("perplexity", {})
+                    perplexity_meta["search_results"] = normalized_results
+
+        return content
 
     def generate_image(self, prompt, chat_id, model=None, image_data=None, mime_type=None):
         """Perplexity does not support image generation."""
