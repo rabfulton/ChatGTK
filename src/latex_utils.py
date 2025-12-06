@@ -343,6 +343,7 @@ if not is_latex_installed():
 #   - HEADER: Markdown headers → \section*, etc.
 #   - LATEXCMD: Pre-existing LaTeX commands that should pass through
 #   - IMAGE: HTML img tags → \includegraphics
+#   - TABLE: Markdown tables → tabular environments
 # =============================================================================
 
 
@@ -569,9 +570,127 @@ class ProtectedRegions:
         
         return re.sub(r'<img\s+src="([^"]+)"\s*/?>', img_repl, text)
     
+    def protect_tables(self, text: str) -> str:
+        """
+        Detect simple markdown-style tables and replace them with tokens.
+        
+        Supported syntax (GitHub-style):
+        
+            | Col1 | Col2 |
+            | ---  | ---: |
+            | a    |   1  |
+        
+        This is converted to a LaTeX tabular environment. The table content is
+        fully protected from later escaping/newline logic, so it won't be
+        mangled by other processing stages.
+        """
+        def is_table_row(line: str) -> bool:
+            line = line.strip()
+            # Must start and end with '|' and contain at least one inner '|'
+            return line.startswith('|') and line.endswith('|') and line.count('|') >= 2
+
+        def split_row(line: str):
+            # Strip outer pipes and split on remaining
+            inner = line.strip().strip('|')
+            return [cell.strip() for cell in inner.split('|')]
+
+        def is_separator_line(line: str) -> bool:
+            cells = split_row(line)
+            if not cells:
+                return False
+            # All non-empty cells must look like --- / :--- / ---:
+            for cell in cells:
+                if not cell:
+                    return False
+                if not re.fullmatch(r':?-{3,}:?', cell):
+                    return False
+            return True
+
+        def alignment_from_separator(cell: str) -> str:
+            cell = cell.strip()
+            if cell.startswith(':') and cell.endswith(':'):
+                return 'c'
+            if cell.endswith(':'):
+                return 'r'
+            return 'l'
+
+        def convert_table_block(table_lines):
+            # Expect at least header + separator
+            if len(table_lines) < 2 or not is_separator_line(table_lines[1]):
+                # Not a valid table block; return original text
+                return '\n'.join(table_lines)
+
+            header_cells = split_row(table_lines[0])
+            sep_cells = split_row(table_lines[1])
+            data_lines = table_lines[2:]
+
+            # Build column alignment spec based on separator row
+            align_cells = sep_cells or ['---'] * len(header_cells)
+            # Pad/truncate to header width
+            if len(align_cells) < len(header_cells):
+                align_cells += ['---'] * (len(header_cells) - len(align_cells))
+            col_align = ''.join(alignment_from_separator(c) for c in align_cells[:len(header_cells)])
+
+            # Process cell content: allow bold/italic/math tokens, escape text
+            def process_cell(content: str) -> str:
+                # Run bold/italic conversion with token-aware escaping
+                # This reuses the same logic as normal text, but is applied
+                # before the table block is tokenized, so later passes won't
+                # touch it again.
+                return process_bold_italic(content.strip())
+
+            header_tex = ' & '.join(process_cell(c) for c in header_cells) + r' \\ \hline'
+            body_rows = []
+            for line in data_lines:
+                if not is_table_row(line):
+                    # Stop table on first non-table row
+                    break
+                cells = split_row(line)
+                # Pad/truncate to header width
+                if len(cells) < len(header_cells):
+                    cells += [''] * (len(header_cells) - len(cells))
+                row_tex = ' & '.join(process_cell(c) for c in cells[:len(header_cells)]) + r' \\'
+                body_rows.append(row_tex)
+
+            rows_tex = '\n'.join([header_tex] + body_rows)
+            return (
+                r'\begin{tabular}{' + col_align + '}' + '\n'
+                r'\hline' + '\n' +
+                rows_tex + '\n' +
+                r'\hline' + '\n' +
+                r'\end{tabular}'
+            )
+
+        lines = text.split('\n')
+        result_lines = []
+        i = 0
+        n = len(lines)
+
+        while i < n:
+            line = lines[i]
+            if is_table_row(line) and i + 1 < n and is_separator_line(lines[i + 1]):
+                # Collect contiguous table lines
+                table_block = [lines[i], lines[i + 1]]
+                i += 2
+                while i < n and is_table_row(lines[i]):
+                    table_block.append(lines[i])
+                    i += 1
+                table_tex = convert_table_block(table_block)
+                # If conversion failed, just emit original lines
+                if table_tex == '\n'.join(table_block):
+                    result_lines.extend(table_block)
+                else:
+                    token = self._store("TABLE", table_tex)
+                    result_lines.append(token)
+            else:
+                result_lines.append(line)
+                i += 1
+
+        return '\n'.join(result_lines)
+    
     def get_token_pattern(self) -> str:
         """Return regex pattern matching any token."""
-        return r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE)_\d+@@'
+        return r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE)_\d+@@'
     
     def restore_all(self, text: str) -> str:
         """
@@ -673,7 +792,7 @@ def process_bold_italic(text: str) -> str:
     - Content inside must have special chars escaped, but tokens must be preserved
     """
     # Token pattern to protect from escaping
-    token_pattern = r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE)_\d+@@'
+    token_pattern = r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE)_\d+@@'
     
     def escape_preserving_tokens(content):
         """Escape content but preserve any tokens it contains."""
@@ -861,6 +980,9 @@ def format_message_content(content: str, chat_id=None) -> str:
     
     # Images
     content = regions.protect_images(content, chat_id)
+
+    # Tables (markdown-style) - after math/code/images so cells can contain tokens
+    content = regions.protect_tables(content)
     
     # --- Step 3: Process markdown formatting in remaining plain text ---
     # Bold and italic (these create LaTeX commands that we then protect)

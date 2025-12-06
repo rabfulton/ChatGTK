@@ -2763,16 +2763,25 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_export_chat(self, widget, history_row):
         """Handle export to PDF action."""
-        # Use a FileChooserDialog for saving files
-        dialog = Gtk.FileChooserDialog(
-            title="Export Chat to PDF",
-            parent=self,
-            action=Gtk.FileChooserAction.SAVE
-        )
-        dialog.add_buttons(
-            "Cancel", Gtk.ResponseType.CANCEL,
-            "Save", Gtk.ResponseType.OK
-        )
+        # Prefer the system-native file chooser when available, fall back to Gtk.FileChooserDialog.
+        if hasattr(Gtk, "FileChooserNative"):
+            dialog = Gtk.FileChooserNative(
+                title="Export Chat to PDF",
+                transient_for=self,
+                action=Gtk.FileChooserAction.SAVE,
+                accept_label="Save",
+                cancel_label="Cancel",
+            )
+        else:
+            dialog = Gtk.FileChooserDialog(
+                title="Export Chat to PDF",
+                parent=self,
+                action=Gtk.FileChooserAction.SAVE,
+            )
+            dialog.add_buttons(
+                "Cancel", Gtk.ResponseType.CANCEL,
+                "Save", Gtk.ResponseType.OK,
+            )
         
         try:
             # Add PDF file filter
@@ -2788,7 +2797,8 @@ class OpenAIGTKClient(Gtk.Window):
             # Show the dialog
             response = dialog.run()
             
-            if response == Gtk.ResponseType.OK:
+            # Gtk.FileChooserNative returns ACCEPT, Gtk.FileChooserDialog returns OK
+            if response in (Gtk.ResponseType.OK, Gtk.ResponseType.ACCEPT):
                 filename = dialog.get_filename()
                 if not filename.endswith('.pdf'):
                     filename += '.pdf'

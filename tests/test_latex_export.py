@@ -596,6 +596,48 @@ More text"""
         assert 'More text' in result
 
 
+class TestTables:
+    """Tests for markdown table handling."""
+    
+    def test_simple_markdown_table_converted(self):
+        """A basic markdown table should become a LaTeX tabular environment."""
+        content = """Results:
+| Name | Value |
+| ---  | ---   |
+| a    | 1     |
+| b    | 2     |
+"""
+        result = format_message_content(content)
+        
+        # Should contain a tabular environment with headers and rows
+        assert r'\begin{tabular}' in result
+        assert 'Name' in result
+        assert 'Value' in result
+        assert 'a' in result
+        assert '1' in result
+        assert 'b' in result
+        assert '2' in result
+        # No table tokens should leak through
+        assert '@@TABLE_' not in result
+    
+    def test_table_with_alignment_and_math(self):
+        """Tables with alignment markers and math should render correctly."""
+        content = """| Variable | Description        |
+| :------- | -----------------: |
+| $x$      | Input value        |
+| $y$      | Output is $x^2$    |
+"""
+        result = format_message_content(content)
+        
+        # Tabular environment exists
+        assert r'\begin{tabular}' in result
+        # Math should be preserved inside the table
+        assert '$x$' in result or r'x' in result
+        assert '$x^2$' in result or r'x^2' in result
+        # No raw table markdown pipes should remain for this block
+        assert '| Variable |' not in result
+
+
 def run_tests():
     """Run all tests and print results."""
     import traceback
