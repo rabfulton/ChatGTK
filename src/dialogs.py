@@ -593,6 +593,27 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.combo_mic, False, True, 0)
         list_box.add(row)
 
+        # TTS Voice Provider
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="TTS Voice Provider", xalign=0)
+        label.set_hexpand(True)
+        self.combo_tts_provider = Gtk.ComboBoxText()
+
+        tts_providers = [("openai", "OpenAI"), ("gemini", "Gemini")]
+        for provider_id, display_name in tts_providers:
+            self.combo_tts_provider.append(provider_id, display_name)
+
+        current_tts_provider = getattr(self, "tts_voice_provider", "openai") or "openai"
+        self.combo_tts_provider.set_active_id(current_tts_provider)
+        self.combo_tts_provider.connect("changed", self._on_tts_provider_changed)
+
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_tts_provider, False, True, 0)
+        list_box.add(row)
+
         # TTS Voice
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -603,14 +624,8 @@ class SettingsDialog(Gtk.Dialog):
         voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.combo_tts = Gtk.ComboBoxText()
 
-        tts_voices = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "shimmer"]
-        for voice in tts_voices:
-            self.combo_tts.append_text(voice)
-
-        if self.tts_voice in tts_voices:
-            self.combo_tts.set_active(tts_voices.index(self.tts_voice))
-        else:
-            self.combo_tts.set_active(0)
+        # Populate voice list based on the current provider
+        self._populate_tts_voices()
 
         self.btn_preview = Gtk.Button(label="Preview")
         self.btn_preview.connect("clicked", self.on_preview_voice)
@@ -1529,56 +1544,101 @@ class SettingsDialog(Gtk.Dialog):
     # Voice preview handlers
     # -----------------------------------------------------------------------
     def on_preview_voice(self, widget):
-        """Preview the selected TTS voice."""
-        if not self.ai_provider:
-            error_dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.OK,
-                text="Error Preview Voice"
-            )
-            error_dialog.format_secondary_text("AI Provider not initialized. Please check your API key.")
-            error_dialog.run()
-            error_dialog.destroy()
+        """Preview the selected TTS voice. Generate and save if missing."""
+        selected_provider = self.combo_tts_provider.get_active_id() or "openai"
+        selected_voice = self.combo_tts.get_active_text()
+        voice_name_lower = selected_voice.lower() if selected_voice else ""
+
+        if selected_provider == "gemini":
+            # Gemini TTS preview
+            preview_dir = Path(BASE_DIR) / "gemini_preview"
+            preview_file = preview_dir / f"chirp3-hd-{voice_name_lower}.wav"
+
+            if preview_file.exists():
+                # Play existing preview
+                try:
+                    subprocess.Popen(['paplay', str(preview_file)])
+                except Exception as e:
+                    self._show_preview_error(str(e))
+                return
+
+            # Generate missing Gemini preview
+            gemini_provider = self.providers.get('gemini')
+            if not gemini_provider:
+                self._show_preview_error("Gemini API key not configured. Please add your Gemini API key in Settings > API Keys.")
+                return
+
+            preview_text = f"Hello! This is the {selected_voice} voice."
+
+            try:
+                # Ensure preview directory exists
+                preview_dir.mkdir(parents=True, exist_ok=True)
+
+                # Generate speech using Gemini TTS
+                audio_bytes = gemini_provider.generate_speech(preview_text, selected_voice)
+
+                # Save to preview file
+                with open(preview_file, 'wb') as f:
+                    f.write(audio_bytes)
+
+                # Play the generated preview
+                subprocess.Popen(['paplay', str(preview_file)])
+
+            except Exception as e:
+                self._show_preview_error(str(e))
             return
 
-        selected_voice = self.combo_tts.get_active_text()
+        # OpenAI TTS preview
+        preview_dir = Path(BASE_DIR) / "preview"
+        preview_file = preview_dir / f"{voice_name_lower}.wav"
+
+        if preview_file.exists():
+            # Play existing preview
+            try:
+                subprocess.Popen(['paplay', str(preview_file)])
+            except Exception as e:
+                self._show_preview_error(str(e))
+            return
+
+        # Generate missing OpenAI preview
+        if not self.ai_provider:
+            self._show_preview_error("OpenAI API key not configured. Please add your API key in Settings > API Keys.")
+            return
+
         preview_text = f"Hello! This is the {selected_voice} voice."
 
         try:
-            temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / "voice_preview.mp3"
+            # Ensure preview directory exists
+            preview_dir.mkdir(parents=True, exist_ok=True)
 
+            # Generate speech using OpenAI TTS and save to preview file
             with self.ai_provider.audio.speech.with_streaming_response.create(
                 model="tts-1-hd" if self.tts_hd else "tts-1",
                 voice=selected_voice,
                 input=preview_text
             ) as response:
-                with open(temp_file, 'wb') as f:
+                with open(preview_file, 'wb') as f:
                     for chunk in response.iter_bytes():
                         f.write(chunk)
 
-            os.system(f"paplay {temp_file}")
-
-            def cleanup():
-                import time
-                time.sleep(3)
-                temp_file.unlink(missing_ok=True)
-
-            threading.Thread(target=cleanup, daemon=True).start()
+            # Play the generated preview
+            subprocess.Popen(['paplay', str(preview_file)])
 
         except Exception as e:
-            error_dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.OK,
-                text="Error Preview Voice"
-            )
-            error_dialog.format_secondary_text(str(e))
-            error_dialog.run()
-            error_dialog.destroy()
+            self._show_preview_error(str(e))
+
+    def _show_preview_error(self, message: str):
+        """Show an error dialog for voice preview failures."""
+        error_dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text="Error Preview Voice"
+        )
+        error_dialog.format_secondary_text(message)
+        error_dialog.run()
+        error_dialog.destroy()
 
     def on_preview_realtime_voice(self, widget):
         """Preview the selected realtime voice using prepared WAV files."""
@@ -1602,6 +1662,51 @@ class SettingsDialog(Gtk.Dialog):
             error_dialog.format_secondary_text(str(e))
             error_dialog.run()
             error_dialog.destroy()
+
+    # -----------------------------------------------------------------------
+    # TTS Voice Provider helpers
+    # -----------------------------------------------------------------------
+    # Voice lists for each TTS provider
+    OPENAI_TTS_VOICES = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "shimmer"]
+    GEMINI_TTS_VOICES = [
+        "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
+        "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
+        "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+        "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
+        "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+    ]
+
+    def _populate_tts_voices(self):
+        """Populate the TTS voice combo based on the currently selected provider."""
+        # Remember current selection if any
+        current_voice = self.combo_tts.get_active_text()
+
+        # Clear existing items
+        self.combo_tts.remove_all()
+
+        # Get the selected provider
+        provider_id = self.combo_tts_provider.get_active_id() or "openai"
+
+        if provider_id == "gemini":
+            voices = self.GEMINI_TTS_VOICES
+        else:
+            voices = self.OPENAI_TTS_VOICES
+
+        for voice in voices:
+            self.combo_tts.append_text(voice)
+
+        # Try to restore previous selection, or use saved setting, or default to first
+        saved_voice = getattr(self, "tts_voice", None)
+        if current_voice and current_voice in voices:
+            self.combo_tts.set_active(voices.index(current_voice))
+        elif saved_voice and saved_voice in voices:
+            self.combo_tts.set_active(voices.index(saved_voice))
+        else:
+            self.combo_tts.set_active(0)
+
+    def _on_tts_provider_changed(self, combo):
+        """Handle TTS provider selection change."""
+        self._populate_tts_voices()
 
     # -----------------------------------------------------------------------
     # Read Aloud mutual exclusivity handlers
@@ -1790,6 +1895,7 @@ class SettingsDialog(Gtk.Dialog):
             'active_system_prompt_id': self._active_prompt_id,
             'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
+            'tts_voice_provider': self.combo_tts_provider.get_active_id() or 'openai',
             'tts_voice': self.combo_tts.get_active_text(),
             'realtime_voice': self.combo_realtime.get_active_text(),
             'max_tokens': int(self.spin_max_tokens.get_value()),

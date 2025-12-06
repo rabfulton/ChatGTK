@@ -89,6 +89,8 @@ SETTINGS_CONFIG = {
     'ACTIVE_SYSTEM_PROMPT_ID': {'type': str, 'default': ''},
     'TEMPERAMENT': {'type': float, 'default': 1.0},
     'MICROPHONE': {'type': str, 'default': 'default'},
+    # TTS Voice Provider: 'openai' uses OpenAI TTS (tts-1/tts-1-hd), 'gemini' uses Gemini TTS.
+    'TTS_VOICE_PROVIDER': {'type': str, 'default': 'openai'},
     'TTS_VOICE': {'type': str, 'default': 'alloy'},
     'TTS_HD': {'type': bool, 'default': False},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},

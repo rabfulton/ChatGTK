@@ -1999,8 +1999,144 @@ class GeminiProvider(AIProvider):
     def transcribe_audio(self, audio_file):
         raise NotImplementedError("Gemini provider does not support audio transcription yet.")
     
-    def generate_speech(self, text, voice):
-        raise NotImplementedError("Gemini provider does not support TTS yet.")
+    def generate_speech(self, text: str, voice: str) -> bytes:
+        """
+        Generate speech audio using Gemini TTS model.
+        
+        Parameters
+        ----------
+        text : str
+            The text to synthesize into speech.
+        voice : str
+            The Gemini voice name (e.g., "Zephyr", "Puck", "Kore").
+            
+        Returns
+        -------
+        bytes
+            The WAV audio data (with proper header).
+            
+        Raises
+        ------
+        RuntimeError
+            If the API call fails or no audio is returned.
+        """
+        self._require_key()
+        
+        # Gemini TTS model
+        model = "gemini-2.5-flash-preview-tts"
+        
+        # Build the request payload following Gemini speech generation docs
+        # The voice is specified in speechConfig
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": text}]
+                }
+            ],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voiceName": voice
+                        }
+                    }
+                }
+            }
+        }
+        
+        try:
+            resp = requests.post(
+                f"{self.BASE_URL}/models/{model}:generateContent",
+                headers=self._headers(),
+                json=payload,
+                timeout=120  # TTS can take a while for longer texts
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(f"Gemini TTS API call failed: {exc}") from exc
+        
+        # Extract audio data from response
+        # Gemini returns audio as base64-encoded data in inlineData
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise RuntimeError("Gemini TTS returned no candidates")
+        
+        audio_data = None
+        mime_type = None
+        for candidate in candidates:
+            parts = candidate.get("content", {}).get("parts", [])
+            for part in parts:
+                inline_data = part.get("inlineData")
+                if inline_data and inline_data.get("mimeType", "").startswith("audio/"):
+                    audio_data = inline_data.get("data")
+                    mime_type = inline_data.get("mimeType", "")
+                    break
+            if audio_data:
+                break
+        
+        if not audio_data:
+            raise RuntimeError("Gemini TTS response missing audio data")
+        
+        # Decode the base64 audio data
+        raw_audio = base64.b64decode(audio_data)
+        
+        # Gemini TTS returns LINEAR16 PCM data at 24kHz mono
+        # If it's raw PCM (audio/L16), we need to add a WAV header
+        if "L16" in mime_type or "pcm" in mime_type.lower():
+            # Add WAV header for 24kHz, 16-bit, mono PCM
+            return self._add_wav_header(raw_audio, sample_rate=24000, channels=1, bits_per_sample=16)
+        
+        # If it's already WAV or another playable format, return as-is
+        return raw_audio
+    
+    def _add_wav_header(self, pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, bits_per_sample: int = 16) -> bytes:
+        """
+        Add a WAV header to raw PCM audio data.
+        
+        Parameters
+        ----------
+        pcm_data : bytes
+            Raw PCM audio samples.
+        sample_rate : int
+            Sample rate in Hz (default 24000 for Gemini TTS).
+        channels : int
+            Number of audio channels (default 1 for mono).
+        bits_per_sample : int
+            Bits per sample (default 16).
+            
+        Returns
+        -------
+        bytes
+            Complete WAV file with header.
+        """
+        import struct
+        
+        byte_rate = sample_rate * channels * bits_per_sample // 8
+        block_align = channels * bits_per_sample // 8
+        data_size = len(pcm_data)
+        
+        # WAV header (44 bytes)
+        header = struct.pack(
+            '<4sI4s4sIHHIIHH4sI',
+            b'RIFF',                    # ChunkID
+            36 + data_size,             # ChunkSize
+            b'WAVE',                    # Format
+            b'fmt ',                    # Subchunk1ID
+            16,                         # Subchunk1Size (PCM)
+            1,                          # AudioFormat (1 = PCM)
+            channels,                   # NumChannels
+            sample_rate,                # SampleRate
+            byte_rate,                  # ByteRate
+            block_align,                # BlockAlign
+            bits_per_sample,            # BitsPerSample
+            b'data',                    # Subchunk2ID
+            data_size                   # Subchunk2Size
+        )
+        
+        return header + pcm_data
 
 class OpenAIWebSocketProvider:
     def __init__(self):

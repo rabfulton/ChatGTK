@@ -3000,9 +3000,11 @@ class OpenAIGTKClient(Gtk.Window):
                             import hashlib
                             text_hash = hashlib.md5(text_content.encode()).hexdigest()[:8]
 
-                            # Look for file matching the current settings and text hash
+                            # Determine TTS provider and build cache filename accordingly
+                            tts_provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
                             current_mode = "ttshd" if self.tts_hd else "tts"
-                            existing_file = audio_dir / f"{current_mode}_{self.tts_voice}_{text_hash}.wav"
+                            # Include provider in filename to separate OpenAI and Gemini caches
+                            existing_file = audio_dir / f"{tts_provider}_{current_mode}_{self.tts_voice}_{text_hash}.wav"
                             
                             if existing_file.exists():
                                 # Play existing TTS file
@@ -3017,16 +3019,38 @@ class OpenAIGTKClient(Gtk.Window):
                             # Generate filename with timestamp and TTS settings
                             audio_file = existing_file
                             
-                            with ai_provider.audio.speech.with_streaming_response.create(
-                                model="tts-1-hd" if self.tts_hd else "tts-1",
-                                voice=self.tts_voice,
-                                input=clean_text
-                            ) as response:
+                            if tts_provider == 'gemini':
+                                # Use Gemini TTS
+                                gemini_provider = self.providers.get('gemini')
+                                if not gemini_provider:
+                                    api_key = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')).strip()
+                                    if api_key:
+                                        gemini_provider = self.initialize_provider('gemini', api_key)
+                                
+                                if not gemini_provider:
+                                    raise RuntimeError("Gemini API key not configured. Please add your Gemini API key in Settings > API Keys.")
+                                
+                                # Generate speech using Gemini TTS
+                                audio_bytes = gemini_provider.generate_speech(clean_text, self.tts_voice)
+                                
+                                if not is_playing:
+                                    return
+                                
+                                # Write audio to cache file
                                 with open(audio_file, 'wb') as f:
-                                    for chunk in response.iter_bytes():
-                                        if not is_playing:  # Check if stopped
-                                            break
-                                        f.write(chunk)
+                                    f.write(audio_bytes)
+                            else:
+                                # Use OpenAI TTS (existing behavior)
+                                with ai_provider.audio.speech.with_streaming_response.create(
+                                    model="tts-1-hd" if self.tts_hd else "tts-1",
+                                    voice=self.tts_voice,
+                                    input=clean_text
+                                ) as response:
+                                    with open(audio_file, 'wb') as f:
+                                        for chunk in response.iter_bytes():
+                                            if not is_playing:  # Check if stopped
+                                                break
+                                            f.write(chunk)
                             
                             if is_playing:  # Only keep and play if not stopped
                                 # Update audio file path for future playback

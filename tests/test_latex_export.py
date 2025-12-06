@@ -15,10 +15,12 @@ import sys
 import os
 import re
 
-# Add src directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Ensure project root is on sys.path so we can import the src package
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from latex_utils import (
+from src.latex_utils import (
     ProtectedRegions,
     escape_latex_text_simple,
     insert_forced_newlines_safe,

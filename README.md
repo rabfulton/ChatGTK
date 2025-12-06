@@ -134,7 +134,7 @@ You will need at least one API key for the application to function. Alternativel
     export PERPLEXITY_API_KEY="your-perplexity-key"
     ```
 
-### Tools support (images, music, web search & read aloud)
+### Tools Support (images, music, web search & read aloud)
 
 - **Image tool (`generate_image`)**
   - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
