@@ -54,13 +54,13 @@ SETTINGS_CONFIG = {
     'FONT_SIZE': {'type': int, 'default': 12},
     'USER_COLOR': {'type': str, 'default': '#2E7D32'},
     'AI_COLOR': {'type': str, 'default': '#0D47A1'},
-    'DEFAULT_MODEL': {'type': str, 'default': 'gpt-3.5-turbo'},
+    'DEFAULT_MODEL': {'type': str, 'default': 'gpt-4o-mini'},
     # Preferred image model for both autonomous tool calls and the `img:` prefix.
     # This can be any supported image-capable model from OpenAI, Gemini, or Grok.
     'IMAGE_MODEL': {'type': str, 'default': 'dall-e-3'},
     # Master switch for exposing the image-generation tool to text models.
     # When false, models will not be told about the tool and cannot call it.
-    'IMAGE_TOOL_ENABLED': {'type': bool, 'default': True},
+    'IMAGE_TOOL_ENABLED': {'type': bool, 'default': False},
     # Master switch for exposing the music control tool (beets + local player) to text models.
     # When false, models will not be told about the tool and cannot call it.
     'MUSIC_TOOL_ENABLED': {'type': bool, 'default': False},
@@ -114,7 +114,7 @@ SETTINGS_CONFIG = {
     # These defaults mirror the curated sets previously hardcoded in ai_providers.py.
     'OPENAI_MODEL_WHITELIST': {
         'type': str,
-        'default': 'gpt-3.5-turbo,gpt-4,dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview,o1-mini,o1-preview,chatgpt-4o-latest,gpt-4-turbo,gpt-4.1,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-realtime,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest,gpt-5-pro'
+        'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-realtime,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
     },
     'GEMINI_MODEL_WHITELIST': {
         'type': str,
@@ -138,7 +138,7 @@ SETTINGS_CONFIG = {
     # Provider for read-aloud: 'tts' uses OpenAI tts-1/tts-1-hd, 'gemini-tts' uses Gemini TTS, or use an audio-preview model.
     'READ_ALOUD_PROVIDER': {'type': str, 'default': 'tts'},
     # Voice for read-aloud. Should match the selected provider (OpenAI voices for tts/audio-preview, Gemini voices for gemini-tts).
-    'READ_ALOUD_VOICE': {'type': str, 'default': 'alloy'},
+    'READ_ALOUD_VOICE': {'type': str, 'default': 'nova'},
     # Prompt template for Gemini TTS and audio-preview models. {text} is replaced with the response text.
     'READ_ALOUD_AUDIO_PROMPT_TEMPLATE': {
         'type': str,

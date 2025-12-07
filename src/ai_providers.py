@@ -21,6 +21,7 @@ from tools import (
     run_tool_call,
     parse_tool_arguments,
 )
+from config import HISTORY_DIR
 
 class AIProvider(ABC):
     """Abstract base class for AI providers."""
@@ -628,7 +629,7 @@ class OpenAIProvider(AIProvider):
                 text_content = transcript
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                audio_dir = Path('history') / chat_id.replace('.json', '') / 'audio'
+                audio_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'audio'
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 
                 audio_file = audio_dir / f"response_{timestamp}.wav"
@@ -810,7 +811,7 @@ class OpenAIProvider(AIProvider):
             else:
                 raise ValueError("Image response missing both URL and base64 data")
         
-        images_dir = Path('history') / chat_id.replace('.json', '') / 'images'
+        images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1282,7 +1283,7 @@ class GrokProvider(AIProvider):
         else:
             raise ValueError("Grok image response missing both URL and base64 data")
 
-        images_dir = Path('history') / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
+        images_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1989,7 +1990,7 @@ class GeminiProvider(AIProvider):
             raise ValueError("Gemini response missing inline image data")
         
         image_bytes = base64.b64decode(inline_data)
-        images_dir = Path('history') / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
+        images_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         image_path = images_dir / f"{model.replace('-', '_')}_{timestamp}.png"
