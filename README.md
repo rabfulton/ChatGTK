@@ -17,7 +17,7 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - Real-time voice conversation support using gpt-4o-realtime-preview model
 - Reasoning support for OpenAI's o3 models
 - Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS.
-- Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, and Anthropic Claude via separate API keys.
+- Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, Perplexity and Anthropic Claude via separate API keys.
 - Web search grounding for OpenAI and Gemini models to provide up-to-date, cited answers.
 
 ### Installation from AUR

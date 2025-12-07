@@ -1722,10 +1722,10 @@ class OpenAIGTKClient(Gtk.Window):
                                 img_path = re.search(r'src="([^"]+)"', part).group(1)
                                 # LaTeX math images stay at their natural (small) size
                                 if self._is_latex_math_image(img_path):
-                                    insert_tex_image(buffer, iter, img_path)
+                                    insert_tex_image(buffer, iter, img_path, text_view, self, is_math_image=True)
                                 else:
                                     # Model-generated or other non-math images resize with chat width
-                                    insert_resized_image(buffer, iter, img_path, text_view)
+                                    insert_resized_image(buffer, iter, img_path, text_view, self)
                             else:
                                 text = process_text_formatting(part, self.font_size)
                                 buffer.insert_markup(iter, text, -1)
@@ -2892,6 +2892,97 @@ class OpenAIGTKClient(Gtk.Window):
         finally:
             dialog.destroy()
 
+    def save_image_to_file(self, img_path):
+        """Show file chooser dialog and save image to selected location."""
+        import shutil
+        
+        # Prefer the system-native file chooser when available
+        if hasattr(Gtk, "FileChooserNative"):
+            dialog = Gtk.FileChooserNative(
+                title="Save Image",
+                transient_for=self,
+                action=Gtk.FileChooserAction.SAVE,
+                accept_label="Save",
+                cancel_label="Cancel",
+            )
+        else:
+            dialog = Gtk.FileChooserDialog(
+                title="Save Image",
+                parent=self,
+                action=Gtk.FileChooserAction.SAVE,
+            )
+            dialog.add_buttons(
+                "Cancel", Gtk.ResponseType.CANCEL,
+                "Save", Gtk.ResponseType.OK,
+            )
+        
+        try:
+            # Get the original filename
+            original_filename = Path(img_path).name
+            # Extract extension if present
+            if '.' in original_filename:
+                base_name = original_filename.rsplit('.', 1)[0]
+                extension = '.' + original_filename.rsplit('.', 1)[1]
+            else:
+                base_name = original_filename
+                extension = '.png'  # Default to PNG
+            
+            # Add image file filters
+            image_filter = Gtk.FileFilter()
+            image_filter.set_name("Image files")
+            image_filter.add_pattern("*.png")
+            image_filter.add_pattern("*.jpg")
+            image_filter.add_pattern("*.jpeg")
+            image_filter.add_pattern("*.gif")
+            image_filter.add_pattern("*.bmp")
+            image_filter.add_pattern("*.webp")
+            dialog.add_filter(image_filter)
+            
+            # Add all files filter
+            all_filter = Gtk.FileFilter()
+            all_filter.set_name("All files")
+            all_filter.add_pattern("*")
+            dialog.add_filter(all_filter)
+            
+            # Set default filename
+            dialog.set_current_name(base_name + extension)
+            
+            # Show the dialog
+            response = dialog.run()
+            
+            # Gtk.FileChooserNative returns ACCEPT, Gtk.FileChooserDialog returns OK
+            if response in (Gtk.ResponseType.OK, Gtk.ResponseType.ACCEPT):
+                filename = dialog.get_filename()
+                if filename:
+                    try:
+                        # Copy the image file to the selected location
+                        shutil.copy2(img_path, filename)
+                        
+                        # Show success message
+                        info_dialog = Gtk.MessageDialog(
+                            transient_for=self,
+                            flags=0,
+                            message_type=Gtk.MessageType.INFO,
+                            buttons=Gtk.ButtonsType.OK,
+                            text="Image Saved"
+                        )
+                        info_dialog.format_secondary_text(f"Image saved to {filename}")
+                        info_dialog.run()
+                        info_dialog.destroy()
+                    except Exception as e:
+                        error_dialog = Gtk.MessageDialog(
+                            transient_for=self,
+                            flags=0,
+                            message_type=Gtk.MessageType.ERROR,
+                            buttons=Gtk.ButtonsType.OK,
+                            text="Save Error"
+                        )
+                        error_dialog.format_secondary_text(f"Error saving image: {str(e)}")
+                        error_dialog.run()
+                        error_dialog.destroy()
+        finally:
+            dialog.destroy()
+
     def on_history_button_press(self, widget, event):
         """Handle right-click on history items."""
         if event.button == 3:  # Right click
@@ -3526,10 +3617,10 @@ class OpenAIGTKClient(Gtk.Window):
                     img_path = re.search(r'src="([^"]+)"', part).group(1)
                     # Keep LaTeX math images at their natural size
                     if self._is_latex_math_image(img_path):
-                        insert_tex_image(buffer, iter_, img_path)
+                        insert_tex_image(buffer, iter_, img_path, text_view, self, is_math_image=True)
                     else:
                         # Make model-generated and other non-math images responsive
-                        insert_resized_image(buffer, iter_, img_path, text_view)
+                        insert_resized_image(buffer, iter_, img_path, text_view, self)
                 else:
                     markup = process_text_formatting(part, self.font_size)
                     buffer.insert_markup(iter_, markup, -1)

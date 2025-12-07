@@ -382,7 +382,7 @@ def rgb_to_hex(color_str):
             return f'#{r:02x}{g:02x}{b:02x}'
     return color_str  # Return unchanged if not rgb format
 
-def insert_resized_image(buffer, iter, img_path, text_view=None):
+def insert_resized_image(buffer, iter, img_path, text_view=None, window=None):
     """Insert an image into the text buffer with responsive sizing.
 
     The image will shrink to fit the available width in the TextView while
@@ -407,6 +407,29 @@ def insert_resized_image(buffer, iter, img_path, text_view=None):
         image = Gtk.Image.new_from_pixbuf(pixbuf)
         image.set_size_request(100, -1)  # Set minimum width for image too
         image.set_vexpand(False)  # Don't expand vertically
+        
+        # Add right-click context menu to save image
+        # Wrap image in EventBox to receive button events
+        if window is not None:
+            event_box = Gtk.EventBox()
+            event_box.add(image)
+            event_box.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+            
+            def on_image_button_press(widget, event):
+                if event.button == 3:  # Right click
+                    menu = Gtk.Menu()
+                    save_item = Gtk.MenuItem(label="Save Image As...")
+                    save_item.connect("activate", lambda w: window.save_image_to_file(img_path))
+                    menu.append(save_item)
+                    menu.show_all()
+                    menu.popup_at_pointer(event)
+                    return True
+                return False
+            
+            event_box.connect("button-press-event", on_image_button_press)
+            image_widget = event_box
+        else:
+            image_widget = image
 
         def on_size_allocate(widget, allocation):
             if text_view is None:
@@ -440,8 +463,8 @@ def insert_resized_image(buffer, iter, img_path, text_view=None):
         if text_view is not None:
             text_view.connect('size-allocate', on_size_allocate)
 
-        # Add image to scrolled window
-        scroll.add(image)
+        # Add image (or event box) to scrolled window
+        scroll.add(image_widget)
 
         # Insert into buffer
         anchor = buffer.create_child_anchor(iter)

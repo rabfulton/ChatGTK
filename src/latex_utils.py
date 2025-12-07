@@ -16,7 +16,8 @@ import os
 import gi
 import hashlib
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import GdkPixbuf
+gi.require_version('Gtk', '3.0')
+from gi.repository import GdkPixbuf, Gtk, Gdk
 import shutil
 from datetime import datetime
 from config import HISTORY_DIR
@@ -280,11 +281,130 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
     )
     return text
 
-def insert_tex_image(buffer, iter, img_path):
+def insert_tex_image(buffer, iter, img_path, text_view=None, window=None, is_math_image=False):
     """Insert a TeX-generated image into the text buffer."""
     try:
         pixbuf = GdkPixbuf.Pixbuf.new_from_file(img_path)
+        
+        # Store the position before insertion (pixbuf will be inserted at this position)
+        start_iter = iter.copy()
+        
+        # Insert pixbuf (GTK3 insert_pixbuf only takes 2 arguments: iter and pixbuf)
         buffer.insert_pixbuf(iter, pixbuf)
+        
+        # Only add right-click functionality for non-math images
+        if not is_math_image and text_view is not None and window is not None:
+            # Store image path mapping for this buffer
+            if not hasattr(buffer, '_image_paths'):
+                buffer._image_paths = {}
+            
+            # Create a tag to mark this pixbuf
+            import hashlib
+            tag_name = f"image_{hashlib.md5(img_path.encode()).hexdigest()[:8]}"
+            tag = buffer.create_tag(tag_name)
+            
+            # Apply tag to the pixbuf we just inserted
+            # start_iter is at the pixbuf position, iter is now after it
+            end_iter = iter.copy()
+            buffer.apply_tag(tag, start_iter, end_iter)
+            
+            # Store the path with the tag name as key
+            buffer._image_paths[tag_name] = img_path
+            
+            def on_text_view_button_press(widget, event):
+                if event.button == 3:  # Right click
+                    # Get the iter at the click position
+                    x, y = text_view.window_to_buffer_coords(
+                        Gtk.TextWindowType.WIDGET, int(event.x), int(event.y)
+                    )
+                    iter_at_click = text_view.get_iter_at_location(x, y)
+                    
+                    if iter_at_click is None:
+                        return False
+                    
+                    img_path_at_click = None
+                    
+                    # Check if the character at this position is the object replacement character (U+FFFC)
+                    # which GTK uses for pixbufs and other embedded objects
+                    try:
+                        char = iter_at_click.get_char()
+                        # Object replacement character (U+FFFC) is used for pixbufs
+                        if char == '\ufffc':
+                            # This is a pixbuf, check for image tags
+                            # Get tags at this position
+                            tags = iter_at_click.get_tags()
+                            for tag_obj in tags:
+                                tag_name_at_pos = tag_obj.get_property('name')
+                                if tag_name_at_pos and tag_name_at_pos.startswith('image_'):
+                                    if hasattr(buffer, '_image_paths'):
+                                        img_path_at_click = buffer._image_paths.get(tag_name_at_pos)
+                                        if img_path_at_click:
+                                            break
+                            
+                            # If not found, check nearby positions (pixbuf might span multiple positions)
+                            if img_path_at_click is None:
+                                # Check a small range around the click
+                                start_iter = iter_at_click.copy()
+                                end_iter = iter_at_click.copy()
+                                # Check a few characters before and after
+                                for i in range(3):
+                                    if start_iter.backward_char():
+                                        tags = start_iter.get_tags()
+                                        for tag_obj in tags:
+                                            tag_name_at_pos = tag_obj.get_property('name')
+                                            if tag_name_at_pos and tag_name_at_pos.startswith('image_'):
+                                                if hasattr(buffer, '_image_paths'):
+                                                    img_path_at_click = buffer._image_paths.get(tag_name_at_pos)
+                                                    if img_path_at_click:
+                                                        break
+                                        if img_path_at_click:
+                                            break
+                                    else:
+                                        break
+                                
+                                # Also check forward
+                                if img_path_at_click is None:
+                                    for i in range(3):
+                                        if end_iter.forward_char():
+                                            tags = end_iter.get_tags()
+                                            for tag_obj in tags:
+                                                tag_name_at_pos = tag_obj.get_property('name')
+                                                if tag_name_at_pos and tag_name_at_pos.startswith('image_'):
+                                                    if hasattr(buffer, '_image_paths'):
+                                                        img_path_at_click = buffer._image_paths.get(tag_name_at_pos)
+                                                        if img_path_at_click:
+                                                            break
+                                            if img_path_at_click:
+                                                break
+                                        else:
+                                            break
+                    except Exception as e:
+                        # If we can't get the character, try checking tags anyway
+                        tags = iter_at_click.get_tags()
+                        for tag_obj in tags:
+                            tag_name_at_pos = tag_obj.get_property('name')
+                            if tag_name_at_pos and tag_name_at_pos.startswith('image_'):
+                                if hasattr(buffer, '_image_paths'):
+                                    img_path_at_click = buffer._image_paths.get(tag_name_at_pos)
+                                    if img_path_at_click:
+                                        break
+                    
+                    if img_path_at_click:
+                        menu = Gtk.Menu()
+                        save_item = Gtk.MenuItem(label="Save Image As...")
+                        save_item.connect("activate", lambda w: window.save_image_to_file(img_path_at_click))
+                        menu.append(save_item)
+                        menu.show_all()
+                        menu.popup_at_pointer(event)
+                        return True
+                
+                return False
+            
+            # Only connect once per text_view
+            if not hasattr(text_view, '_image_button_handler_connected'):
+                text_view.connect("button-press-event", on_text_view_button_press)
+                text_view._image_button_handler_connected = True
+        
         return True
     except Exception as e:
         print(f"Error loading image: {e}")
@@ -1251,6 +1371,7 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 \DeclareUnicodeCharacter{2194}{\ensuremath{\leftrightarrow}} % ↔
 \DeclareUnicodeCharacter{2202}{\ensuremath{\partial}}    % ∂
 \DeclareUnicodeCharacter{2207}{\ensuremath{\nabla}}     % ∇
+\DeclareUnicodeCharacter{221A}{\ensuremath{\sqrt{\,}}}     % √
 \DeclareUnicodeCharacter{00B0}{\ensuremath{^{\circ}}}   % °
 \DeclareUnicodeCharacter{2070}{\ensuremath{^{0}}}     % ⁰
 \DeclareUnicodeCharacter{00B9}{\ensuremath{^{1}}}     % ¹
