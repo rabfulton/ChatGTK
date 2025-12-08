@@ -15,6 +15,7 @@ import subprocess
 import mimetypes
 import base64
 import time
+import getpass
 from latex_utils import (
     tex_to_png,
     process_tex_markup,
@@ -1591,7 +1592,8 @@ class OpenAIGTKClient(Gtk.Window):
         css = f"label {{ color: {self.user_color}; font-family: {self.font_family}; font-size: {self.font_size}pt; background-color: @theme_base_color; border-radius: 12px; padding: 10px; }}"
         self.apply_css(lbl, css)
 
-        lbl.set_text(f"You: {text}")
+        username = getpass.getuser()
+        lbl.set_text(f"{username}: {text}")
         self.conversation_box.pack_start(lbl, False, False, 0)
         self.conversation_box.show_all()
 
