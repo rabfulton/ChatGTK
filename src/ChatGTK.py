@@ -1715,9 +1715,12 @@ class OpenAIGTKClient(Gtk.Window):
         # Handle link clicks manually since TextView does not natively activate them
         def on_event(view, event):
             if event.type == Gdk.EventType.BUTTON_RELEASE and event.button == 1:
-                x, y = view.window_to_buffer_coords(
-                    Gtk.TextWindowType.TEXT, int(event.x), int(event.y)
-                )
+                # Determine which TextWindow received the event so coordinates map correctly
+                window_type = view.get_window_type(event.window)
+                if window_type == Gtk.TextWindowType.UNKNOWN:
+                    return False
+
+                x, y = view.window_to_buffer_coords(window_type, int(event.x), int(event.y))
                 iter_result = view.get_iter_at_location(x, y)
                 if isinstance(iter_result, tuple):
                     iter_at_click = iter_result[0]
