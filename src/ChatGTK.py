@@ -1597,7 +1597,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _register_link_tag(self, tag: Gtk.TextTag, url: str):
         """Attach link metadata to a tag for click handling."""
-        tag.set_data("href", url)
+        tag.href = url
 
     def _get_link_color(self, widget: Gtk.Widget):
         """Return the theme-provided link color for the given widget, if any."""
@@ -1623,7 +1623,7 @@ class OpenAIGTKClient(Gtk.Window):
         apply a tagged underline that we can handle manually.
         """
         if link_rgba is None:
-            link_rgba = buffer.get_data("link_rgba")
+            link_rgba = getattr(buffer, "link_rgba", None)
 
         link_pattern = re.compile(r'<a href="([^"]+)">(.*?)</a>')
         pos = 0
@@ -1706,7 +1706,7 @@ class OpenAIGTKClient(Gtk.Window):
         buffer = text_view.get_buffer()
         link_rgba = self._get_link_color(text_view)
         if link_rgba:
-            buffer.set_data("link_rgba", link_rgba)
+            buffer.link_rgba = link_rgba
         if markup_text:
             self._insert_markup_with_links(buffer, markup_text, link_rgba)
             self._apply_bullet_hanging_indent(buffer)
@@ -1726,7 +1726,7 @@ class OpenAIGTKClient(Gtk.Window):
                     return False
 
                 for tag in iter_at_click.get_tags():
-                    url = tag.get_data("href")
+                    url = getattr(tag, "href", None)
                     if url:
                         Gtk.show_uri_on_window(self.get_window(), url, Gdk.CURRENT_TIME)
                         return True
@@ -1847,7 +1847,7 @@ class OpenAIGTKClient(Gtk.Window):
                                     insert_resized_image(buffer, insert_iter, img_path, text_view, self)
                             else:
                                 text = process_text_formatting(part, self.font_size)
-                                self._insert_markup_with_links(buffer, text, buffer.get_data("link_rgba"))
+                                self._insert_markup_with_links(buffer, text, getattr(buffer, "link_rgba", None))
                         self._apply_bullet_hanging_indent(buffer)
                         content_container.pack_start(text_view, False, False, 0)
                     else:
