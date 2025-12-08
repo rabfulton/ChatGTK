@@ -283,14 +283,56 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
 
 def insert_tex_image(buffer, iter, img_path, text_view=None, window=None, is_math_image=False):
     """Insert a TeX-generated image into the text buffer."""
+    pixbuf_mark = None
     try:
+        # Check if this is a display math equation before insertion
+        is_display_math = False
+        if is_math_image:
+            try:
+                name = os.path.basename(str(img_path))
+                is_display_math = name.startswith("math_display_")
+            except Exception:
+                pass
+        
+        # For display math, ensure it's on its own line for proper centering
+        if is_display_math:
+            # Check if we need to add a newline before
+            check_iter = iter.copy()
+            if not check_iter.starts_line():
+                # Not at the start of a line, add a newline before
+                buffer.insert(iter, "\n")
+                # iter has now moved to the start of the new line
+        
         pixbuf = GdkPixbuf.Pixbuf.new_from_file(img_path)
         
-        # Store the position before insertion (pixbuf will be inserted at this position)
-        start_iter = iter.copy()
+        # Use a mark to preserve the pixbuf position across buffer modifications
+        # This is necessary because insertions invalidate iterators
+        pixbuf_mark = buffer.create_mark(None, iter, left_gravity=True)
         
         # Insert pixbuf (GTK3 insert_pixbuf only takes 2 arguments: iter and pixbuf)
         buffer.insert_pixbuf(iter, pixbuf)
+        
+        if is_display_math:
+            # Add a newline after display math to ensure it's on its own line
+            buffer.insert(iter, "\n")
+            
+            # Create a tag with center justification for display math
+            # Use a consistent tag name so we can reuse it
+            if not hasattr(buffer, '_display_math_tag'):
+                buffer._display_math_tag = buffer.create_tag("display_math_center")
+                buffer._display_math_tag.set_property("justification", Gtk.Justification.CENTER)
+            
+            # Get fresh iterators from the mark (marks remain valid after buffer modifications)
+            pixbuf_iter = buffer.get_iter_at_mark(pixbuf_mark)
+            
+            # Apply the center justification tag to the line containing the pixbuf
+            # Get the start and end of the line containing the pixbuf
+            line_start = pixbuf_iter.copy()
+            line_start.set_line_offset(0)  # Start of line
+            line_end = pixbuf_iter.copy()
+            line_end.forward_to_line_end()  # End of line (before the newline we just added)
+            
+            buffer.apply_tag(buffer._display_math_tag, line_start, line_end)
         
         # Only add right-click functionality for non-math images
         if not is_math_image and text_view is not None and window is not None:
@@ -304,9 +346,10 @@ def insert_tex_image(buffer, iter, img_path, text_view=None, window=None, is_mat
             tag = buffer.create_tag(tag_name)
             
             # Apply tag to the pixbuf we just inserted
-            # start_iter is at the pixbuf position, iter is now after it
+            # Get fresh iterator from mark (marks remain valid after buffer modifications)
+            pixbuf_iter = buffer.get_iter_at_mark(pixbuf_mark)
             end_iter = iter.copy()
-            buffer.apply_tag(tag, start_iter, end_iter)
+            buffer.apply_tag(tag, pixbuf_iter, end_iter)
             
             # Store the path with the tag name as key
             buffer._image_paths[tag_name] = img_path
@@ -405,8 +448,18 @@ def insert_tex_image(buffer, iter, img_path, text_view=None, window=None, is_mat
                 text_view.connect("button-press-event", on_text_view_button_press)
                 text_view._image_button_handler_connected = True
         
+        # Clean up the mark we created
+        if pixbuf_mark is not None:
+            buffer.delete_mark(pixbuf_mark)
+        
         return True
     except Exception as e:
+        # Clean up the mark if it was created
+        if pixbuf_mark is not None:
+            try:
+                buffer.delete_mark(pixbuf_mark)
+            except Exception:
+                pass  # Mark may have already been deleted or buffer invalid
         print(f"Error loading image: {e}")
         return False 
 
