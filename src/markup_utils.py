@@ -178,6 +178,16 @@ def _linkify(text: str) -> str:
     if not text:
         return text
 
+    # 0) Grok-style footnote links: [[number]](https://example.com) -> [number] as clickable link
+    grok_footnote_pattern = re.compile(r'\[\[(\d+)\]\]\((https?://[^\s)]+)\)')
+
+    def _grok_repl(match):
+        footnote_num = match.group(1)
+        href = match.group(2)
+        return f'<a href="{href}">[{footnote_num}]</a>'
+
+    text = grok_footnote_pattern.sub(_grok_repl, text)
+
     # 1) Standard markdown links: [label](https://example.com)
     md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
 
