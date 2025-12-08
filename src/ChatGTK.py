@@ -1599,7 +1599,22 @@ class OpenAIGTKClient(Gtk.Window):
         """Attach link metadata to a tag for click handling."""
         tag.set_data("href", url)
 
-    def _insert_markup_with_links(self, buffer: Gtk.TextBuffer, markup_text: str):
+    def _get_link_color(self, widget: Gtk.Widget):
+        """Return the theme-provided link color for the given widget, if any."""
+
+        context = widget.get_style_context()
+        link_rgba = context.get_color(Gtk.StateFlags.LINK)
+        if link_rgba:
+            return link_rgba
+
+        # Some themes expose a named color instead of the LINK state
+        found, resolved = context.lookup_color("link_color")
+        if found:
+            return resolved
+
+        return None
+
+    def _insert_markup_with_links(self, buffer: Gtk.TextBuffer, markup_text: str, link_rgba=None):
         """
         Insert markup into the buffer while preserving clickable links.
 
@@ -1607,6 +1622,9 @@ class OpenAIGTKClient(Gtk.Window):
         <a href="..."> spans, so we parse the markup, insert the label text, and
         apply a tagged underline that we can handle manually.
         """
+        if link_rgba is None:
+            link_rgba = buffer.get_data("link_rgba")
+
         link_pattern = re.compile(r'<a href="([^"]+)">(.*?)</a>')
         pos = 0
 
@@ -1631,6 +1649,8 @@ class OpenAIGTKClient(Gtk.Window):
                 None,
                 underline=Pango.Underline.SINGLE,
             )
+            if link_rgba:
+                link_tag.set_property("foreground_rgba", link_rgba)
             buffer.apply_tag(link_tag, start_iter, end_iter)
             self._register_link_tag(link_tag, url)
 
@@ -1684,8 +1704,11 @@ class OpenAIGTKClient(Gtk.Window):
         )
 
         buffer = text_view.get_buffer()
+        link_rgba = self._get_link_color(text_view)
+        if link_rgba:
+            buffer.set_data("link_rgba", link_rgba)
         if markup_text:
-            self._insert_markup_with_links(buffer, markup_text)
+            self._insert_markup_with_links(buffer, markup_text, link_rgba)
             self._apply_bullet_hanging_indent(buffer)
 
         # Handle link clicks manually since TextView does not natively activate them
@@ -1824,7 +1847,7 @@ class OpenAIGTKClient(Gtk.Window):
                                     insert_resized_image(buffer, insert_iter, img_path, text_view, self)
                             else:
                                 text = process_text_formatting(part, self.font_size)
-                                self._insert_markup_with_links(buffer, text)
+                                self._insert_markup_with_links(buffer, text, buffer.get_data("link_rgba"))
                         self._apply_bullet_hanging_indent(buffer)
                         content_container.pack_start(text_view, False, False, 0)
                     else:
