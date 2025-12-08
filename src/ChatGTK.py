@@ -1668,7 +1668,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         indent_tag = buffer.get_tag_table().lookup("bullet_hang")
         if indent_tag is None:
-            indent_tag = buffer.create_tag("bullet_hang", left_margin=24, indent=-14)
+            indent_tag = buffer.create_tag("bullet_hang", left_margin=24, indent=-24)
 
         offset = 0
         for line in text.splitlines(True):  # Keep newline length for offset math
@@ -1685,8 +1685,9 @@ class OpenAIGTKClient(Gtk.Window):
         text_view.set_wrap_mode(Gtk.WrapMode.WORD)
         text_view.set_editable(False)
         text_view.set_cursor_visible(False)
+        text_view.set_can_focus(False)  # Prevent focus to avoid scroll jump on first click
         text_view.set_hexpand(True)
-        text_view.add_events(Gdk.EventMask.BUTTON_RELEASE_MASK)
+        text_view.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK)
 
         css_provider = Gtk.CssProvider()
         css = f"""
@@ -1713,30 +1714,45 @@ class OpenAIGTKClient(Gtk.Window):
             self._apply_bullet_hanging_indent(buffer)
 
         # Handle link clicks manually since TextView does not natively activate them
-        def on_event(view, event):
-            if event.type == Gdk.EventType.BUTTON_RELEASE and event.button == 1:
+        def on_button_press(view, event):
+            """Handle button press to catch link clicks immediately."""
+            if event.button == 1:  # Left mouse button
                 # Determine which TextWindow received the event so coordinates map correctly
                 window_type = view.get_window_type(event.window)
-                if window_type == Gtk.TextWindowType.UNKNOWN:
+                if window_type is None:
                     return False
 
                 x, y = view.window_to_buffer_coords(window_type, int(event.x), int(event.y))
-                iter_result = view.get_iter_at_location(x, y)
-                if isinstance(iter_result, tuple):
-                    iter_at_click = iter_result[0]
-                else:
-                    iter_at_click = iter_result
-                if iter_at_click is None:
+                success, iter_at_click = view.get_iter_at_location(x, y)
+                if not success or iter_at_click is None:
                     return False
 
                 for tag in iter_at_click.get_tags():
                     url = getattr(tag, "href", None)
                     if url:
-                        Gtk.show_uri_on_window(self.get_window(), url, Gdk.CURRENT_TIME)
+                        # Open the link immediately
+                        Gtk.show_uri_on_window(self, url, Gdk.CURRENT_TIME)
+                        # Return True to stop event propagation and prevent default behavior
                         return True
             return False
 
-        text_view.connect("event-after", on_event)
+        text_view.connect("button-press-event", on_button_press)
+        
+        # Force proper size calculation after initial allocation
+        # This fixes the issue where text views are too tall initially
+        # TextViews need proper width to calculate correct height with word wrapping
+        def on_size_allocate(view, allocation):
+            # Only recalculate once when we first get a proper width allocation
+            if allocation.width > 0 and not hasattr(view, '_size_corrected'):
+                view._size_corrected = True
+                # Use idle_add to queue resize after current layout pass completes
+                def recalculate_size():
+                    if view.get_parent() and view.get_allocated_width() > 0:
+                        view.queue_resize()
+                    return False
+                GLib.idle_add(recalculate_size)
+        
+        text_view.connect("size-allocate", on_size_allocate)
         return text_view
 
     def append_ai_message(self, message_text):
@@ -2764,6 +2780,21 @@ class OpenAIGTKClient(Gtk.Window):
                     elif message['role'] == 'assistant':
                         formatted_content = format_response(message['content'])
                         self.append_message('ai', formatted_content)
+            
+            # Scroll to the beginning of the conversation
+            def scroll_to_top():
+                # Find the ScrolledWindow by traversing up the widget hierarchy
+                widget = self.conversation_box
+                while widget and not isinstance(widget, Gtk.ScrolledWindow):
+                    widget = widget.get_parent()
+                
+                if widget:  # We found the ScrolledWindow
+                    adj = widget.get_vadjustment()
+                    adj.set_value(0)  # Scroll to the top
+                return False  # Don't repeat
+            
+            # Schedule scroll after the conversation is rebuilt
+            GLib.idle_add(scroll_to_top)
 
     def save_current_chat(self):
         """Save the current chat history."""
@@ -3707,6 +3738,7 @@ class OpenAIGTKClient(Gtk.Window):
             text_view.set_wrap_mode(Gtk.WrapMode.WORD)
             text_view.set_editable(False)
             text_view.set_cursor_visible(False)
+            text_view.set_can_focus(False)  # Prevent focus to avoid scroll jump on first click
             text_view.set_hexpand(True)
             text_view.set_vexpand(False)
             text_view.set_halign(Gtk.Align.FILL)
@@ -3727,11 +3759,15 @@ class OpenAIGTKClient(Gtk.Window):
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
             buffer = text_view.get_buffer()
+            link_rgba = self._get_link_color(text_view)
+            if link_rgba:
+                buffer.link_rgba = link_rgba
+            text_view.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK)
             parts = re.split(r'(<img src="[^"]+"/>)', processed_text)
-            iter_ = buffer.get_start_iter()
             for part in parts:
                 if part.startswith('<img src="'):
                     img_path = re.search(r'src="([^"]+)"', part).group(1)
+                    iter_ = buffer.get_end_iter()
                     # Keep LaTeX math images at their natural size
                     if self._is_latex_math_image(img_path):
                         insert_tex_image(buffer, iter_, img_path, text_view, self, is_math_image=True)
@@ -3740,7 +3776,48 @@ class OpenAIGTKClient(Gtk.Window):
                         insert_resized_image(buffer, iter_, img_path, text_view, self)
                 else:
                     markup = process_text_formatting(part, self.font_size)
-                    buffer.insert_markup(iter_, markup, -1)
+                    self._insert_markup_with_links(buffer, markup, link_rgba)
+            
+            # Handle link clicks manually since TextView does not natively activate them
+            def on_button_press(view, event):
+                """Handle button press to catch link clicks immediately."""
+                if event.button == 1:  # Left mouse button
+                    # Determine which TextWindow received the event so coordinates map correctly
+                    window_type = view.get_window_type(event.window)
+                    if window_type is None:
+                        return False
+
+                    x, y = view.window_to_buffer_coords(window_type, int(event.x), int(event.y))
+                    success, iter_at_click = view.get_iter_at_location(x, y)
+                    if not success or iter_at_click is None:
+                        return False
+
+                    for tag in iter_at_click.get_tags():
+                        url = getattr(tag, "href", None)
+                        if url:
+                            # Open the link immediately
+                            Gtk.show_uri_on_window(self, url, Gdk.CURRENT_TIME)
+                            # Return True to stop event propagation and prevent default behavior
+                            return True
+                return False
+
+            text_view.connect("button-press-event", on_button_press)
+            
+            # Force proper size calculation after initial allocation
+            # This fixes the issue where text views are too tall initially
+            # TextViews need proper width to calculate correct height with word wrapping
+            def on_size_allocate(view, allocation):
+                # Only recalculate once when we first get a proper width allocation
+                if allocation.width > 0 and not hasattr(view, '_size_corrected'):
+                    view._size_corrected = True
+                    # Use idle_add to queue resize after current layout pass completes
+                    def recalculate_size():
+                        if view.get_parent() and view.get_allocated_width() > 0:
+                            view.queue_resize()
+                        return False
+                    GLib.idle_add(recalculate_size)
+            
+            text_view.connect("size-allocate", on_size_allocate)
             return text_view
 
         markup = process_inline_markup(processed_text, self.font_size)
