@@ -1686,6 +1686,7 @@ class OpenAIGTKClient(Gtk.Window):
         text_view.set_editable(False)
         text_view.set_cursor_visible(False)
         text_view.set_hexpand(True)
+        text_view.add_events(Gdk.EventMask.BUTTON_RELEASE_MASK)
 
         css_provider = Gtk.CssProvider()
         css = f"""
@@ -1715,7 +1716,7 @@ class OpenAIGTKClient(Gtk.Window):
         def on_event(view, event):
             if event.type == Gdk.EventType.BUTTON_RELEASE and event.button == 1:
                 x, y = view.window_to_buffer_coords(
-                    Gtk.TextWindowType.WIDGET, int(event.x), int(event.y)
+                    Gtk.TextWindowType.TEXT, int(event.x), int(event.y)
                 )
                 iter_result = view.get_iter_at_location(x, y)
                 if isinstance(iter_result, tuple):
