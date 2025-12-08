@@ -1595,11 +1595,9 @@ class OpenAIGTKClient(Gtk.Window):
         self.conversation_box.pack_start(lbl, False, False, 0)
         self.conversation_box.show_all()
 
-    def _register_link_tag(self, buffer: Gtk.TextBuffer, tag: Gtk.TextTag, url: str):
-        """Store link tag metadata on the buffer for click handling."""
-        if not hasattr(buffer, "_link_tags"):
-            buffer._link_tags = []
-        buffer._link_tags.append((tag, url))
+    def _register_link_tag(self, tag: Gtk.TextTag, url: str):
+        """Attach link metadata to a tag for click handling."""
+        tag.set_data("href", url)
 
     def _insert_markup_with_links(self, buffer: Gtk.TextBuffer, markup_text: str):
         """
@@ -1632,10 +1630,9 @@ class OpenAIGTKClient(Gtk.Window):
             link_tag = buffer.create_tag(
                 None,
                 underline=Pango.Underline.SINGLE,
-                foreground="blue",
             )
             buffer.apply_tag(link_tag, start_iter, end_iter)
-            self._register_link_tag(buffer, link_tag, url)
+            self._register_link_tag(link_tag, url)
 
             pos = match.end()
 
@@ -1695,7 +1692,7 @@ class OpenAIGTKClient(Gtk.Window):
         def on_event(view, event):
             if event.type == Gdk.EventType.BUTTON_RELEASE and event.button == 1:
                 x, y = view.window_to_buffer_coords(
-                    Gtk.TextWindowType.TEXT, int(event.x), int(event.y)
+                    Gtk.TextWindowType.WIDGET, int(event.x), int(event.y)
                 )
                 iter_result = view.get_iter_at_location(x, y)
                 if isinstance(iter_result, tuple):
@@ -1706,10 +1703,10 @@ class OpenAIGTKClient(Gtk.Window):
                     return False
 
                 for tag in iter_at_click.get_tags():
-                    for stored_tag, url in getattr(buffer, "_link_tags", []):
-                        if tag == stored_tag:
-                            Gtk.show_uri_on_window(self.get_window(), url, Gdk.CURRENT_TIME)
-                            return True
+                    url = tag.get_data("href")
+                    if url:
+                        Gtk.show_uri_on_window(self.get_window(), url, Gdk.CURRENT_TIME)
+                        return True
             return False
 
         text_view.connect("event-after", on_event)
