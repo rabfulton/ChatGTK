@@ -18,6 +18,7 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - Reasoning support for OpenAI's o3 models
 - Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS.
 - Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, Perplexity and Anthropic Claude via separate API keys.
+- Supports custom provider settings allowing use of sevices like Openrouter.
 - Web search grounding for OpenAI and Gemini models to provide up-to-date, cited answers.
 
 ### Installation from AUR
@@ -133,6 +134,41 @@ You will need at least one API key for the application to function. Alternativel
     ```bash
     export PERPLEXITY_API_KEY="your-perplexity-key"
     ```
+
+### Custom Models
+
+ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. This allows you to use models from services like OpenRouter, Together AI, or your own self-hosted models.
+
+- **Accessing Custom Models**
+  - Open **Settings** (from the top menu or via keyboard shortcut)
+  - Navigate to the **Custom Models** page in the sidebar
+  - Click **Add Custom Model** to create a new custom model configuration
+
+- **Configuring a Custom Model**
+  - **Model ID** (required): A unique identifier for the model (e.g., `deepseek/deepseek-v3.2`)
+  - **Display Name** (optional): A friendly name shown in the model dropdown (e.g., `DeepSeek V3.2`)
+  - **Endpoint URL** (required): The API endpoint URL (e.g., `https://openrouter.ai/api/v1` or `https://api.together.xyz/v1`)
+  - **API Key** (optional): Your API key for the service. If not provided, you may need to set it via environment variable or the service's default authentication method
+  - **API Type**: Select the API format your endpoint uses:
+    - `chat.completions`: Standard OpenAI chat completions API format
+    - `responses`: OpenAI Responses API format (supports web search and tools)
+    - `images`: Image generation API format - not tested yet
+    - `tts`: Text-to-speech API format - not tested yet
+
+- **Managing Custom Models**
+  - **Test**: Click the **Test** button to verify the connection and API key work correctly
+  - **Edit**: Click **Edit** to modify an existing custom model configuration
+  - **Delete**: Click **Delete** to remove a custom model
+
+- **Using Custom Models**
+  - Once configured, custom models appear in the model dropdown alongside built-in providers
+  - Custom models using the `chat.completions` or `responses` API types support tools (image generation, music control, read aloud) if enabled
+  - Custom models are saved to `custom_models.json` in the application directory
+
+- **Example Use Cases**
+  - **OpenRouter**: Connect to models from multiple providers through OpenRouter's unified API
+  - **Self-hosted models**: Use local or remote self-hosted models with OpenAI-compatible APIs
+  - **Alternative providers**: Access models from services like Together AI, Anyscale, or other compatible providers
 
 ### Tools Support (images, music, web search & read aloud)
 
