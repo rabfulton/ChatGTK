@@ -45,6 +45,9 @@ MODEL_CACHE_FILE = os.path.join(PARENT_DIR, "model_cache.json")
 # secrets out of the main settings.cfg while still using the same
 # per-user data root.
 API_KEYS_FILE = os.path.join(PARENT_DIR, "api_keys.json")
+# Custom model definitions (including per-model API keys) are persisted
+# separately from the standard settings and API key files.
+CUSTOM_MODELS_FILE = os.path.join(PARENT_DIR, "custom_models.json")
 CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
 
 # Define settings configuration with their types and defaults
@@ -115,6 +118,10 @@ SETTINGS_CONFIG = {
     'OPENAI_MODEL_WHITELIST': {
         'type': str,
         'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-realtime,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
+    },
+    'CUSTOM_MODEL_WHITELIST': {
+        'type': str,
+        'default': ''
     },
     'GEMINI_MODEL_WHITELIST': {
         'type': str,

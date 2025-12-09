@@ -22,7 +22,16 @@ from gi.repository import Gtk, GtkSource
 import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
-from utils import load_settings, apply_settings, parse_color_to_rgba, save_settings, save_api_keys
+from utils import (
+    load_settings,
+    apply_settings,
+    parse_color_to_rgba,
+    save_settings,
+    save_api_keys,
+    load_custom_models,
+    save_custom_models,
+)
+from ai_providers import CustomProvider
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +84,122 @@ def _add_listbox_row_margins(row, top=4, bottom=4):
     row.set_margin_start(6)
     row.set_margin_end(6)
     return row
+
+
+# ---------------------------------------------------------------------------
+# Custom Model dialog
+# ---------------------------------------------------------------------------
+
+class CustomModelDialog(Gtk.Dialog):
+    """Dialog for creating or editing a custom model definition."""
+
+    API_TYPES = [
+        ("chat.completions", "chat.completions"),
+        ("responses", "responses"),
+        ("images", "images"),
+        ("tts", "tts"),
+    ]
+
+    def __init__(self, parent, initial: dict = None):
+        super().__init__(title="Custom Model", transient_for=parent, flags=0)
+        self.set_modal(True)
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("Save", Gtk.ResponseType.OK)
+        self.set_default_size(620, 300)
+
+        data = initial or {}
+
+        box = self.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        # Model ID
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Model ID", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_model_id = Gtk.Entry()
+        self.entry_model_id.set_placeholder_text("unique-model-id")
+        self.entry_model_id.set_text(str(data.get("model_id", data.get("model_name", ""))))
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_model_id, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Display name (optional)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Display Name", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_display = Gtk.Entry()
+        self.entry_display.set_placeholder_text("Shown in dropdowns (optional)")
+        self.entry_display.set_text(str(data.get("display_name", "")))
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_display, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Endpoint
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Endpoint URL", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_endpoint = Gtk.Entry()
+        self.entry_endpoint.set_placeholder_text("https://api.example.com/v1")
+        self.entry_endpoint.set_text(str(data.get("endpoint", "")))
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_endpoint, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # API key
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="API Key", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_api_key = Gtk.Entry()
+        self.entry_api_key.set_visibility(False)
+        self.entry_api_key.set_placeholder_text("Optional")
+        self.entry_api_key.set_text(str(data.get("api_key", "")))
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_api_key, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # API type
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="API Type", xalign=0)
+        label.set_size_request(120, -1)
+        self.combo_api_type = Gtk.ComboBoxText()
+        for key, display in self.API_TYPES:
+            self.combo_api_type.append_text(display)
+        api_type_val = str(data.get("api_type", "chat.completions"))
+        try:
+            idx = [k for k, _ in self.API_TYPES].index(api_type_val)
+        except ValueError:
+            idx = 0
+        self.combo_api_type.set_active(idx)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.combo_api_type, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        self.show_all()
+
+    def get_data(self) -> dict:
+        model_id = self.entry_model_id.get_text().strip()
+        display_name = self.entry_display.get_text().strip()
+        endpoint = self.entry_endpoint.get_text().strip()
+        api_key = self.entry_api_key.get_text().strip()
+        api_type = self.combo_api_type.get_active_text() or "chat.completions"
+
+        if not model_id:
+            raise ValueError("Model ID is required")
+        if not endpoint:
+            raise ValueError("Endpoint URL is required")
+
+        return {
+            "model_id": model_id,
+            "model_name": model_id,
+            "display_name": display_name or model_id,
+            "endpoint": endpoint,
+            "api_key": api_key,
+            "api_type": api_type,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +316,14 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Model Whitelist", "API Keys"]
+    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Custom Models", "Model Whitelist", "API Keys"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
         self.ai_provider = ai_provider  # OpenAI provider (for TTS preview)
         self.providers = providers or {}  # dict of provider_name -> provider instance
         self.initial_api_keys = api_keys or {}  # dict of provider_name -> key string
+        self.custom_models = load_custom_models()
         apply_settings(self, settings)
         self.set_modal(True)
 
@@ -259,6 +385,7 @@ class SettingsDialog(Gtk.Dialog):
         self._build_audio_page()
         self._build_tool_options_page()
         self._build_system_prompts_page()
+        self._build_custom_models_page()
         # Model Whitelist page is built lazily when that category is selected
         # to avoid slow dialog startup caused by provider model listing calls.
         self._build_api_keys_page()
@@ -1310,6 +1437,164 @@ class SettingsDialog(Gtk.Dialog):
             self._update_delete_button_sensitivity()
 
     # -----------------------------------------------------------------------
+    # Custom Models page
+    # -----------------------------------------------------------------------
+    def _build_custom_models_page(self):
+        page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        page_box.set_margin_top(12)
+        page_box.set_margin_bottom(12)
+        page_box.set_margin_start(12)
+        page_box.set_margin_end(12)
+
+        header = Gtk.Label(xalign=0)
+        header.set_markup("<b>Custom Models</b>")
+        page_box.pack_start(header, False, False, 0)
+
+        desc = Gtk.Label(
+            label="Add custom OpenAI-compatible endpoints (chat.completions, responses, images, tts).",
+            xalign=0,
+        )
+        desc.set_line_wrap(True)
+        page_box.pack_start(desc, False, False, 0)
+
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        add_btn = Gtk.Button(label="Add Custom Model")
+        add_btn.connect("clicked", self._on_add_custom_model)
+        controls.pack_start(add_btn, False, False, 0)
+        page_box.pack_start(controls, False, False, 0)
+
+        self._custom_models_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.add(self._custom_models_list)
+        page_box.pack_start(scroll, True, True, 0)
+
+        self._refresh_custom_models_list()
+        self.stack.add_named(page_box, "Custom Models")
+
+    def _refresh_custom_models_list(self):
+        for child in list(self._custom_models_list.get_children()):
+            self._custom_models_list.remove(child)
+
+        if not self.custom_models:
+            empty = Gtk.Label(label="No custom models added yet.", xalign=0)
+            self._custom_models_list.pack_start(empty, False, False, 0)
+            self._custom_models_list.show_all()
+            return
+
+        for model_id in sorted(self.custom_models.keys()):
+            cfg = self.custom_models.get(model_id, {})
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            label = Gtk.Label(
+                label=f"{cfg.get('display_name', model_id)}  ({cfg.get('api_type', 'chat.completions')})",
+                xalign=0,
+            )
+            label.set_hexpand(True)
+            row.pack_start(label, True, True, 0)
+
+            btn_test = Gtk.Button(label="Test")
+            btn_test.connect("clicked", self._on_test_custom_model, model_id)
+            row.pack_start(btn_test, False, False, 0)
+
+            btn_edit = Gtk.Button(label="Edit")
+            btn_edit.connect("clicked", self._on_edit_custom_model, model_id)
+            row.pack_start(btn_edit, False, False, 0)
+
+            btn_delete = Gtk.Button(label="Delete")
+            btn_delete.connect("clicked", self._on_delete_custom_model, model_id)
+            row.pack_start(btn_delete, False, False, 0)
+
+            self._custom_models_list.pack_start(row, False, False, 0)
+
+        self._custom_models_list.show_all()
+
+    def _on_add_custom_model(self, button):
+        dialog = CustomModelDialog(self)
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            try:
+                data = dialog.get_data()
+                model_id = data["model_id"]
+                self.custom_models[model_id] = data
+                save_custom_models(self.custom_models)
+                self._refresh_custom_models_list()
+                if hasattr(self, "_model_cache"):
+                    self._model_cache["custom"] = sorted(self.custom_models.keys())
+            except Exception as e:
+                self._show_error_dialog(str(e))
+        dialog.destroy()
+
+    def _on_edit_custom_model(self, button, model_id):
+        cfg = self.custom_models.get(model_id, {})
+        dialog = CustomModelDialog(self, initial=cfg)
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            try:
+                data = dialog.get_data()
+                new_id = data["model_id"]
+                if new_id != model_id and model_id in self.custom_models:
+                    self.custom_models.pop(model_id, None)
+                self.custom_models[new_id] = data
+                save_custom_models(self.custom_models)
+                self._refresh_custom_models_list()
+                if hasattr(self, "_model_cache"):
+                    self._model_cache["custom"] = sorted(self.custom_models.keys())
+            except Exception as e:
+                self._show_error_dialog(str(e))
+        dialog.destroy()
+
+    def _on_delete_custom_model(self, button, model_id):
+        if model_id in self.custom_models:
+            self.custom_models.pop(model_id, None)
+            save_custom_models(self.custom_models)
+            self._refresh_custom_models_list()
+            if hasattr(self, "_model_cache"):
+                self._model_cache["custom"] = sorted(self.custom_models.keys())
+
+    def _on_test_custom_model(self, button, model_id):
+        cfg = self.custom_models.get(model_id, {})
+        ok, msg = self._test_custom_model(cfg)
+        message_type = Gtk.MessageType.INFO if ok else Gtk.MessageType.ERROR
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=message_type,
+            buttons=Gtk.ButtonsType.OK,
+            text="Connection Test",
+        )
+        dlg.format_secondary_text(msg)
+        dlg.run()
+        dlg.destroy()
+
+    def _test_custom_model(self, cfg: dict):
+        try:
+            provider = CustomProvider()
+            provider.initialize(
+                api_key=cfg.get("api_key", ""),
+                endpoint=cfg.get("endpoint"),
+                model_name=cfg.get("model_name") or cfg.get("model_id"),
+                api_type=cfg.get("api_type") or "chat.completions",
+            )
+            return provider.test_connection()
+        except Exception as exc:
+            return False, str(exc)
+
+    def get_custom_models(self):
+        return dict(self.custom_models)
+
+    def _show_error_dialog(self, message: str):
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text="Error",
+        )
+        dlg.format_secondary_text(str(message))
+        dlg.run()
+        dlg.destroy()
+
+    # -----------------------------------------------------------------------
     # Lazy builder for Model Whitelist page
     # -----------------------------------------------------------------------
     def _ensure_model_whitelist_page(self):
@@ -1335,6 +1620,7 @@ class SettingsDialog(Gtk.Dialog):
     # (display_name, provider_key, whitelist_attr, env_key)
     _PROVIDER_INFO = [
         ("OpenAI", "openai", "openai_model_whitelist", "OPENAI_API_KEY"),
+        ("Custom", "custom", "custom_model_whitelist", None),
         ("Gemini", "gemini", "gemini_model_whitelist", "GEMINI_API_KEY"),
         ("Grok", "grok", "grok_model_whitelist", "GROK_API_KEY"),
         ("Claude", "claude", "claude_model_whitelist", "CLAUDE_API_KEY"),
@@ -1507,6 +1793,13 @@ class SettingsDialog(Gtk.Dialog):
         # Ensure we have an in-memory copy of the disk cache
         if not hasattr(self, '_model_cache') or self._model_cache is None:
             self._model_cache = load_model_cache()
+
+        # Custom models are stored locally and do not require network fetch.
+        if provider_key == "custom":
+            models = sorted(self.custom_models.keys())
+            self._model_cache[provider_key] = models
+            save_model_cache(self._model_cache)
+            return models
 
         cached = self._model_cache.get(provider_key)
         if cached and not force_refresh:
@@ -1957,6 +2250,7 @@ class SettingsDialog(Gtk.Dialog):
             'gemini_model_whitelist': whitelist_str('gemini', 'gemini_model_whitelist'),
             'grok_model_whitelist': whitelist_str('grok', 'grok_model_whitelist'),
             'claude_model_whitelist': whitelist_str('claude', 'claude_model_whitelist'),
+            'custom_model_whitelist': whitelist_str('custom', 'custom_model_whitelist'),
             # Read Aloud settings (uses unified TTS settings above)
             'read_aloud_enabled': self.switch_read_aloud.get_active(),
             'read_aloud_tool_enabled': self.switch_read_aloud_tool.get_active(),

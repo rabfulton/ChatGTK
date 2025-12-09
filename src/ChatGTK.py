@@ -42,6 +42,8 @@ from utils import (
     get_object_settings,
     convert_settings_for_save,
     load_api_keys,
+    load_custom_models,
+    save_custom_models,
 )
 from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
 from markup_utils import (
@@ -123,6 +125,10 @@ class OpenAIGTKClient(Gtk.Window):
         # will be initialized below using either environment variables or these
         # persisted values.
         self.api_keys = load_api_keys()
+        # Load custom model definitions (including per-model API keys)
+        self.custom_models = load_custom_models()
+        # Cache instantiated custom providers per model_id
+        self.custom_providers = {}
         
         # Initialize ToolManager with current settings
         self.tool_manager = ToolManager(
@@ -250,7 +256,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.api_keys['perplexity'] = perplexity_key
             self.initialize_provider('perplexity', perplexity_key)
         
-        if self.providers:
+        if self.providers or self.custom_models:
             self.fetch_models_async()
         else:
             default_models = self._default_models_for_provider('openai')
@@ -691,7 +697,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Gather whitelist sets from settings (parsed from comma-separated strings)
         whitelists = {}
-        for provider_key in ('openai', 'gemini', 'grok', 'claude'):
+        for provider_key in ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom'):
             attr = f"{provider_key}_model_whitelist"
             whitelist_str = getattr(self, attr, "") or ""
             whitelists[provider_key] = set(m.strip() for m in whitelist_str.split(",") if m.strip())
@@ -721,6 +727,16 @@ class OpenAIGTKClient(Gtk.Window):
                 for model in provider_models:
                     mapping[model] = name
                     collected_models.append(model)
+
+            # Add custom models (persisted on disk)
+            if self.custom_models:
+                custom_whitelist = whitelists.get('custom', set())
+                custom_ids = list(self.custom_models.keys())
+                if not disable_filter and custom_whitelist:
+                    custom_ids = [m for m in custom_ids if m in custom_whitelist]
+                for model_id in custom_ids:
+                    mapping[model_id] = 'custom'
+                    collected_models.append(model_id)
 
             if not collected_models:
                 collected_models = self._default_models_for_provider('openai')
@@ -968,6 +984,10 @@ class OpenAIGTKClient(Gtk.Window):
         if provider:
             return provider
 
+        # Custom models are explicitly configured by the user.
+        if model_name in getattr(self, "custom_models", {}):
+            return "custom"
+
         # Fall back to simple heuristics for well-known image and chat models,
         # so image-only models can be routed correctly even if they are not
         # present in the main model list.
@@ -986,6 +1006,9 @@ class OpenAIGTKClient(Gtk.Window):
         Return True if the given model for the specified provider should be
         treated as an image-generation model.
         """
+        if provider_name == "custom":
+            cfg = (self.custom_models or {}).get(model_name, {})
+            return (cfg.get("api_type") or "").lower() == "images"
         return self.tool_manager.is_image_model_for_provider(model_name, provider_name)
 
     def _supports_image_tools(self, model_name):
@@ -1051,12 +1074,28 @@ class OpenAIGTKClient(Gtk.Window):
         combination, reusing the underlying provider-specific generate_image
         implementations and attachment semantics.
         """
-        provider = self.providers.get(provider_name)
-        if not provider:
-            api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
-            provider = self.initialize_provider(provider_name, api_key)
+        provider = None
+        if provider_name == "custom":
+            provider = self.custom_providers.get(model)
             if not provider:
-                raise ValueError(f"{provider_name.title()} provider is not initialized")
+                cfg = (self.custom_models or {}).get(model, {})
+                if not cfg:
+                    raise ValueError(f"Custom model '{model}' is not configured")
+                provider = get_ai_provider("custom")
+                provider.initialize(
+                    api_key=cfg.get("api_key", "").strip(),
+                    endpoint=cfg.get("endpoint"),
+                    model_name=cfg.get("model_name") or model,
+                    api_type=cfg.get("api_type") or "images",
+                )
+                self.custom_providers[model] = provider
+        else:
+            provider = self.providers.get(provider_name)
+            if not provider:
+                api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
+                provider = self.initialize_provider(provider_name, api_key)
+                if not provider:
+                    raise ValueError(f"{provider_name.title()} provider is not initialized")
 
         # OpenAI image models.
         if provider_name == 'openai':
@@ -1064,6 +1103,9 @@ class OpenAIGTKClient(Gtk.Window):
             if model in ("gpt-image-1", "gpt-image-1-mini") and has_attached_images:
                 image_data = last_msg["images"][0]["data"]
             return provider.generate_image(prompt, chat_id, model, image_data)
+
+        if provider_name == 'custom':
+            return provider.generate_image(prompt, chat_id, model)
 
         # Gemini image models support both text→image and image→image.
         if provider_name == 'gemini':
@@ -1491,6 +1533,12 @@ class OpenAIGTKClient(Gtk.Window):
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()
             self._apply_api_keys(new_keys)
+
+            # Update custom models from dialog (already persisted on disk)
+            if hasattr(dialog, "get_custom_models"):
+                self.custom_models = dialog.get_custom_models()
+                # Drop any cached custom providers to avoid stale configs
+                self.custom_providers = {}
 
             self.fetch_models_async()
         dialog.destroy()
@@ -2127,12 +2175,30 @@ class OpenAIGTKClient(Gtk.Window):
                 model = "gpt-3.5-turbo"  # Default fallback
                 print(f"No model selected, falling back to {model}")
             provider_name = self.get_provider_name_for_model(model)
-            provider = self.providers.get(provider_name)
-            if not provider:
-                api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
-                provider = self.initialize_provider(provider_name, api_key)
+            provider = None
+
+            if provider_name == "custom":
+                # Custom providers are keyed per model ID
+                provider = self.custom_providers.get(model)
                 if not provider:
-                    raise ValueError(f"{provider_name.title()} provider is not initialized")
+                    config = (self.custom_models or {}).get(model, {})
+                    if not config:
+                        raise ValueError(f"Custom model '{model}' is not configured")
+                    provider = get_ai_provider("custom")
+                    provider.initialize(
+                        api_key=config.get("api_key", "").strip(),
+                        endpoint=config.get("endpoint"),
+                        model_name=config.get("model_name") or model,
+                        api_type=config.get("api_type") or "chat.completions",
+                    )
+                    self.custom_providers[model] = provider
+            else:
+                provider = self.providers.get(provider_name)
+                if not provider:
+                    api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
+                    provider = self.initialize_provider(provider_name, api_key)
+                    if not provider:
+                        raise ValueError(f"{provider_name.title()} provider is not initialized")
             
             # This will hold any provider-specific metadata for the assistant message
             assistant_provider_meta = None
@@ -2204,6 +2270,17 @@ class OpenAIGTKClient(Gtk.Window):
                 if read_aloud_tool_handler is not None:
                     kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
 
+                answer = provider.generate_chat_completion(**kwargs)
+            elif provider_name == 'custom':
+                messages_to_send = self._messages_for_model(model)
+                kwargs = {
+                    "messages": messages_to_send,
+                    "model": model,
+                    "temperature": float(self.temperament),
+                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
+                    "chat_id": self.current_chat_id,
+                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
+                }
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'gemini':
                 # Chat completion (possibly with image input or tool-based image generation)

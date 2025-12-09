@@ -56,6 +56,179 @@ class AIProvider(ABC):
         """Generate speech from text."""
         pass
 
+class CustomProvider(AIProvider):
+    """
+    Generic provider for user-defined, OpenAI-compatible endpoints.
+    Supports chat.completions, responses, images, and TTS endpoints.
+    """
+
+    def __init__(self):
+        self.api_key = None
+        self.endpoint = None
+        self.model_name = None
+        self.api_type = "chat.completions"
+        self.session = requests.Session()
+
+    def initialize(self, api_key: str, endpoint: str = None, model_name: str = None, api_type: str = None):
+        self.api_key = api_key
+        if endpoint:
+            self.endpoint = endpoint.rstrip("/")
+        if model_name:
+            self.model_name = model_name
+        if api_type:
+            self.api_type = api_type
+
+    # -----------------------------
+    # Helpers
+    # -----------------------------
+    def _headers(self):
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _url(self, path: str) -> str:
+        base = self.endpoint or ""
+        if base.endswith("/"):
+            base = base[:-1]
+        if not path.startswith("/"):
+            path = "/" + path
+        return base + path
+
+    def _extract_text(self, data: dict) -> str:
+        # Try OpenAI chat/completions style
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        if isinstance(message, dict) and "content" in message:
+            return message.get("content") or ""
+
+        # Try Responses output_text or content array
+        if "output_text" in data:
+            return data.get("output_text") or ""
+        if "output" in data:
+            output = data["output"]
+            if isinstance(output, list) and output:
+                if isinstance(output[0], dict) and output[0].get("content"):
+                    # content may be list of {type,text}
+                    content = output[0]["content"]
+                    if isinstance(content, list) and content:
+                        first = content[0]
+                        if isinstance(first, dict) and "text" in first:
+                            return first.get("text") or ""
+                if isinstance(output[0], str):
+                    return output[0]
+        return ""
+
+    # -----------------------------
+    # APIProvider interface
+    # -----------------------------
+    def get_available_models(self, disable_filter: bool = False):
+        return [self.model_name] if self.model_name else []
+
+    def generate_chat_completion(
+        self,
+        messages,
+        model,
+        temperature=0.7,
+        max_tokens=None,
+        chat_id=None,
+        web_search_enabled: bool = False,
+        image_tool_handler=None,
+        music_tool_handler=None,
+        read_aloud_tool_handler=None,
+    ):
+        api_type = (self.api_type or "chat.completions").lower()
+        if api_type == "responses":
+            return self._call_responses(messages, temperature, max_tokens)
+        # Default to chat.completions
+        url = self._url("/chat/completions")
+        payload = {"model": model or self.model_name, "messages": messages}
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens and max_tokens > 0:
+            payload["max_tokens"] = int(max_tokens)
+
+        resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        return self._extract_text(data)
+
+    def _call_responses(self, messages, temperature, max_tokens):
+        url = self._url("/responses")
+        # Minimal conversion to Responses input
+        inputs = []
+        for msg in messages or []:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            inputs.append({"role": role, "content": content})
+
+        payload = {"model": self.model_name, "input": inputs}
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens and max_tokens > 0:
+            payload["max_output_tokens"] = int(max_tokens)
+
+        resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        return self._extract_text(data)
+
+    def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
+        api_type = (self.api_type or "").lower()
+        url = self._url("/images/generations")
+        payload = {"model": self.model_name or model, "prompt": prompt}
+        resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        # Expect OpenAI-style {data:[{url:...}]} or base64
+        first = (data.get("data") or [{}])[0]
+        return first.get("url") or first.get("b64_json") or ""
+
+    def transcribe_audio(self, audio_file):
+        raise NotImplementedError("Transcription not implemented for custom provider")
+
+    def generate_speech(self, text, voice):
+        url = self._url("/audio/speech")
+        payload = {"model": self.model_name, "input": text}
+        if voice:
+            payload["voice"] = voice
+        resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.content
+
+    # -----------------------------
+    # Connection test
+    # -----------------------------
+    def test_connection(self):
+        """
+        Perform a light-weight request based on api_type.
+        Returns (ok: bool, message: str)
+        """
+        try:
+            api_type = (self.api_type or "chat.completions").lower()
+            if api_type == "responses":
+                _ = self._call_responses(
+                    [{"role": "user", "content": "ping"}],
+                    temperature=1.0,
+                    max_tokens=16,
+                )
+            elif api_type == "images":
+                # Attempt a minimal image generation with a benign prompt.
+                _ = self.generate_image("ping", chat_id="test")
+            elif api_type == "tts":
+                # Attempt a minimal TTS call; do not save output.
+                _ = self.generate_speech("ping", voice=None)
+            else:
+                _ = self.generate_chat_completion(
+                    [{"role": "user", "content": "ping"}],
+                    model=self.model_name,
+                    temperature=1.0,
+                    max_tokens=16,
+                )
+            return True, "Connection successful"
+        except Exception as exc:
+            return False, str(exc)
+
 class OpenAIProvider(AIProvider):
     # Maximum file size for document uploads (in bytes) - 512 MB per OpenAI docs
     MAX_FILE_SIZE = 512 * 1024 * 1024
@@ -2645,6 +2818,7 @@ def get_ai_provider(provider_name: str) -> AIProvider:
         'grok': GrokProvider,
         'claude': ClaudeProvider,
         'perplexity': PerplexityProvider,
+        'custom': CustomProvider,
     }
     
     provider_class = providers.get(provider_name)

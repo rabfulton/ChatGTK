@@ -12,6 +12,7 @@ debug_export.tex
 debug_failed.tex
 *.pdf
 !screenshots/*.pdf
+custom_models.json
 WARP.md
 PKGBUILD
 aur.txt

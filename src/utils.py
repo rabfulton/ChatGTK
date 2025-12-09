@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 import gi
-from config import SETTINGS_FILE, HISTORY_DIR, SETTINGS_CONFIG, API_KEYS_FILE
+from config import SETTINGS_FILE, HISTORY_DIR, SETTINGS_CONFIG, API_KEYS_FILE, CUSTOM_MODELS_FILE
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GdkPixbuf
 from gi.repository import Gdk
@@ -167,6 +167,43 @@ def save_api_keys(api_keys: dict):
             json.dump(data, f, indent=2)
     except Exception as e:
         print(f"Error saving API keys: {e}")
+
+
+def load_custom_models() -> dict:
+    """
+    Load custom model definitions from disk.
+
+    Structure:
+    {
+        "model_id": {
+            "display_name": "...",
+            "model_name": "...",
+            "endpoint": "...",
+            "api_key": "...",
+            "api_type": "chat.completions|responses|images|tts"
+        }
+    }
+    """
+    try:
+        with open(CUSTOM_MODELS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"Error loading custom models: {e}")
+    return {}
+
+
+def save_custom_models(models: dict) -> None:
+    """Persist custom model definitions to disk."""
+    try:
+        Path(CUSTOM_MODELS_FILE).parent.mkdir(parents=True, exist_ok=True)
+        with open(CUSTOM_MODELS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(models or {}, f, indent=2)
+    except Exception as e:
+        print(f"Error saving custom models: {e}")
 
 def ensure_history_dir():
     """Ensure the history directory exists."""
