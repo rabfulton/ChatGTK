@@ -2241,12 +2241,20 @@ class OpenAIGTKClient(Gtk.Window):
 
     def call_ai_api(self, model):
         try:
+            # Check if cancelled at start
+            if hasattr(self, 'request_cancelled') and self.request_cancelled:
+                return
+            
             # Ensure we have a valid model
             if not model:
                 model = "gpt-3.5-turbo"  # Default fallback
                 print(f"No model selected, falling back to {model}")
             provider_name = self.get_provider_name_for_model(model)
             provider = None
+            
+            # Check if cancelled after initial setup
+            if hasattr(self, 'request_cancelled') and self.request_cancelled:
+                return
 
             if provider_name == "custom":
                 # Custom providers are keyed per model ID
@@ -2553,6 +2561,10 @@ class OpenAIGTKClient(Gtk.Window):
             else:
                 raise ValueError(f"Unsupported provider: {provider_name}")
 
+            # Check if cancelled before processing result
+            if hasattr(self, 'request_cancelled') and self.request_cancelled:
+                return
+            
             # Normalize any raw <img ...> tags so the UI can render them
             # consistently without showing stray HTML.
             answer = self._normalize_image_tags(answer)
@@ -2574,10 +2586,12 @@ class OpenAIGTKClient(Gtk.Window):
                 self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
             
         except Exception as error:
-            print(f"\nAPI Call Error: {error}")
-            GLib.idle_add(self.hide_thinking_animation)
-            error_message = f"** Error: {str(error)} **"
-            GLib.idle_add(lambda msg=error_message: self.append_message('ai', msg))
+            # Only show error if not cancelled
+            if not (hasattr(self, 'request_cancelled') and self.request_cancelled):
+                print(f"\nAPI Call Error: {error}")
+                GLib.idle_add(self.hide_thinking_animation)
+                error_message = f"** Error: {str(error)} **"
+                GLib.idle_add(lambda msg=error_message: self.append_message('ai', msg))
             
         finally:
             GLib.idle_add(self.hide_thinking_animation)
@@ -3022,17 +3036,109 @@ class OpenAIGTKClient(Gtk.Window):
             self.refresh_history_list()
 
     def show_thinking_animation(self):
-        """Show an animated thinking indicator."""
+        """Show an animated thinking indicator with loader and cancel button."""
         # Remove any existing thinking animation first
-        if hasattr(self, 'thinking_label') and self.thinking_label:
-            self.thinking_label.destroy()
-            self.thinking_label = None
+        if hasattr(self, 'thinking_container') and self.thinking_container:
+            self.thinking_container.destroy()
+            self.thinking_container = None
         
-        # Create new thinking label
-        self.thinking_label = Gtk.Label()
+        # Create main container with consistent styling (matching append_ai_message)
+        self.thinking_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        
+        # Apply styling similar to message containers
+        css_container = f"""
+            box {{
+                background-color: @theme_base_color;
+                padding: 12px;
+                border-radius: 12px;
+            }}
+        """
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(css_container.encode())
+        self.thinking_container.get_style_context().add_provider(
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        
+        # Create loader widget (animated pulsing dot)
+        loader_box = Gtk.Box()
+        loader_box.set_size_request(16, 16)
+        loader_box.set_valign(Gtk.Align.CENTER)
+        
+        # Create the loader dot
+        self.loader_dot = Gtk.Box()
+        self.loader_dot.set_size_request(16, 16)
         hex_color = rgb_to_hex(self.ai_color)
+        
+        # Initial loader CSS - will be animated (using hex color)
+        css_loader = f"""
+            box {{
+                border-radius: 50%;
+                background-color: {hex_color};
+                min-width: 16px;
+                min-height: 16px;
+            }}
+        """
+        loader_css_provider = Gtk.CssProvider()
+        loader_css_provider.load_from_data(css_loader.encode())
+        self.loader_dot.get_style_context().add_provider(
+            loader_css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        
+        loader_box.pack_start(self.loader_dot, False, False, 0)
+        self.thinking_container.pack_start(loader_box, False, False, 0)
+        
+        # Create thinking text label
+        self.thinking_label = Gtk.Label()
         self.thinking_label.set_markup(f"<span color='{hex_color}'>{self.ai_name} is thinking</span>")
-        self.conversation_box.pack_start(self.thinking_label, False, False, 0)
+        self.thinking_label.set_xalign(0)
+        self.thinking_container.pack_start(self.thinking_label, True, True, 0)
+        
+        # Create cancel button using theme colors
+        cancel_button = Gtk.Button()
+        cancel_button.set_relief(Gtk.ReliefStyle.NONE)
+        cancel_button.set_tooltip_text("Cancel request")
+        
+        # Style cancel button with theme colors
+        cancel_css = """
+            button {
+                border-radius: 4px;
+                padding: 4px 8px;
+                min-width: 0;
+                min-height: 0;
+                color: @theme_fg_color;
+            }
+            button:hover {
+                background-color: alpha(@theme_fg_color, 0.1);
+            }
+            button:active {
+                background-color: alpha(@theme_fg_color, 0.2);
+            }
+        """
+        cancel_css_provider = Gtk.CssProvider()
+        cancel_css_provider.load_from_data(cancel_css.encode())
+        cancel_button.get_style_context().add_provider(
+            cancel_css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        
+        # Add cancel icon (× symbol)
+        cancel_label = Gtk.Label()
+        cancel_label.set_markup("<span size='large' weight='bold'>×</span>")
+        cancel_button.add(cancel_label)
+        
+        # Connect cancel button
+        self.request_cancelled = False
+        def on_cancel_clicked(button):
+            self.request_cancelled = True
+            self.hide_thinking_animation()
+            GLib.idle_add(lambda: self.append_message('ai', "** Request cancelled by user **"))
+        
+        cancel_button.connect("clicked", on_cancel_clicked)
+        self.thinking_container.pack_start(cancel_button, False, False, 0)
+        
+        self.conversation_box.pack_start(self.thinking_container, False, False, 0)
         self.conversation_box.show_all()
         
         def scroll_to_bottom():
@@ -3049,25 +3155,44 @@ class OpenAIGTKClient(Gtk.Window):
         # Schedule scroll after the thinking label is shown
         GLib.idle_add(scroll_to_bottom)
         
+        # Animation state
         self.thinking_dots = 0
+        self.loader_animation_state = 0  # 0, 1, 2 for the three animation states
+        self.loader_opacity = [1.0, 0.4, 1.0]  # Opacity values for pulsing effect
         
-        def update_dots():
+        def update_animation():
+            if not hasattr(self, 'thinking_container') or not self.thinking_container:
+                return False
+            
+            # Update loader animation (pulsing opacity effect)
+            # Cycle through opacity states to create a pulsing effect
+            opacity = self.loader_opacity[self.loader_animation_state]
+            # Use GTK's opacity property directly (more reliable than CSS rgba)
+            if hasattr(self, 'loader_dot') and self.loader_dot:
+                self.loader_dot.set_opacity(opacity)
+            
+            self.loader_animation_state = (self.loader_animation_state + 1) % 3
+            
+            # Update dots in text
             if hasattr(self, 'thinking_label') and self.thinking_label:
                 self.thinking_dots = (self.thinking_dots + 1) % 4
                 dots = "." * self.thinking_dots
-                hex_color = rgb_to_hex(self.ai_color)
                 self.thinking_label.set_markup(
                     f"<span color='{hex_color}'>{self.ai_name} is thinking{dots}</span>"
                 )
-                return True  # Continue animation
-            return False  # Stop animation if label is gone
+            
+            return True  # Continue animation
         
-        # Update every 500ms
-        self.thinking_timer = GLib.timeout_add(500, update_dots)
+        # Update every ~667ms (2s / 3 states) for smooth animation
+        self.thinking_timer = GLib.timeout_add(667, update_animation)
 
     def hide_thinking_animation(self):
         """Remove the thinking animation."""
-        # Only try to remove the timer if it exists
+        # Reset cancellation flag
+        if hasattr(self, 'request_cancelled'):
+            self.request_cancelled = False
+        
+        # Remove timer if it exists
         if hasattr(self, 'thinking_timer') and self.thinking_timer is not None:
             try:
                 GLib.source_remove(self.thinking_timer)
@@ -3075,10 +3200,16 @@ class OpenAIGTKClient(Gtk.Window):
                 pass
         self.thinking_timer = None
         
-        # Remove the label if it exists
+        # Remove the container (which includes label, loader, and cancel button)
+        if hasattr(self, 'thinking_container') and self.thinking_container:
+            self.thinking_container.destroy()
+            self.thinking_container = None
+        
+        # Clean up individual components (for safety)
         if hasattr(self, 'thinking_label') and self.thinking_label:
-            self.thinking_label.destroy()
             self.thinking_label = None
+        if hasattr(self, 'loader_dot') and self.loader_dot:
+            self.loader_dot = None
 
     def create_history_context_menu(self, history_row):
         """Create a context menu for chat history items."""
