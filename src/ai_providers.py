@@ -7,6 +7,7 @@ import websockets
 import asyncio
 import json
 import os
+import re
 from gi.repository import GLib
 import numpy as np
 import sounddevice as sd
@@ -94,6 +95,19 @@ class CustomProvider(AIProvider):
         if not path.startswith("/"):
             path = "/" + path
         return base + path
+    
+    def _get_base_endpoint(self) -> str:
+        """Get the base endpoint URL, stripping any API path suffixes."""
+        base = self.endpoint or ""
+        if base.endswith("/"):
+            base = base[:-1]
+        # Remove common API path suffixes to get the base URL
+        # This handles cases where endpoint is set to something like:
+        # https://api.example.com/v1/chat/completions
+        # We want to extract: https://api.example.com/v1
+        # Remove /chat/completions, /responses, /images/generations, etc.
+        base = re.sub(r'/(chat/completions|responses|images/generations|audio/speech)(/.*)?$', '', base)
+        return base
 
     def _extract_text(self, data: dict) -> str:
         # Try OpenAI chat/completions style
@@ -102,21 +116,32 @@ class CustomProvider(AIProvider):
         if isinstance(message, dict) and "content" in message:
             return message.get("content") or ""
 
-        # Try Responses output_text or content array
-        if "output_text" in data:
-            return data.get("output_text") or ""
+        # Try Responses API format
+        # Responses API returns: {"output": [{"type": "message", "content": [{"text": "..."}]}]}
         if "output" in data:
             output = data["output"]
-            if isinstance(output, list) and output:
-                if isinstance(output[0], dict) and output[0].get("content"):
-                    # content may be list of {type,text}
-                    content = output[0]["content"]
-                    if isinstance(content, list) and content:
-                        first = content[0]
-                        if isinstance(first, dict) and "text" in first:
-                            return first.get("text") or ""
-                if isinstance(output[0], str):
-                    return output[0]
+            if isinstance(output, list):
+                text_content = ""
+                for item in output:
+                    if isinstance(item, dict):
+                        item_type = item.get("type")
+                        # Handle message output (contains text)
+                        if item_type == "message":
+                            content = item.get("content", [])
+                            if isinstance(content, list):
+                                for content_item in content:
+                                    if isinstance(content_item, dict) and "text" in content_item:
+                                        text_content += content_item.get("text", "")
+                        # Handle direct text in output item (fallback)
+                        elif "text" in item:
+                            text_content += item.get("text", "")
+                if text_content:
+                    return text_content
+        
+        # Try Responses output_text (legacy/simple format)
+        if "output_text" in data:
+            return data.get("output_text") or ""
+        
         return ""
 
     # -----------------------------
@@ -154,7 +179,9 @@ class CustomProvider(AIProvider):
         return self._extract_text(data)
 
     def _call_responses(self, messages, temperature, max_tokens):
-        url = self._url("/responses")
+        # Use base endpoint to avoid appending /responses to an endpoint that already has /chat/completions
+        base = self._get_base_endpoint()
+        url = base + "/responses" if base else "/responses"
         # Minimal conversion to Responses input
         inputs = []
         for msg in messages or []:
@@ -171,7 +198,11 @@ class CustomProvider(AIProvider):
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
         resp.raise_for_status()
         data = resp.json()
-        return self._extract_text(data)
+        result = self._extract_text(data)
+        # Debug: log response structure if extraction failed
+        if not result:
+            print(f"[CustomProvider] Warning: Failed to extract text from response. Response structure: {json.dumps(data, indent=2)[:500]}")
+        return result
 
     def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
         api_type = (self.api_type or "").lower()
