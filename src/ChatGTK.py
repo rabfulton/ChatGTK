@@ -2273,6 +2273,25 @@ class OpenAIGTKClient(Gtk.Window):
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'custom':
                 messages_to_send = self._messages_for_model(model)
+
+                last_user_msg = last_msg
+
+                image_tool_handler = None
+                music_tool_handler = None
+                read_aloud_tool_handler = None
+
+                if self._supports_image_tools(model):
+                    def image_tool_handler(prompt_arg):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+
+                if self._supports_music_tools(model):
+                    def music_tool_handler(action, keyword=None, volume=None):
+                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
+
+                if self._supports_read_aloud_tools(model):
+                    def read_aloud_tool_handler(text):
+                        return self._handle_read_aloud_tool(text)
+
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
@@ -2281,6 +2300,13 @@ class OpenAIGTKClient(Gtk.Window):
                     "chat_id": self.current_chat_id,
                     "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
                 }
+                if image_tool_handler is not None:
+                    kwargs["image_tool_handler"] = image_tool_handler
+                if music_tool_handler is not None:
+                    kwargs["music_tool_handler"] = music_tool_handler
+                if read_aloud_tool_handler is not None:
+                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
+
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'gemini':
                 # Chat completion (possibly with image input or tool-based image generation)

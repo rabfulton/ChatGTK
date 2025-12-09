@@ -164,45 +164,446 @@ class CustomProvider(AIProvider):
     ):
         api_type = (self.api_type or "chat.completions").lower()
         if api_type == "responses":
-            return self._call_responses(messages, temperature, max_tokens)
+            return self._call_responses(
+                messages,
+                temperature,
+                max_tokens,
+                image_tool_handler=image_tool_handler,
+                music_tool_handler=music_tool_handler,
+                read_aloud_tool_handler=read_aloud_tool_handler,
+            )
+        
         # Default to chat.completions
         url = self._url("/chat/completions")
-        payload = {"model": model or self.model_name, "messages": messages}
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens and max_tokens > 0:
-            payload["max_tokens"] = int(max_tokens)
+        
+        # Determine which tools are enabled
+        enabled_tools = set()
+        if image_tool_handler is not None:
+            enabled_tools.add("generate_image")
+        if music_tool_handler is not None:
+            enabled_tools.add("control_music")
+        if read_aloud_tool_handler is not None:
+            enabled_tools.add("read_aloud")
+        
+        # Build tool declarations for custom provider (uses OpenAI-compatible format)
+        tools = build_tools_for_provider(enabled_tools, "custom")
+        
+        # Simple one-shot path when no tools are involved
+        if not enabled_tools:
+            payload = {"model": model or self.model_name, "messages": messages}
+            if temperature is not None:
+                payload["temperature"] = temperature
+            if max_tokens and max_tokens > 0:
+                payload["max_tokens"] = int(max_tokens)
+            
+            resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            return self._extract_text(data)
+        
+        # Tool-aware flow: allow the model to call tools, route those through
+        # handlers, then continue the conversation until we get a final answer.
+        tool_aware_messages = messages.copy()
+        max_tool_rounds = 3
+        tool_result_snippets = []
+        last_response_data = None
+        
+        for round_num in range(max_tool_rounds):
+            payload = {
+                "model": model or self.model_name,
+                "messages": tool_aware_messages,
+            }
+            if temperature is not None:
+                payload["temperature"] = temperature
+            if max_tokens and max_tokens > 0:
+                payload["max_tokens"] = int(max_tokens)
+            if tools:
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
+            
+            resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            last_response_data = data
+            
+            # Extract the assistant message and check for tool calls
+            choice = (data.get("choices") or [{}])[0]
+            message = choice.get("message") or {}
+            
+            # Check for tool calls in the response
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                # No tools requested; this is the final assistant answer.
+                break
+            
+            # Append the assistant message that requested tools
+            assistant_msg = {
+                "role": "assistant",
+                "content": message.get("content") or "",
+                "tool_calls": tool_calls,
+            }
+            tool_aware_messages.append(assistant_msg)
+            
+            # For each tool call, invoke the appropriate handler and append a tool result
+            tool_context = ToolContext(
+                image_handler=image_tool_handler,
+                music_handler=music_tool_handler,
+                read_aloud_handler=read_aloud_tool_handler,
+            )
+            
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                
+                tc_type = tc.get("type", "")
+                tool_name = ""
+                if tc_type != "function":
+                    tool_result_content = "Error: unknown tool type requested."
+                else:
+                    function = tc.get("function", {})
+                    tool_name = function.get("name", "")
+                    raw_args = function.get("arguments", "{}")
+                    parsed_args = parse_tool_arguments(raw_args)
+                    tool_result_content = run_tool_call(tool_name, parsed_args, tool_context)
+                
+                if tool_result_content:
+                    tool_result_snippets.append(tool_result_content)
+                
+                tool_aware_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "name": tool_name,
+                    "content": tool_result_content or "",
+                })
+        
+        if last_response_data is None:
+            raise RuntimeError("No response received from custom provider.")
+        
+        # Extract final text from the last response
+        base_text = self._extract_text(last_response_data)
+        if tool_result_snippets:
+            return base_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return base_text
 
-        resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        return self._extract_text(data)
+    def _extract_responses_output(self, data: dict) -> tuple:
+        """
+        Extract text content and function calls from a Responses API response.
+        
+        Returns
+        -------
+        tuple
+            (text_content, function_calls) where function_calls is a list of
+            dicts with keys: call_id, name, arguments
+        """
+        text_content = ""
+        function_calls = []
+        
+        if "output" in data:
+            output = data["output"]
+            if isinstance(output, list):
+                for item in output:
+                    if isinstance(item, dict):
+                        item_type = item.get("type")
+                        
+                        # Handle message output (contains text)
+                        if item_type == "message":
+                            content = item.get("content", [])
+                            if isinstance(content, list):
+                                for content_item in content:
+                                    if isinstance(content_item, dict) and "text" in content_item:
+                                        text_content += content_item.get("text", "")
+                        
+                        # Handle function_call output
+                        elif item_type == "function_call":
+                            call_id = item.get("call_id") or item.get("id", "")
+                            name = item.get("name", "")
+                            arguments = item.get("arguments", "{}")
+                            if name:
+                                function_calls.append({
+                                    "call_id": call_id,
+                                    "name": name,
+                                    "arguments": arguments,
+                                })
+        
+        return text_content, function_calls
 
-    def _call_responses(self, messages, temperature, max_tokens):
-        # Use base endpoint to avoid appending /responses to an endpoint that already has /chat/completions
-        base = self._get_base_endpoint()
-        url = base + "/responses" if base else "/responses"
-        # Minimal conversion to Responses input
-        inputs = []
+    def _build_responses_tools(self, enabled_tools: set) -> list:
+        """
+        Build the tools array for the Responses API.
+        
+        The Responses API uses a format where each function tool has:
+        {"type": "function", "name": ..., "description": ..., "parameters": ...}
+        """
+        tools = []
+        from tools import TOOL_REGISTRY
+        for tool_name in sorted(enabled_tools):
+            spec = TOOL_REGISTRY.get(tool_name)
+            if spec:
+                tools.append({
+                    "type": "function",
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.parameters,
+                })
+        return tools
+
+    def _build_responses_input(self, messages) -> tuple:
+        """
+        Convert messages to Responses API input format.
+        
+        The Responses API uses a specific format:
+        - User messages: {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "..."}]}
+        - Assistant messages: {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "..."}]}
+        - Function calls: {"type": "function_call", "call_id": "...", "name": "...", "arguments": "..."}
+        - Function results: {"type": "function_call_output", "call_id": "...", "output": "..."}
+        
+        Returns
+        -------
+        tuple
+            (input_items, instructions) where input_items is a list of input
+            items and instructions is the system prompt if present.
+        """
+        input_items = []
+        instructions = None
+        
         for msg in messages or []:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            inputs.append({"role": role, "content": content})
+            
+            # System messages become instructions
+            if role == "system":
+                instructions = content
+                continue
+            
+            # User messages
+            if role == "user":
+                # Handle both string content and structured content
+                if isinstance(content, str):
+                    input_items.append({
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": content}],
+                    })
+                elif isinstance(content, list):
+                    # Already in structured format, but ensure it uses input_text
+                    content_parts = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            if part.get("type") == "text":
+                                # Convert "text" to "input_text" for user messages
+                                content_parts.append({"type": "input_text", "text": part.get("text", "")})
+                            else:
+                                content_parts.append(part)
+                        else:
+                            content_parts.append({"type": "input_text", "text": str(part)})
+                    input_items.append({
+                        "type": "message",
+                        "role": "user",
+                        "content": content_parts,
+                    })
+                else:
+                    # Fallback for empty or None content
+                    input_items.append({
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": ""}],
+                    })
+            
+            # Assistant messages
+            elif role == "assistant":
+                # Handle both string content and structured content
+                if isinstance(content, str):
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": content}],
+                    })
+                elif isinstance(content, list):
+                    # Already in structured format, but ensure it uses output_text
+                    content_parts = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            if part.get("type") == "text":
+                                # Convert "text" to "output_text" for assistant messages
+                                content_parts.append({"type": "output_text", "text": part.get("text", "")})
+                            else:
+                                content_parts.append(part)
+                        else:
+                            content_parts.append({"type": "output_text", "text": str(part)})
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": content_parts,
+                    })
+                else:
+                    # Fallback for empty or None content
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": ""}],
+                    })
+            
+            # Handle function call results (from previous tool rounds)
+            elif role == "tool":
+                # This should already be in the correct format from previous rounds
+                # but we need to handle it if it comes from messages
+                tool_call_id = msg.get("tool_call_id", "")
+                tool_name = msg.get("name", "")
+                tool_content = msg.get("content", "")
+                
+                if tool_call_id and tool_name:
+                    # Add function call
+                    input_items.append({
+                        "type": "function_call",
+                        "call_id": tool_call_id,
+                        "name": tool_name,
+                        "arguments": msg.get("arguments", "{}"),
+                    })
+                    # Add function result
+                    input_items.append({
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": tool_content,
+                    })
+        
+        return input_items, instructions
 
-        payload = {"model": self.model_name, "input": inputs}
+    def _call_responses(
+        self,
+        messages,
+        temperature,
+        max_tokens,
+        image_tool_handler=None,
+        music_tool_handler=None,
+        read_aloud_tool_handler=None,
+    ):
+        # Use base endpoint to avoid appending /responses to an endpoint that already has /chat/completions
+        base = self._get_base_endpoint()
+        url = base + "/responses" if base else "/responses"
+        
+        # Build input items and extract instructions
+        input_items, instructions = self._build_responses_input(messages)
+        
+        # Determine which function tools are enabled
+        enabled_tools = set()
+        if image_tool_handler is not None:
+            enabled_tools.add("generate_image")
+        if music_tool_handler is not None:
+            enabled_tools.add("control_music")
+        if read_aloud_tool_handler is not None:
+            enabled_tools.add("read_aloud")
+        
+        # Build tools array
+        tools = self._build_responses_tools(enabled_tools)
+        
+        # Build base params
+        params = {
+            "model": self.model_name,
+            "input": input_items,
+        }
+        
+        if instructions:
+            params["instructions"] = instructions
+        
         if temperature is not None:
-            payload["temperature"] = temperature
+            params["temperature"] = temperature
+        
         if max_tokens and max_tokens > 0:
-            payload["max_output_tokens"] = int(max_tokens)
-
-        resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        result = self._extract_text(data)
-        # Debug: log response structure if extraction failed
-        if not result:
-            print(f"[CustomProvider] Warning: Failed to extract text from response. Response structure: {json.dumps(data, indent=2)[:500]}")
-        return result
+            params["max_output_tokens"] = int(max_tokens)
+        
+        if tools:
+            params["tools"] = tools
+        
+        # If no function tools are enabled, we can do a simple one-shot call
+        if not enabled_tools:
+            try:
+                resp = self.session.post(url, headers=self._headers(), json=params, timeout=60)
+                resp.raise_for_status()
+                data = resp.json()
+                result = self._extract_text(data)
+                # Debug: log response structure if extraction failed
+                if not result:
+                    print(f"[CustomProvider] Warning: Failed to extract text from response. Response structure: {json.dumps(data, indent=2)[:500]}")
+                return result
+            except requests.exceptions.HTTPError as e:
+                error_detail = ""
+                try:
+                    error_detail = resp.text[:500] if hasattr(e, 'response') and e.response else str(e)
+                except:
+                    error_detail = str(e)
+                print(f"[CustomProvider] Error calling Responses API: {error_detail}")
+                print(f"[CustomProvider] Request payload: {json.dumps(params, indent=2)[:1000]}")
+                raise
+        
+        # Tool-aware flow: allow the model to call tools, route those through
+        # handlers, then continue the conversation until we get a final answer.
+        tool_context = ToolContext(
+            image_handler=image_tool_handler,
+            music_handler=music_tool_handler,
+            read_aloud_handler=read_aloud_tool_handler,
+        )
+        
+        max_tool_rounds = 3
+        tool_result_snippets = []
+        current_input = input_items.copy()
+        
+        for round_num in range(max_tool_rounds):
+            payload = {**params, "input": current_input}
+            
+            try:
+                resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.exceptions.HTTPError as e:
+                error_detail = ""
+                try:
+                    error_detail = resp.text[:500] if hasattr(e, 'response') and e.response else str(e)
+                except:
+                    error_detail = str(e)
+                print(f"[CustomProvider] Error calling Responses API (round {round_num + 1}): {error_detail}")
+                print(f"[CustomProvider] Request payload: {json.dumps(payload, indent=2)[:1000]}")
+                raise
+            
+            text_content, function_calls = self._extract_responses_output(data)
+            
+            print(f"[CustomProvider] Round {round_num + 1}: text_content={text_content[:100] if text_content else 'None'}, function_calls={len(function_calls)}")
+            
+            if not function_calls:
+                # No function calls - this is the final answer
+                if tool_result_snippets:
+                    # Append tool outputs (e.g. <img> tags) so UI always renders them
+                    return text_content + "\n\n" + "\n\n".join(tool_result_snippets)
+                return text_content
+            
+            # Process each function call
+            for fc in function_calls:
+                parsed_args = parse_tool_arguments(fc["arguments"])
+                tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
+                
+                if tool_result:
+                    tool_result_snippets.append(tool_result)
+                
+                # Add the function call and its result to the conversation
+                # First, add the assistant's function call
+                current_input.append({
+                    "type": "function_call",
+                    "call_id": fc["call_id"],
+                    "name": fc["name"],
+                    "arguments": fc["arguments"],
+                })
+                
+                # Then add the function result
+                current_input.append({
+                    "type": "function_call_output",
+                    "call_id": fc["call_id"],
+                    "output": tool_result or "",
+                })
+        
+        # If we exhausted tool rounds, return what we have
+        final_text = text_content if text_content else ""
+        if tool_result_snippets:
+            return final_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return final_text
 
     def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
         api_type = (self.api_type or "").lower()

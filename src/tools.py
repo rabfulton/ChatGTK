@@ -309,7 +309,7 @@ def build_tools_for_provider(
     enabled_tools : Set[str]
         Set of tool names that are enabled.
     provider_name : str
-        One of 'openai', 'grok', 'gemini'.
+        One of 'openai', 'grok', 'claude', 'custom', 'gemini'.
 
     Returns
     -------
@@ -321,7 +321,7 @@ def build_tools_for_provider(
         spec = TOOL_REGISTRY.get(tool_name)
         if not spec:
             continue
-        if provider_name in ("openai", "grok", "claude"):
+        if provider_name in ("openai", "grok", "claude", "custom"):
             declarations.append(build_openai_tool_declaration(spec))
         elif provider_name == "gemini":
             declarations.append(build_gemini_function_declaration(spec))
@@ -481,7 +481,7 @@ class ToolManager:
         Returns
         -------
         str
-            The provider name ('openai', 'gemini', 'grok').
+            The provider name ('openai', 'gemini', 'grok', 'claude', 'custom').
         """
         if not model_name:
             return "openai"
@@ -525,7 +525,7 @@ class ToolManager:
             return False
 
         provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok", "claude"):
+        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False
 
         lower = model_name.lower()
@@ -533,6 +533,10 @@ class ToolManager:
             return False
         if self.is_image_model_for_provider(model_name, provider):
             return False
+
+        # Custom models: assume they support tools if they use chat.completions API
+        if provider == "custom":
+            return True
 
         # OpenAI GPT chat models.
         if provider == "openai":
@@ -567,7 +571,7 @@ class ToolManager:
             return False
 
         provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok", "claude"):
+        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False
 
         lower = model_name.lower()
@@ -575,6 +579,10 @@ class ToolManager:
             return False
         if self.is_image_model_for_provider(model_name, provider):
             return False
+
+        # Custom models: assume they support tools if they use chat.completions API
+        if provider == "custom":
+            return True
 
         # OpenAI GPT chat models.
         if provider == "openai":
@@ -609,7 +617,7 @@ class ToolManager:
             return False
 
         provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok", "claude"):
+        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False
 
         lower = model_name.lower()
@@ -617,6 +625,10 @@ class ToolManager:
             return False
         if self.is_image_model_for_provider(model_name, provider):
             return False
+
+        # Custom models: assume they support tools if they use chat.completions API
+        if provider == "custom":
+            return True
 
         # OpenAI GPT chat models.
         if provider == "openai":
