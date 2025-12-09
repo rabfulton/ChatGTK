@@ -30,6 +30,8 @@ from utils import (
     save_api_keys,
     load_custom_models,
     save_custom_models,
+    load_model_display_names,
+    save_model_display_names,
 )
 from ai_providers import CustomProvider
 
@@ -338,6 +340,8 @@ class SettingsDialog(Gtk.Dialog):
 
         # Storage for model whitelist checkboxes: {provider: {model_id: Gtk.CheckButton}}
         self.model_checkboxes = {}
+        # Storage for model display name entries: {provider: {model_id: Gtk.Entry}}
+        self.model_display_entries = {}
         # Lazily build the Model Whitelist page on first access so opening the
         # settings dialog does not block on network calls to list models.
         self._model_whitelist_built = False
@@ -1525,6 +1529,15 @@ class SettingsDialog(Gtk.Dialog):
                 self.custom_models[model_id] = data
                 save_custom_models(self.custom_models)
                 self._refresh_custom_models_list()
+                # Update whitelist page if it's built and has entries for this model
+                if hasattr(self, 'model_display_entries'):
+                    for provider_key, entries in self.model_display_entries.items():
+                        if model_id in entries:
+                            display_name = data.get('display_name', '')
+                            if display_name and display_name != model_id:
+                                entries[model_id].set_text(display_name)
+                            else:
+                                entries[model_id].set_text('')
                 if hasattr(self, "_model_cache"):
                     self._model_cache["custom"] = sorted(self.custom_models.keys())
             except Exception as e:
@@ -1544,6 +1557,16 @@ class SettingsDialog(Gtk.Dialog):
                 self.custom_models[new_id] = data
                 save_custom_models(self.custom_models)
                 self._refresh_custom_models_list()
+                # Update whitelist page if it's built and has entries for this model
+                if hasattr(self, 'model_display_entries'):
+                    # Update the display name entry if it exists
+                    for provider_key, entries in self.model_display_entries.items():
+                        if model_id in entries:
+                            display_name = data.get('display_name', '')
+                            if display_name and display_name != model_id:
+                                entries[model_id].set_text(display_name)
+                            else:
+                                entries[model_id].set_text('')
                 if hasattr(self, "_model_cache"):
                     self._model_cache["custom"] = sorted(self.custom_models.keys())
             except Exception as e:
@@ -1711,7 +1734,31 @@ class SettingsDialog(Gtk.Dialog):
         for child in self._whitelist_outer_box.get_children():
             self._whitelist_outer_box.remove(child)
         self.model_checkboxes = {}
+        self.model_display_entries = {}  # Initialize display name entries storage
         self._model_widgets_by_provider = {}
+
+        # Add header row with column labels
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header_row.add(header_hbox)
+        
+        # Model column header
+        model_header = Gtk.Label(label="Model", xalign=0)
+        model_header.set_size_request(200, -1)
+        header_hbox.pack_start(model_header, False, False, 0)
+        
+        # Spacer to push header to the right
+        header_hbox.pack_start(Gtk.Box(), True, True, 0)
+        
+        # Display Name column header (on the right side)
+        display_header = Gtk.Label(label="Display Name", xalign=0)
+        display_header.set_size_request(200, -1)
+        header_hbox.pack_end(display_header, False, False, 0)
+        
+        header_row.set_selectable(False)
+        header_row.set_activatable(False)
+        self._whitelist_outer_box.add(header_row)
 
         for display_name, provider_key, whitelist_attr, _ in self._PROVIDER_INFO:
             widgets_for_provider = []
@@ -1739,14 +1786,44 @@ class SettingsDialog(Gtk.Dialog):
             enabled_models = sorted([m for m in available_models if m in whitelist_set])
             disabled_models = sorted([m for m in available_models if m not in whitelist_set])
 
-            # Create checkboxes
+            # Create checkboxes with display name support
             self.model_checkboxes[provider_key] = {}
+            self.model_display_entries = {}  # Store entry widgets for display names
             for model_id in enabled_models + disabled_models:
                 row = Gtk.ListBoxRow()
                 _add_listbox_row_margins(row)
+                
+                # Create horizontal box for checkbox, model ID label, and display name entry
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                row.add(hbox)
+                
+                # Checkbox
                 cb = Gtk.CheckButton(label=model_id)
                 cb.set_active(model_id in whitelist_set)
-                row.add(cb)
+                cb.set_size_request(200, -1)
+                hbox.pack_start(cb, False, False, 0)
+                
+                # Spacer to push entry box to the right
+                hbox.pack_start(Gtk.Box(), True, True, 0)
+                
+                # Display name entry (positioned on the right side)
+                display_name_entry = Gtk.Entry()
+                display_name_entry.set_placeholder_text("Display name (optional)")
+                # Get display name - check custom models first, then display names setting
+                # Reload display names fresh each time to ensure we have the latest
+                display_name = self._get_display_name_for_model(model_id)
+                # Set the text if we have a display name that's different from model_id
+                if display_name and display_name != model_id:
+                    display_name_entry.set_text(display_name)
+                display_name_entry.connect("changed", self._on_display_name_changed, model_id)
+                display_name_entry.set_size_request(200, -1)
+                hbox.pack_end(display_name_entry, False, False, 0)
+                
+                # Store references
+                if provider_key not in self.model_display_entries:
+                    self.model_display_entries[provider_key] = {}
+                self.model_display_entries[provider_key][model_id] = display_name_entry
+                
                 self._whitelist_outer_box.add(row)
                 self.model_checkboxes[provider_key][model_id] = cb
                 widgets_for_provider.append(row)
@@ -1808,6 +1885,49 @@ class SettingsDialog(Gtk.Dialog):
             GLib.idle_add(finish_refresh)
 
         threading.Thread(target=do_refresh, daemon=True).start()
+
+    def _get_display_name_for_model(self, model_id):
+        """Get display name for a model, checking custom models first, then display names setting."""
+        # Check custom models first
+        if model_id in self.custom_models:
+            custom_model = self.custom_models[model_id]
+            if custom_model.get('display_name') and custom_model.get('display_name') != model_id:
+                return custom_model['display_name']
+        
+        # Check display names setting
+        display_names = load_model_display_names()
+        return display_names.get(model_id, '')
+    
+    def _on_display_name_changed(self, entry, model_id):
+        """Handler for when display name entry is changed."""
+        new_display_name = entry.get_text().strip()
+        
+        # Update custom model if it exists
+        if model_id in self.custom_models:
+            if new_display_name:
+                self.custom_models[model_id]['display_name'] = new_display_name
+            else:
+                # Remove display_name if empty (fall back to model_id)
+                self.custom_models[model_id].pop('display_name', None)
+            save_custom_models(self.custom_models)
+        else:
+            # Update display names setting for non-custom models
+            display_names = load_model_display_names()
+            if new_display_name:
+                display_names[model_id] = new_display_name
+            else:
+                # Remove if empty
+                display_names.pop(model_id, None)
+            # Save the updated display names
+            save_model_display_names(display_names)
+        
+        # Reload custom models to ensure we have the latest data
+        # (in case a custom model was added with the same ID)
+        self.custom_models = load_custom_models()
+        
+        # Refresh custom models list if this model is a custom model
+        if model_id in self.custom_models:
+            self._refresh_custom_models_list()
 
     def _get_available_models_for_provider(self, provider_key, force_refresh=False):
         """
@@ -2288,6 +2408,9 @@ class SettingsDialog(Gtk.Dialog):
             'conversation_buffer_length': (self.entry_conv_buffer.get_text() or "ALL").strip(),
             # Window / tray behavior
             'minimize_to_tray_enabled': self.switch_minimize_to_tray.get_active(),
+            # Model display names - preserve what was saved during the dialog session
+            # Load current value from settings file (already in JSON string format)
+            'model_display_names': load_settings().get('MODEL_DISPLAY_NAMES', ''),
         }
 
     def get_api_keys(self):

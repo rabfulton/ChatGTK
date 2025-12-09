@@ -139,6 +139,13 @@ SETTINGS_CONFIG = {
         'type': str,
         'default': 'sonar,sonar-pro,sonar-reasoning'
     },
+    # Model display names – JSON-encoded mapping of model_id -> display_name.
+    # Example: {"gpt-4o-mini": "GPT-4o Mini", "gpt-4o": "GPT-4o"}
+    # If a model has no display name, its model_id is used in the dropdown.
+    'MODEL_DISPLAY_NAMES': {
+        'type': str,
+        'default': ''
+    },
     # Read Aloud settings – automatically speak assistant responses.
     # When enabled, each new assistant message is read aloud using the selected provider.
     'READ_ALOUD_ENABLED': {'type': bool, 'default': False},

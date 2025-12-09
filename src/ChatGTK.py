@@ -44,6 +44,7 @@ from utils import (
     load_api_keys,
     load_custom_models,
     save_custom_models,
+    get_model_display_name,
 )
 from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
 from markup_utils import (
@@ -525,25 +526,87 @@ class OpenAIGTKClient(Gtk.Window):
             self.current_geometry = (width, height)
         return False
 
+    def _get_model_id_from_combo(self):
+        """Get the actual model_id from the combo box, mapping display text back to model_id."""
+        display_text = self.combo_model.get_active_text()
+        if not display_text:
+            return None
+        
+        # Check if we have the mapping
+        if hasattr(self, '_display_to_model_id') and display_text in self._display_to_model_id:
+            return self._display_to_model_id[display_text]
+        
+        # If no mapping found, assume it's the model_id itself
+        return display_text
+
     def update_model_list(self, models, current_model=None):
         """Update the model combo box with fetched models."""
         if not models:
             models = self._default_models_for_provider('openai')
             self.model_provider_map = {model: 'openai' for model in models}
         
-        active_model = current_model or self.combo_model.get_active_text()
+        # Create mapping from display text to model_id
+        self._display_to_model_id = {}
+        for model_id in models:
+            display_name = get_model_display_name(model_id, self.custom_models)
+            # Only show display name if one is set, otherwise use model_id
+            if display_name:
+                display_text = display_name
+            else:
+                display_text = model_id
+            self._display_to_model_id[display_text] = model_id
+        
+        # Find active model (map from display text to model_id if needed)
+        active_display = current_model
+        if current_model:
+            # Check if current_model is a display text or model_id
+            if current_model in self._display_to_model_id:
+                active_model = self._display_to_model_id[current_model]
+            elif current_model in models:
+                active_model = current_model
+                # Find the display text for this model_id
+                display_name = get_model_display_name(current_model, self.custom_models)
+                if display_name:
+                    active_display = display_name
+                else:
+                    active_display = current_model
+            else:
+                active_model = None
+        else:
+            active_display = self.combo_model.get_active_text()
+            if active_display:
+                active_model = self._display_to_model_id.get(active_display)
+            else:
+                active_model = None
+        
         if not active_model or active_model not in models:
             preferred_default = self.default_model if self.default_model in models else None
             active_model = preferred_default or models[0]
+            display_name = get_model_display_name(active_model, self.custom_models)
+            if display_name:
+                active_display = display_name
+            else:
+                active_display = active_model
         
         self._updating_model = True
         try:
             self.combo_model.remove_all()
-            if active_model in models:
-                self.combo_model.append_text(active_model)
-            other_models = sorted([m for m in models if m != active_model])
-            for model in other_models:
-                self.combo_model.append_text(model)
+            # Add active model first
+            self.combo_model.append_text(active_display)
+            # Add other models sorted by display text
+            other_displays = []
+            for model in models:
+                if model != active_model:
+                    display_name = get_model_display_name(model, self.custom_models)
+                    if display_name:
+                        display_text = display_name
+                    else:
+                        display_text = model
+                    other_displays.append((display_text, model))
+            # Sort by display text
+            other_displays.sort(key=lambda x: x[0])
+            for display_text, _ in other_displays:
+                self.combo_model.append_text(display_text)
             self.combo_model.set_active(0)
         finally:
             self._updating_model = False
@@ -556,29 +619,37 @@ class OpenAIGTKClient(Gtk.Window):
             return
         self._updating_model = True
         try:
-            # Get newly selected model
-            selected_model = combo.get_active_text()
-            if not selected_model:
+            # Get newly selected display text
+            selected_display = combo.get_active_text()
+            if not selected_display:
                 return
 
-            # Get all models directly from the combo box
+            # Map display text back to model_id
+            selected_model_id = None
+            if hasattr(self, '_display_to_model_id') and selected_display in self._display_to_model_id:
+                selected_model_id = self._display_to_model_id[selected_display]
+            else:
+                # If not in mapping, assume it's the model_id itself
+                selected_model_id = selected_display
+
+            # Get all display texts from the combo box
             model_store = combo.get_model()
-            models = []
+            display_texts = []
             iter = model_store.get_iter_first()
             while iter:
-                models.append(model_store.get_value(iter, 0))
+                display_texts.append(model_store.get_value(iter, 0))
                 iter = model_store.iter_next(iter)
 
             # Update the list with new order
             combo.remove_all()
 
             # Add the selected model first
-            combo.append_text(selected_model)
+            combo.append_text(selected_display)
 
             # Add other models alphabetically, excluding the selected model
-            other_models = sorted(m for m in models if m != selected_model)
-            for model in other_models:
-                combo.append_text(model)
+            other_displays = sorted(d for d in display_texts if d != selected_display)
+            for display_text in other_displays:
+                combo.append_text(display_text)
 
             # Set active to the first item (the selected model)
             combo.set_active(0)
@@ -1461,7 +1532,7 @@ class OpenAIGTKClient(Gtk.Window):
     def apply_model_fetch_results(self, models, mapping):
         if mapping:
             self.model_provider_map = mapping
-        current_model = self.combo_model.get_active_text() or self.default_model
+        current_model = self._get_model_id_from_combo() or self.default_model
         self.update_model_list(models, current_model)
 
         # Also ensure the Image Model dropdown includes any image-capable models
@@ -1973,7 +2044,7 @@ class OpenAIGTKClient(Gtk.Window):
         if not question and not getattr(self, 'attached_file_path', None):
             return
 
-        selected_model = self.combo_model.get_active_text()
+        selected_model = self._get_model_id_from_combo()
         if not selected_model:
             self.show_error_dialog("Please select a model before sending a message")
             return False
@@ -2648,7 +2719,7 @@ class OpenAIGTKClient(Gtk.Window):
         dialog.destroy()
 
     def on_voice_input(self, widget):
-        current_model = self.combo_model.get_active_text()
+        current_model = self._get_model_id_from_combo()
 
         if current_model is None or current_model == "":
             self.show_error_dialog("Please select a model before using voice input")
@@ -2908,7 +2979,7 @@ class OpenAIGTKClient(Gtk.Window):
             if len(self.conversation_history) > 0 and "model" in self.conversation_history[0]:
                 current_model = self.conversation_history[0]["model"]
             else:
-                current_model = self.combo_model.get_active_text()
+                current_model = self._get_model_id_from_combo()
 
             # Only store the model name if it's not dall-e-3 and does not contain "tts" or "audio"
             if "dall-e" not in current_model.lower() and "tts" not in current_model.lower() and "audio" not in current_model.lower():

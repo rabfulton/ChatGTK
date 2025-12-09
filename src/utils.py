@@ -205,6 +205,75 @@ def save_custom_models(models: dict) -> None:
     except Exception as e:
         print(f"Error saving custom models: {e}")
 
+
+def load_model_display_names() -> dict:
+    """
+    Load model display name mappings from settings.
+    
+    Returns a dict mapping model_id -> display_name.
+    """
+    settings = load_settings()
+    display_names_json = settings.get('MODEL_DISPLAY_NAMES', '') or ''
+    
+    if not display_names_json.strip():
+        return {}
+    
+    try:
+        data = json.loads(display_names_json)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+    
+    return {}
+
+
+def save_model_display_names(display_names: dict) -> None:
+    """
+    Save model display name mappings to settings.
+    
+    Args:
+        display_names: dict mapping model_id -> display_name
+    """
+    settings = load_settings()
+    # Remove empty display names
+    cleaned = {k: v for k, v in display_names.items() if v and v.strip()}
+    settings['MODEL_DISPLAY_NAMES'] = json.dumps(cleaned) if cleaned else ''
+    save_settings(settings)
+
+
+def get_model_display_name(model_id: str, custom_models: dict = None) -> str:
+    """
+    Get the display name for a model, checking custom models first, then display names setting.
+    
+    Args:
+        model_id: The model identifier
+        custom_models: Optional dict of custom model definitions (from load_custom_models())
+    
+    Returns:
+        Display name if available and different from model_id, otherwise empty string
+        (This allows the dropdown to show only display name when set, or model_id when not)
+    """
+    display_name = None
+    
+    # Check custom models first (they have display_name in their structure)
+    if custom_models:
+        custom_model = custom_models.get(model_id)
+        if custom_model and custom_model.get('display_name'):
+            display_name = custom_model['display_name']
+    
+    # Check the display names setting if not found in custom models
+    if not display_name:
+        display_names = load_model_display_names()
+        display_name = display_names.get(model_id, '')
+    
+    # Return display name only if it's set and different from model_id
+    if display_name and display_name.strip() and display_name != model_id:
+        return display_name
+    
+    # Return empty string so caller can use model_id
+    return ''
+
 def ensure_history_dir():
     """Ensure the history directory exists."""
     Path(HISTORY_DIR).mkdir(parents=True, exist_ok=True)

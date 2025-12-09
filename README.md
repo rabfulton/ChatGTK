@@ -36,7 +36,7 @@ pip install -r requirements.txt
 ```
 Or use your package manager to install the dependencies. 
 The application when launched from the terminal will complain about which dependencies are missing. 
-You otionally require `texlive` and `dvipng` if you want mathematics to render nicely and the `beets` package for the music control functionality.
+You optionally require `texlive` and `dvipng` if you want mathematics to render nicely. Install `beets` and `playerctl` if you want the music control functionality.
 
 ```bash
 ./chatgtk.sh
@@ -56,7 +56,7 @@ The application looks for the following environment variables:
 - `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional)
 - `PERPLEXITY_API_KEY` (optional)
 
-You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page.
+You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page or define a custom endpoint in the **Custom Models* settings page.
 
 ## Screenshots
 
@@ -68,27 +68,6 @@ You will need at least one API key for the application to function. Alternativel
 
 *Image Generation*
 ![Image Generation](screenshots/images.jpg)
-
-## Python Packages
-- openai>=1.0.0
-- PyGObject>=3.42.0
-- sounddevice>=0.4.6
-- soundfile>=0.12.1
-- numpy>=1.24.0
-- pathlib>=1.0.1
-- beets>=1.6.0 (optional, for music control tool)
-
-## System Dependencies
-- python3
-- gtk-3.0
-- gtksourceview4
-- pulseaudio
-- texlive (for LaTeX support)
-- dvipng (for LaTeX rendering)
-- Optional, for music control tool:
-  - A music player such as `vlc` (configurable in Settings)
-  - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
-  - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
 
 ### Getting API keys
 
@@ -208,22 +187,6 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - For Grok, this uses both a built-in `web_search` tool and a builtin `x_search` tool when appropriate.
   - Only models that support these tools will be configured to use them; when enabled, the assistant can automatically call web search when it needs fresh, real‑world information and return grounded answers with citations.
 
-## Technical Notes
-
-### OpenAI API Backend
-
-ChatGTK uses OpenAI's **Responses API** as the primary execution path for most OpenAI models. This provides:
-- Support for web search grounding (for gpt-4o, gpt-4-turbo, gpt-5.x models)
-- Native file attachment handling (PDFs)
-- Function tools (image generation, music control, read aloud)
-
-Some models still use the older **chat.completions API**:
-- **Audio models** (`gpt-4o-audio-preview`, `gpt-4o-mini-audio-preview`) require chat.completions for audio output modalities
-- **Reasoning models** (`o1-mini`, `o1-preview`, `o3`, `o3-mini`) require special developer message formatting via chat.completions
-- **Realtime models** use a separate WebSocket API
-
-For more details, see the [OpenAI Responses API migration guide](https://platform.openai.com/docs/guides/migrate-to-responses).
-
 ## FAQ
 
 **gpt-image-1 is not working**<br>
@@ -232,5 +195,26 @@ OpenAI requires identity verification for some of their models. You can verify y
 Set your **Music Library Directory** in **Settings → Tool Options**, then click the **Generate Library** button to scan your music files. Verify your **Music Player Executable** path is correct (default: `/usr/bin/audacious -p <playlist>`). Alternatively, if you already have a beets library, you can specify its path in the **Beets Library DB** field.<br>
 **Web search is not working**<br>
 Web search is only supported on certain models. For OpenAI, supported models include: `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, and `gpt-5.x` models. For Gemini, supported models include `gemini-2.x` and `gemini-3.x` models. Older models like `gpt-3.5-turbo` or `gemini-1.5` do not support web search. Newer Grok models should work and can also be asked to search X.<br>
+
+## Python Packages
+- openai>=1.0.0
+- PyGObject>=3.42.0
+- sounddevice>=0.4.6
+- soundfile>=0.12.1
+- numpy>=1.24.0
+- pathlib>=1.0.1
+- beets>=1.6.0 (optional, for music control tool)
+
+## System Dependencies
+- python3
+- gtk-3.0
+- gtksourceview4
+- pulseaudio
+- texlive (for LaTeX support)
+- dvipng (for LaTeX rendering)
+- Optional, for music control tool:
+  - A music player such as `vlc` (configurable in Settings)
+  - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
+  - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
 
 <a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
