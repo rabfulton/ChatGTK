@@ -2920,12 +2920,28 @@ class OpenAIGTKClient(Gtk.Window):
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:
                 saved_model = history[0]["model"]
-                # Find and set the model in combo box
                 model_store = self.combo_model.get_model()
+                
+                # Find the matching row by comparing resolved model_ids (handles custom display names)
+                match_index = None
                 for i in range(len(model_store)):
-                    if model_store[i][0] == saved_model:
-                        self.combo_model.set_active(i)
+                    display_text = model_store[i][0]
+                    model_id = self._display_to_model_id.get(display_text, display_text) if hasattr(self, "_display_to_model_id") else display_text
+                    if model_id == saved_model:
+                        match_index = i
                         break
+                
+                if match_index is None:
+                    # Conversation references a model not currently in the list (e.g., custom); add it so selection stays in sync
+                    display_text = get_model_display_name(saved_model, self.custom_models) or saved_model
+                    if not hasattr(self, "_display_to_model_id"):
+                        self._display_to_model_id = {}
+                    self._display_to_model_id[display_text] = saved_model
+                    match_index = len(model_store)
+                    self.combo_model.append_text(display_text)
+                
+                if match_index is not None:
+                    self.combo_model.set_active(match_index)
             
             # Sync system prompt selector with the loaded chat's system message
             if history and history[0].get("role") == "system":
