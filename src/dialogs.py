@@ -1442,20 +1442,9 @@ class SettingsDialog(Gtk.Dialog):
     def _build_custom_models_page(self):
         page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         page_box.set_margin_top(12)
-        page_box.set_margin_bottom(12)
+        page_box.set_margin_bottom(0)
         page_box.set_margin_start(12)
         page_box.set_margin_end(12)
-
-        header = Gtk.Label(xalign=0)
-        header.set_markup("<b>Custom Models</b>")
-        page_box.pack_start(header, False, False, 0)
-
-        desc = Gtk.Label(
-            label="Add custom OpenAI-compatible endpoints (chat.completions, responses, images, tts).",
-            xalign=0,
-        )
-        desc.set_line_wrap(True)
-        page_box.pack_start(desc, False, False, 0)
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         add_btn = Gtk.Button(label="Add Custom Model")
@@ -1463,11 +1452,22 @@ class SettingsDialog(Gtk.Dialog):
         controls.pack_start(add_btn, False, False, 0)
         page_box.pack_start(controls, False, False, 0)
 
-        self._custom_models_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        # Encapsulate the list in a frame (like system prompts page)
+        frame = Gtk.Frame()
+        frame.set_shadow_type(Gtk.ShadowType.IN)
+
+        self._custom_models_list = Gtk.ListBox()
+        self._custom_models_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._custom_models_list.set_margin_top(0)
+        self._custom_models_list.set_margin_bottom(0)
+        self._custom_models_list.set_margin_start(0)
+        self._custom_models_list.set_margin_end(0)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
         scroll.add(self._custom_models_list)
-        page_box.pack_start(scroll, True, True, 0)
+        frame.add(scroll)
+        page_box.pack_start(frame, True, True, 0)
 
         self._refresh_custom_models_list()
         self.stack.add_named(page_box, "Custom Models")
@@ -1477,34 +1477,41 @@ class SettingsDialog(Gtk.Dialog):
             self._custom_models_list.remove(child)
 
         if not self.custom_models:
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
             empty = Gtk.Label(label="No custom models added yet.", xalign=0)
-            self._custom_models_list.pack_start(empty, False, False, 0)
+            row.add(empty)
+            self._custom_models_list.add(row)
             self._custom_models_list.show_all()
             return
 
         for model_id in sorted(self.custom_models.keys()):
             cfg = self.custom_models.get(model_id, {})
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            row.add(hbox)
+            
             label = Gtk.Label(
                 label=f"{cfg.get('display_name', model_id)}  ({cfg.get('api_type', 'chat.completions')})",
                 xalign=0,
             )
             label.set_hexpand(True)
-            row.pack_start(label, True, True, 0)
+            hbox.pack_start(label, True, True, 0)
 
             btn_test = Gtk.Button(label="Test")
             btn_test.connect("clicked", self._on_test_custom_model, model_id)
-            row.pack_start(btn_test, False, False, 0)
+            hbox.pack_start(btn_test, False, False, 0)
 
             btn_edit = Gtk.Button(label="Edit")
             btn_edit.connect("clicked", self._on_edit_custom_model, model_id)
-            row.pack_start(btn_edit, False, False, 0)
+            hbox.pack_start(btn_edit, False, False, 0)
 
             btn_delete = Gtk.Button(label="Delete")
             btn_delete.connect("clicked", self._on_delete_custom_model, model_id)
-            row.pack_start(btn_delete, False, False, 0)
+            hbox.pack_start(btn_delete, False, False, 0)
 
-            self._custom_models_list.pack_start(row, False, False, 0)
+            self._custom_models_list.add(row)
 
         self._custom_models_list.show_all()
 
@@ -1661,14 +1668,23 @@ class SettingsDialog(Gtk.Dialog):
 
         page_box.pack_start(header_box, False, False, 0)
 
-        # --- Scrolled area for provider model checkboxes ---
+        # --- Encapsulate the list in a frame (like system prompts page) ---
+        frame = Gtk.Frame()
+        frame.set_shadow_type(Gtk.ShadowType.IN)
+
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
 
-        self._whitelist_outer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._whitelist_outer_box = Gtk.ListBox()
+        self._whitelist_outer_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._whitelist_outer_box.set_margin_top(0)
+        self._whitelist_outer_box.set_margin_bottom(0)
+        self._whitelist_outer_box.set_margin_start(0)
+        self._whitelist_outer_box.set_margin_end(0)
         scroll.add(self._whitelist_outer_box)
-        page_box.pack_start(scroll, True, True, 0)
+        frame.add(scroll)
+        page_box.pack_start(frame, True, True, 0)
 
         # Track widgets per provider for filtering: {provider_key: [widgets...]}
         self._model_widgets_by_provider = {}
@@ -1701,10 +1717,13 @@ class SettingsDialog(Gtk.Dialog):
             widgets_for_provider = []
 
             # Section label
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
             section_label = Gtk.Label(xalign=0)
             section_label.set_markup(f"<b>{display_name}</b>")
-            self._whitelist_outer_box.pack_start(section_label, False, False, 0)
-            widgets_for_provider.append(section_label)
+            row.add(section_label)
+            self._whitelist_outer_box.add(row)
+            widgets_for_provider.append(row)
 
             # Determine available models (from disk cache or network)
             available_models = self._get_available_models_for_provider(provider_key)
@@ -1723,19 +1742,28 @@ class SettingsDialog(Gtk.Dialog):
             # Create checkboxes
             self.model_checkboxes[provider_key] = {}
             for model_id in enabled_models + disabled_models:
+                row = Gtk.ListBoxRow()
+                _add_listbox_row_margins(row)
                 cb = Gtk.CheckButton(label=model_id)
                 cb.set_active(model_id in whitelist_set)
-                cb.set_margin_start(12)
-                self._whitelist_outer_box.pack_start(cb, False, False, 0)
+                row.add(cb)
+                self._whitelist_outer_box.add(row)
                 self.model_checkboxes[provider_key][model_id] = cb
-                widgets_for_provider.append(cb)
+                widgets_for_provider.append(row)
 
             # Separator between providers
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
             sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
             sep.set_margin_top(6)
             sep.set_margin_bottom(6)
-            self._whitelist_outer_box.pack_start(sep, False, False, 0)
-            widgets_for_provider.append(sep)
+            box.pack_start(sep, True, True, 0)
+            row.add(box)
+            row.set_selectable(False)
+            row.set_activatable(False)
+            self._whitelist_outer_box.add(row)
+            widgets_for_provider.append(row)
 
             self._model_widgets_by_provider[provider_key] = widgets_for_provider
 
