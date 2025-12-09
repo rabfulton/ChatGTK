@@ -120,6 +120,8 @@ class OpenAIGTKClient(Gtk.Window):
         self.current_chat_id = None  # None means this is a new, unsaved chat
         # Each message can carry optional provider-specific metadata in provider_meta.
         self.conversation_history = [create_system_message(self.system_message)]
+        # Track message widgets (excludes system message)
+        self.message_widgets = []
         self.providers = {}
         self.model_provider_map = {}
         # Load any API keys saved from a previous session; individual providers
@@ -1695,9 +1697,16 @@ class OpenAIGTKClient(Gtk.Window):
             save_settings(convert_settings_for_save(get_object_settings(self)))
         dialog.destroy()
 
-    def append_user_message(self, text):
-        """Add a user message as a label with user style."""
+    def append_user_message(self, text, message_index: int):
+        """Add a user message as a label with user style and tracking."""
+        # Wrap in EventBox to receive button events
+        event_box = Gtk.EventBox()
+        event_box.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        event_box.message_index = message_index
+
         lbl = Gtk.Label()
+        lbl.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        lbl.message_index = message_index
         lbl.set_selectable(True)
         lbl.set_line_wrap(True)
         lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
@@ -1713,7 +1722,24 @@ class OpenAIGTKClient(Gtk.Window):
 
         username = getpass.getuser()
         lbl.set_text(f"{username}: {text}")
-        self.conversation_box.pack_start(lbl, False, False, 0)
+        event_box.add(lbl)
+
+        def on_button_press(widget, event):
+            if event.button == 3:  # Right click
+                target_index = getattr(widget, "message_index", None)
+                if target_index is None and widget.get_parent():
+                    target_index = getattr(widget.get_parent(), "message_index", None)
+                if target_index is not None:
+                    self.create_message_context_menu(widget, target_index, event)
+                return True
+            return False
+
+        event_box.connect("button-press-event", on_button_press)
+        # Ensure right-click on the label also triggers the menu
+        lbl.connect("button-press-event", on_button_press)
+
+        self.conversation_box.pack_start(event_box, False, False, 0)
+        self.message_widgets.append(event_box)
         self.conversation_box.show_all()
 
     def _register_link_tag(self, tag: Gtk.TextTag, url: str):
@@ -1876,9 +1902,11 @@ class OpenAIGTKClient(Gtk.Window):
         text_view.connect("size-allocate", on_size_allocate)
         return text_view
 
-    def append_ai_message(self, message_text):
+    def append_ai_message(self, message_text, message_index: int):
         # Container for the entire AI response (including play/stop button)
         response_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        response_container.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        response_container.message_index = message_index
         
         # Container for the text content
         content_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -1908,6 +1936,22 @@ class OpenAIGTKClient(Gtk.Window):
         lbl_name.set_text(f"{self.ai_name}:")
         content_container.pack_start(lbl_name, False, False, 0)
         
+        # Add context menu for TextViews without losing built-in GTK menu
+        def attach_popup_to_text_view(text_view: Gtk.TextView):
+            text_view.message_index = message_index
+
+            def on_text_view_populate_popup(view, menu):
+                if menu is None:
+                    return
+                separator = Gtk.SeparatorMenuItem()
+                delete_item = Gtk.MenuItem(label="Delete Message")
+                delete_item.connect("activate", self.on_delete_message, view.message_index)
+                menu.append(separator)
+                menu.append(delete_item)
+                menu.show_all()
+
+            text_view.connect("populate-popup", on_text_view_populate_popup)
+
         # Process message_text to add formatted text and (if needed) code blocks.
         full_text = []
         
@@ -1974,6 +2018,7 @@ class OpenAIGTKClient(Gtk.Window):
                     
                     if "<img" in processed:
                         text_view = self._create_text_view("", self.ai_color)
+                        attach_popup_to_text_view(text_view)
                         buffer = text_view.get_buffer()
                         parts = re.split(r'(<img src="[^"]+"/>)', processed)
                         for part in parts:
@@ -1994,6 +2039,7 @@ class OpenAIGTKClient(Gtk.Window):
                     else:
                         processed = process_inline_markup(processed, self.font_size)
                         text_view = self._create_text_view(processed, self.ai_color)
+                        attach_popup_to_text_view(text_view)
                         content_container.pack_start(text_view, False, False, 0)
                     full_text.append(seg)
                     
@@ -2003,7 +2049,25 @@ class OpenAIGTKClient(Gtk.Window):
         # Pack the content and the speech button into the response container.
         response_container.pack_start(content_container, True, True, 0)
         response_container.pack_end(speech_btn, False, False, 0)
+
+        def on_response_button_press(widget, event):
+            # Avoid overriding TextView context menus; only handle right-clicks on non-TextView areas
+            if event.button == 3:
+                try:
+                    source_widget = event.window.get_user_data()
+                except Exception:
+                    source_widget = None
+
+                if isinstance(source_widget, Gtk.TextView):
+                    return False
+                self.create_message_context_menu(widget, widget.message_index, event)
+                return True
+            return False
+
+        response_container.connect("button-press-event", on_response_button_press)
+
         self.conversation_box.pack_start(response_container, False, False, 0)
+        self.message_widgets.append(response_container)
         self.conversation_box.show_all()
         
         # Schedule scroll to the AI response after it's shown
@@ -2033,11 +2097,17 @@ class OpenAIGTKClient(Gtk.Window):
             Gtk.STYLE_PROVIDER_PRIORITY_USER
         )
 
-    def append_message(self, sender, message_text):
+    def append_message(self, sender, message_text, message_index: int = None):
+        if message_index is None:
+            if sender == 'ai':
+                message_index = max(len(self.conversation_history) - 1, 0)
+            else:
+                message_index = len(self.conversation_history)
+
         if sender == 'user':
-            self.append_user_message(message_text)
+            self.append_user_message(message_text, message_index)
         else:
-            self.append_ai_message(message_text)
+            self.append_ai_message(message_text, message_index)
 
     def on_submit(self, widget, event=None):
         question = self.entry_question.get_text().strip()
@@ -2089,7 +2159,8 @@ class OpenAIGTKClient(Gtk.Window):
             return False
 
         if quick_image_request:
-            self.append_message('user', question)
+            msg_index = len(self.conversation_history)
+            self.append_message('user', question, msg_index)
             self.conversation_history.append(create_user_message(question))
             self.entry_question.set_text("")
             self.show_thinking_animation()
@@ -2116,7 +2187,9 @@ class OpenAIGTKClient(Gtk.Window):
                     return
                 
             self.ws_provider.send_text(question, self.on_stream_content_received)
-            self.append_message('user', question)
+            msg_index = len(self.conversation_history)
+            self.append_message('user', question, msg_index)
+            self.conversation_history.append(create_user_message(question))
             self.entry_question.set_text("")
             return
         
@@ -2209,7 +2282,8 @@ class OpenAIGTKClient(Gtk.Window):
                 print(f"Error processing file: {e}")
                 display_text = question + f"\n[Error attaching file]"
 
-        self.append_message('user', display_text)
+        msg_index = len(self.conversation_history)
+        self.append_message('user', display_text, msg_index)
         
         # Store user message in the chat history
         user_msg = create_user_message(
@@ -2570,13 +2644,13 @@ class OpenAIGTKClient(Gtk.Window):
             answer = self._normalize_image_tags(answer)
 
             assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
-
+            message_index = len(self.conversation_history)
             self.conversation_history.append(assistant_message)
 
             # Update UI in main thread
             formatted_answer = format_response(answer)
             GLib.idle_add(self.hide_thinking_animation)
-            GLib.idle_add(lambda: self.append_message('ai', formatted_answer))
+            GLib.idle_add(lambda idx=message_index, msg=formatted_answer: self.append_message('ai', msg, idx))
             GLib.idle_add(self.save_current_chat)
             
             # Read aloud the response if enabled (runs in background thread)
@@ -2591,7 +2665,9 @@ class OpenAIGTKClient(Gtk.Window):
                 print(f"\nAPI Call Error: {error}")
                 GLib.idle_add(self.hide_thinking_animation)
                 error_message = f"** Error: {str(error)} **"
-                GLib.idle_add(lambda msg=error_message: self.append_message('ai', msg))
+                message_index = len(self.conversation_history)
+                self.conversation_history.append(create_assistant_message(error_message))
+                GLib.idle_add(lambda idx=message_index, msg=error_message: self.append_message('ai', msg, idx))
             
         finally:
             GLib.idle_add(self.hide_thinking_animation)
@@ -2658,7 +2734,10 @@ class OpenAIGTKClient(Gtk.Window):
                             GLib.idle_add(self.append_message, 'ai', "Error: Failed to record audio")
                     
                     except Exception as e:
-                        GLib.idle_add(self.append_message, 'ai', f"Error in recording thread: {str(e)}")
+                        err_text = f"Error in recording thread: {str(e)}"
+                        msg_index = len(self.conversation_history)
+                        self.conversation_history.append(create_assistant_message(err_text))
+                        GLib.idle_add(self.append_message, 'ai', err_text, msg_index)
                     
                     finally:
                         # Reset button state
@@ -2669,7 +2748,10 @@ class OpenAIGTKClient(Gtk.Window):
                 threading.Thread(target=record_thread, daemon=True).start()
                 
             except Exception as e:
-                self.append_message('ai', f"Error initializing audio system: {str(e)}")
+                err_text = f"Error initializing audio system: {str(e)}"
+                msg_index = len(self.conversation_history)
+                self.conversation_history.append(create_assistant_message(err_text))
+                self.append_message('ai', err_text, msg_index)
                 self.btn_voice.set_label("Start Voice Input")
                 self.recording = False
         else:
@@ -2788,7 +2870,10 @@ class OpenAIGTKClient(Gtk.Window):
                     
                 except Exception as e:
                     print(f"Real-time streaming error: {e}")
-                    self.append_message('ai', f"Error starting real-time streaming: {str(e)}")
+                    err_text = f"Error starting real-time streaming: {str(e)}"
+                    msg_index = len(self.conversation_history)
+                    self.conversation_history.append(create_assistant_message(err_text))
+                    self.append_message('ai', err_text, msg_index)
                     self.btn_voice.set_label("Start Voice Input")
                     self.recording = False
             else:
@@ -2822,6 +2907,7 @@ class OpenAIGTKClient(Gtk.Window):
                 # Clear the display
                 for child in self.conversation_box.get_children():
                     child.destroy()
+                self.message_widgets.clear()
                 
                 # Reset conversation state
                 self.conversation_history = [create_system_message(self.system_message)]
@@ -2862,6 +2948,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Clear the conversation display
         for child in self.conversation_box.get_children():
             child.destroy()
+        self.message_widgets.clear()
         
         # Refresh the history list
         self.refresh_history_list()
@@ -2977,15 +3064,17 @@ class OpenAIGTKClient(Gtk.Window):
             # Clear and reload chat display
             for child in self.conversation_box.get_children():
                 child.destroy()
+            self.message_widgets.clear()
             
             # Rebuild conversation display with formatting
-            for message in history:
+            for idx, message in enumerate(history):
                 if message['role'] != 'system':  # Skip system message
+                    message_index = idx
                     if message['role'] == 'user':
-                        self.append_message('user', message['content'])
+                        self.append_message('user', message['content'], message_index)
                     elif message['role'] == 'assistant':
                         formatted_content = format_response(message['content'])
-                        self.append_message('ai', formatted_content)
+                        self.append_message('ai', formatted_content, message_index)
             
             # Scroll to the beginning of the conversation
             def scroll_to_top():
@@ -3133,7 +3222,10 @@ class OpenAIGTKClient(Gtk.Window):
         def on_cancel_clicked(button):
             self.request_cancelled = True
             self.hide_thinking_animation()
-            GLib.idle_add(lambda: self.append_message('ai', "** Request cancelled by user **"))
+            cancel_text = "** Request cancelled by user **"
+            message_index = len(self.conversation_history)
+            self.conversation_history.append(create_assistant_message(cancel_text))
+            GLib.idle_add(lambda idx=message_index: self.append_message('ai', cancel_text, idx))
         
         cancel_button.connect("clicked", on_cancel_clicked)
         self.thinking_container.pack_start(cancel_button, False, False, 0)
@@ -3210,6 +3302,54 @@ class OpenAIGTKClient(Gtk.Window):
             self.thinking_label = None
         if hasattr(self, 'loader_dot') and self.loader_dot:
             self.loader_dot = None
+
+    def create_message_context_menu(self, widget, message_index, event=None):
+        """Create a context menu for an individual message."""
+        menu = Gtk.Menu()
+
+        delete_item = Gtk.MenuItem(label="Delete Message")
+        delete_item.connect("activate", self.on_delete_message, message_index)
+        menu.append(delete_item)
+
+        menu.show_all()
+        if event:
+            menu.popup_at_pointer(event)
+        else:
+            menu.popup_at_pointer(None)
+
+    def delete_message(self, message_index: int):
+        """Delete a message from UI and history (excluding system message)."""
+        if message_index <= 0 or message_index >= len(self.conversation_history):
+            return
+
+        widget_idx = message_index - 1  # message_widgets excludes system message
+        if widget_idx < 0 or widget_idx >= len(self.message_widgets):
+            return
+
+        widget = self.message_widgets.pop(widget_idx)
+        try:
+            widget.destroy()
+        except Exception:
+            pass
+
+        try:
+            del self.conversation_history[message_index]
+        except Exception:
+            return
+
+        # Reassign message_index for remaining widgets
+        for idx, child in enumerate(self.message_widgets[widget_idx:], start=widget_idx):
+            try:
+                child.message_index = idx + 1  # offset for system message
+            except Exception:
+                pass
+
+        if self.current_chat_id is not None:
+            self.save_current_chat()
+
+    def on_delete_message(self, _menu_item, message_index: int):
+        """Menu callback to delete a message."""
+        self.delete_message(message_index)
 
     def create_history_context_menu(self, history_row):
         """Create a context menu for chat history items."""
