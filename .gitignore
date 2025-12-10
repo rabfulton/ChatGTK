@@ -13,6 +13,7 @@ debug_failed.tex
 *.pdf
 !screenshots/*.pdf
 custom_models.json
+debug_failed.log
 WARP.md
 PKGBUILD
 aur.txt

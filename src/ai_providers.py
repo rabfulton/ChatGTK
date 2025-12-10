@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 import re
-from gi.repository import GLib
+# Note: GLib dependency removed - callback scheduler is now injected
 import numpy as np
 import sounddevice as sd
 import threading
@@ -2745,7 +2745,13 @@ class GeminiProvider(AIProvider):
         return header + pcm_data
 
 class OpenAIWebSocketProvider:
-    def __init__(self):
+    def __init__(self, callback_scheduler=None):
+        """Initialize the WebSocket provider.
+        
+        Args:
+            callback_scheduler: Optional callable to schedule callbacks on the main thread.
+                                If not provided, callbacks are invoked directly.
+        """
         self.ws = None
         self.loop = None
         self.thread = None
@@ -2753,6 +2759,7 @@ class OpenAIWebSocketProvider:
         self.audio_buffer = bytearray()
         self.is_ai_speaking = False  # New flag to track AI speech state
         self.last_event_id = None  # Track event ID for responses
+        self._callback_scheduler = callback_scheduler
         
         # Audio configuration
         self.input_sample_rate = 48000  # Input from mic
@@ -2764,6 +2771,13 @@ class OpenAIWebSocketProvider:
         self.output_stream = None
         self.message_lock = asyncio.Lock()  # Add lock for message handling
         self._lock = threading.Lock()
+
+    def _schedule_callback(self, callback, *args):
+        """Schedule a callback on the main thread."""
+        if self._callback_scheduler:
+            self._callback_scheduler(callback, *args)
+        else:
+            callback(*args)
         
     def start_loop(self):
         """Start the event loop in a new thread if not already running"""
@@ -2942,7 +2956,7 @@ class OpenAIWebSocketProvider:
                             
                             if "text" in response:
                                 print(f"Received text: {response['text']}")
-                                GLib.idle_add(callback, response["text"])
+                                self._schedule_callback(callback, response["text"])
                             elif response.get("type") == "response.audio.delta":
                                 try:
                                     # Get the audio delta data
@@ -3005,7 +3019,7 @@ class OpenAIWebSocketProvider:
                         
         except Exception as e:
             print(f"Error in audio stream: {e}")
-            GLib.idle_add(callback, f"\nError: {str(e)}")
+            self._schedule_callback(callback, f"\nError: {str(e)}")
         finally:
             self.is_recording = False
             if hasattr(self, 'output_stream'):

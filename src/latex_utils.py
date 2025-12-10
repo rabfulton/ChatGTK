@@ -1449,10 +1449,12 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 \definecolor{assistantcolor}{RGB}{60, 179, 113}  % Medium Sea Green
 \definecolor{codebg}{RGB}{40, 44, 52}          % Dark background for code
 \definecolor{codetext}{RGB}{171, 178, 191}     % Light text for code
+\definecolor{codecomment}{RGB}{92, 99, 112}    % Grey for comments
 
 % Code listing style
 \lstset{
     basicstyle=\ttfamily\small\color{codetext},
+    commentstyle=\color{codecomment},
     backgroundcolor=\color{codebg},
     breaklines=true,
     frame=single,
@@ -1470,7 +1472,43 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
     xleftmargin=\dimexpr\fboxsep+1pt\relax,
     xrightmargin=\dimexpr\fboxsep+1pt\relax,
     framexleftmargin=\dimexpr\fboxsep+.4pt\relax,
-    resetmargins=true
+    resetmargins=true,
+    literate={Ω}{$\Omega$}1
+             {π}{$\pi$}1
+             {μ}{$\mu$}1
+             {θ}{$\theta$}1
+             {α}{$\alpha$}1
+             {β}{$\beta$}1
+             {γ}{$\gamma$}1
+             {σ}{$\sigma$}1
+             {φ}{$\phi$}1
+             {∑}{$\sum$}1
+             {∫}{$\int$}1
+             {∞}{$\infty$}1
+             {≈}{$\approx$}1
+             {≠}{$\neq$}1
+             {≤}{$\leq$}1
+             {≥}{$\geq$}1
+             {±}{$\pm$}1
+             {×}{$\times$}1
+             {÷}{$\div$}1
+             {→}{$\rightarrow$}1
+             {←}{$\leftarrow$}1
+             {↔}{$\leftrightarrow$}1
+             {∂}{$\partial$}1
+             {∇}{$\nabla$}1
+             {√}{\ensuremath{\sqrt{\,}}}1
+             {°}{\ensuremath{^{\circ}}}1
+             {⁰}{\ensuremath{^{0}}}1
+             {¹}{\ensuremath{^{1}}}1
+             {²}{\ensuremath{^{2}}}1
+             {³}{\ensuremath{^{3}}}1
+             {⁴}{\ensuremath{^{4}}}1
+             {⁵}{\ensuremath{^{5}}}1
+             {⁶}{\ensuremath{^{6}}}1
+             {⁷}{\ensuremath{^{7}}}1
+             {⁸}{\ensuremath{^{8}}}1
+             {⁹}{\ensuremath{^{9}}}1
 }
 
 \pagestyle{fancy}

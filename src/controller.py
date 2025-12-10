@@ -1,0 +1,407 @@
+"""
+controller.py – Application state and business logic, decoupled from GTK UI.
+
+This module provides the ChatController class that manages:
+- Conversation history and chat lifecycle
+- AI provider initialization and model management
+- Settings and API key management
+- Tool manager configuration
+
+The controller is designed to be toolkit-agnostic to facilitate future porting.
+"""
+
+from __future__ import annotations
+
+import os
+import json
+from typing import Any, Dict, List, Optional, Set, Callable
+
+from utils import (
+    load_settings,
+    save_settings,
+    apply_settings,
+    get_object_settings,
+    convert_settings_for_save,
+    load_api_keys,
+    load_custom_models,
+    save_custom_models,
+    generate_chat_name,
+    save_chat_history,
+    load_chat_history,
+    list_chat_histories,
+    get_chat_metadata,
+    get_chat_title,
+    get_chat_dir,
+    delete_chat_history,
+)
+from ai_providers import get_ai_provider
+from conversation import create_system_message, create_user_message, create_assistant_message
+from tools import (
+    ToolManager,
+    is_chat_completion_model,
+    append_tool_guidance,
+)
+
+
+class ChatController:
+    """
+    Manages application state and business logic for the chat client.
+    
+    This class is designed to be independent of any specific GUI toolkit,
+    making it suitable for use with GTK, Qt, or other frameworks.
+    """
+
+    def __init__(self):
+        """Initialize the controller with settings and state."""
+        # Load settings from disk
+        self._settings: Dict[str, Any] = load_settings()
+        
+        # Apply settings as attributes for convenience
+        for key, value in self._settings.items():
+            setattr(self, key.lower(), value)
+        
+        # Initialize system prompts from settings
+        self._init_system_prompts_from_settings()
+        
+        # Chat state
+        self.current_chat_id: Optional[str] = None
+        self.conversation_history: List[Dict[str, Any]] = [
+            create_system_message(self.system_message)
+        ]
+        
+        # Provider management
+        self.providers: Dict[str, Any] = {}
+        self.model_provider_map: Dict[str, str] = {}
+        self.api_keys: Dict[str, str] = load_api_keys()
+        self.custom_models: Dict[str, Dict[str, Any]] = load_custom_models()
+        self.custom_providers: Dict[str, Any] = {}
+        
+        # Tool manager
+        self.tool_manager = ToolManager(
+            image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
+            music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
+            read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
+        )
+
+    # -----------------------------------------------------------------------
+    # System prompts management
+    # -----------------------------------------------------------------------
+
+    def _init_system_prompts_from_settings(self) -> None:
+        """
+        Initialize system prompts from settings.
+        
+        Parses SYSTEM_PROMPTS_JSON and sets up self.system_prompts (list of dicts)
+        and self.active_system_prompt_id. Also updates self.system_message to
+        the active prompt's content for backward compatibility.
+        """
+        prompts = []
+        raw = getattr(self, "system_prompts_json", "") or ""
+        if raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    for p in parsed:
+                        if isinstance(p, dict) and "id" in p and "name" in p and "content" in p:
+                            prompts.append(p)
+            except json.JSONDecodeError:
+                pass
+        
+        # Fallback: synthesize a single prompt from system_message
+        if not prompts:
+            prompts = [{
+                "id": "default",
+                "name": "Default",
+                "content": getattr(self, "system_message", "You are a helpful assistant.")
+            }]
+        
+        self.system_prompts: List[Dict[str, Any]] = prompts
+        
+        # Determine active prompt ID
+        active_id = getattr(self, "active_system_prompt_id", "") or ""
+        valid_ids = {p["id"] for p in self.system_prompts}
+        if active_id not in valid_ids:
+            active_id = self.system_prompts[0]["id"] if self.system_prompts else ""
+        self.active_system_prompt_id = active_id
+        
+        # Update system_message to the active prompt's content
+        active_prompt = self.get_system_prompt_by_id(active_id)
+        if active_prompt:
+            self.system_message = active_prompt["content"]
+
+    def get_system_prompt_by_id(self, prompt_id: str) -> Optional[Dict[str, Any]]:
+        """Return the system prompt dict with the given ID, or None."""
+        for p in getattr(self, "system_prompts", []):
+            if p["id"] == prompt_id:
+                return p
+        return None
+
+    def set_active_system_prompt(self, prompt_id: str) -> bool:
+        """
+        Set the active system prompt by ID.
+        
+        Returns True if the prompt was found and set, False otherwise.
+        """
+        prompt = self.get_system_prompt_by_id(prompt_id)
+        if not prompt:
+            return False
+        
+        self.active_system_prompt_id = prompt_id
+        self.system_message = prompt["content"]
+        
+        # Update the system message in the current conversation history
+        if self.conversation_history and self.conversation_history[0].get("role") == "system":
+            self.conversation_history[0]["content"] = prompt["content"]
+        
+        self._save_settings()
+        return True
+
+    # -----------------------------------------------------------------------
+    # Provider management
+    # -----------------------------------------------------------------------
+
+    def initialize_provider(self, provider_name: str, api_key: str) -> Any:
+        """
+        Initialize and cache a provider when the key changes.
+        
+        Returns the provider instance, or None if the key was cleared.
+        """
+        api_key = (api_key or "").strip()
+        self.api_keys[provider_name] = api_key
+
+        # If the key was cleared, drop the provider.
+        if not api_key:
+            self.providers.pop(provider_name, None)
+            return None
+
+        # Reuse an existing provider instance when available so caches survive.
+        provider = self.providers.get(provider_name)
+        if provider is None:
+            provider = get_ai_provider(provider_name)
+
+        # Let the provider decide how to handle key changes (e.g., clear caches).
+        provider.initialize(api_key)
+        self.providers[provider_name] = provider
+        return provider
+
+    def initialize_providers_from_env(self) -> None:
+        """
+        Initialize providers from environment variables and saved keys.
+        
+        Environment variables take precedence over saved keys.
+        """
+        env_openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+        env_gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
+        env_grok_key = os.environ.get('GROK_API_KEY', '').strip()
+        env_claude_key = (
+            os.environ.get('CLAUDE_API_KEY', '').strip()
+            or os.environ.get('ANTHROPIC_API_KEY', '').strip()
+        )
+        env_perplexity_key = os.environ.get('PERPLEXITY_API_KEY', '').strip()
+
+        # Choose the effective key for each provider
+        openai_key = env_openai_key or self.api_keys.get('openai', '').strip()
+        gemini_key = env_gemini_key or self.api_keys.get('gemini', '').strip()
+        grok_key = env_grok_key or self.api_keys.get('grok', '').strip()
+        claude_key = env_claude_key or self.api_keys.get('claude', '').strip()
+        perplexity_key = env_perplexity_key or self.api_keys.get('perplexity', '').strip()
+
+        if openai_key:
+            self.api_keys['openai'] = openai_key
+            self.initialize_provider('openai', openai_key)
+        if gemini_key:
+            self.api_keys['gemini'] = gemini_key
+            self.initialize_provider('gemini', gemini_key)
+        if grok_key:
+            self.api_keys['grok'] = grok_key
+            self.initialize_provider('grok', grok_key)
+        if claude_key:
+            self.api_keys['claude'] = claude_key
+            os.environ['CLAUDE_API_KEY'] = claude_key
+            os.environ['ANTHROPIC_API_KEY'] = claude_key
+            self.initialize_provider('claude', claude_key)
+        if perplexity_key:
+            self.api_keys['perplexity'] = perplexity_key
+            self.initialize_provider('perplexity', perplexity_key)
+
+    def get_default_models_for_provider(self, provider_name: str) -> List[str]:
+        """Return default models for a provider when the API is unavailable."""
+        if provider_name == 'gemini':
+            return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-3-pro-preview"]
+        if provider_name == 'grok':
+            return ["grok-2", "grok-2-mini", "grok-2-image-1212"]
+        if provider_name == 'claude':
+            return ["claude-sonnet-4-5", "claude-3-5-sonnet-latest"]
+        if provider_name == 'perplexity':
+            return ["sonar", "sonar-pro", "sonar-reasoning"]
+        return ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
+
+    # -----------------------------------------------------------------------
+    # Chat lifecycle
+    # -----------------------------------------------------------------------
+
+    def new_chat(self) -> None:
+        """Reset the conversation for a new chat."""
+        self.current_chat_id = None
+        self.conversation_history = [create_system_message(self.system_message)]
+
+    def load_chat(self, chat_id: str) -> bool:
+        """
+        Load a chat from disk by its ID (filename without .json).
+        
+        Returns True if successful, False otherwise.
+        """
+        try:
+            history = load_chat_history(chat_id)
+            if history:
+                self.conversation_history = history
+                self.current_chat_id = chat_id
+                return True
+        except Exception as e:
+            print(f"Error loading chat {chat_id}: {e}")
+        return False
+
+    def save_current_chat(self, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """
+        Save the current conversation history.
+        
+        If this is a new chat, generates a name based on the first user message.
+        Returns the chat_id (filename) or None on error.
+        """
+        if not self.conversation_history:
+            return None
+        
+        # Get first user message for naming
+        first_user_msg = ""
+        for msg in self.conversation_history:
+            if msg.get("role") == "user":
+                first_user_msg = msg.get("content", "")[:40]
+                break
+        
+        # Use existing ID or generate new one
+        chat_id = self.current_chat_id
+        if not chat_id:
+            chat_id = generate_chat_name(first_user_msg or "chat")
+            if chat_id.endswith('.json'):
+                chat_id = chat_id[:-5]
+            self.current_chat_id = chat_id
+        
+        try:
+            save_chat_history(chat_id, self.conversation_history, metadata)
+            return chat_id
+        except Exception as e:
+            print(f"Error saving chat: {e}")
+            return None
+
+    # -----------------------------------------------------------------------
+    # Message preparation
+    # -----------------------------------------------------------------------
+
+    def get_conversation_buffer_limit(self) -> Optional[int]:
+        """
+        Return the configured conversation buffer length as an integer.
+        
+        Returns:
+            None: send the full conversation history (ALL).
+            0: send only the latest non-system message.
+            N>0: send the last N non-system messages.
+        """
+        raw = getattr(self, "conversation_buffer_length", None)
+        if raw is None:
+            return None
+
+        if isinstance(raw, (int, float)):
+            value = int(raw)
+            return max(value, 0)
+
+        text = str(raw).strip()
+        if not text or text.upper() == "ALL":
+            return None
+
+        try:
+            value = int(text)
+            return max(value, 0)
+        except ValueError:
+            return None
+
+    def apply_conversation_buffer_limit(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Apply the configured conversation buffer length to the given history.
+        
+        The system message (first entry) is always preserved when present.
+        """
+        if not history:
+            return history
+
+        limit = self.get_conversation_buffer_limit()
+        if limit is None or len(history) <= 1:
+            return history
+
+        first = history[0]
+        non_system = history[1:]
+        if not non_system:
+            return history
+
+        if limit == 0:
+            trimmed = [non_system[-1]]
+        else:
+            trimmed = non_system[-limit:]
+
+        return [first] + trimmed
+
+    def messages_for_model(self, model_name: str) -> List[Dict[str, Any]]:
+        """
+        Return the conversation history with tool guidance appended for chat models.
+        """
+        if not self.conversation_history:
+            return []
+
+        # For non-chat-completion models, skip extra system guidance
+        if not is_chat_completion_model(model_name):
+            return self.apply_conversation_buffer_limit(self.conversation_history)
+
+        first_message = self.conversation_history[0]
+        if first_message.get("role") != "system":
+            return self.apply_conversation_buffer_limit(self.conversation_history)
+
+        current_prompt = first_message.get("content", "") or ""
+
+        # Get enabled tools for this model and append guidance
+        try:
+            enabled_tools = self.tool_manager.get_enabled_tools_for_model(
+                model_name, self.model_provider_map
+            )
+            new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
+        except Exception as e:
+            print(f"Error while appending tool guidance: {e}")
+            new_prompt = current_prompt
+
+        limited_history = self.apply_conversation_buffer_limit(self.conversation_history)
+
+        if new_prompt == current_prompt:
+            return limited_history
+
+        messages = [msg.copy() for msg in limited_history]
+        messages[0]["content"] = new_prompt
+        return messages
+
+    # -----------------------------------------------------------------------
+    # Settings management
+    # -----------------------------------------------------------------------
+
+    def _save_settings(self) -> None:
+        """Persist current settings to disk."""
+        to_save = {}
+        for key in self._settings.keys():
+            attr = key.lower()
+            if hasattr(self, attr):
+                to_save[key] = getattr(self, attr)
+        save_settings(convert_settings_for_save(to_save))
+
+    def update_tool_manager(self) -> None:
+        """Update the ToolManager with current settings."""
+        self.tool_manager = ToolManager(
+            image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
+            music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
+            read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
+        )
