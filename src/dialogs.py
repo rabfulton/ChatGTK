@@ -885,6 +885,53 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     # Tool Options page
     # -----------------------------------------------------------------------
+    def _refresh_image_model_dropdown(self):
+        """Refresh the image model dropdown to include any new custom image models."""
+        if not hasattr(self, 'combo_image_model') or self.combo_image_model is None:
+            return
+        
+        # Get current value
+        current_value = self.combo_image_model.get_active_text() or (self.combo_image_model.get_child().get_text() if self.combo_image_model.get_child() else '') or getattr(self, "image_model", "dall-e-3")
+        
+        # Clear and rebuild the list
+        self.combo_image_model.remove_all()
+        
+        known_image_models = [
+            "dall-e-3",
+            "gpt-image-1",
+            "gpt-image-1-mini",
+            "gemini-3-pro-image-preview",
+            "gemini-2.5-flash-image",
+            "grok-2-image-1212",
+        ]
+        
+        for model_id in known_image_models:
+            self.combo_image_model.append_text(model_id)
+        
+        # Add custom image models
+        for model_id, cfg in self.custom_models.items():
+            if (cfg.get("api_type") or "").lower() == "images":
+                if model_id not in known_image_models:
+                    self.combo_image_model.append_text(model_id)
+        
+        # Restore current value
+        all_models = known_image_models + [
+            model_id for model_id, cfg in self.custom_models.items()
+            if (cfg.get("api_type") or "").lower() == "images" and model_id not in known_image_models
+        ]
+        if current_value in all_models:
+            active_index = 0
+            for idx, model_id in enumerate(all_models):
+                if model_id == current_value:
+                    active_index = idx
+                    break
+            self.combo_image_model.set_active(active_index)
+        else:
+            # Set as entry text if not in list
+            entry = self.combo_image_model.get_child()
+            if entry:
+                entry.set_text(current_value)
+
     def _build_tool_options_page(self):
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -933,7 +980,7 @@ class SettingsDialog(Gtk.Dialog):
         row.add(hbox)
         label = Gtk.Label(label="Image Tool Model", xalign=0)
         label.set_hexpand(True)
-        self.combo_image_model = Gtk.ComboBoxText()
+        self.combo_image_model = Gtk.ComboBoxText.new_with_entry()
 
         known_image_models = [
             "dall-e-3",
@@ -947,13 +994,30 @@ class SettingsDialog(Gtk.Dialog):
         for model_id in known_image_models:
             self.combo_image_model.append_text(model_id)
 
+        # Add custom image models
+        for model_id, cfg in self.custom_models.items():
+            if (cfg.get("api_type") or "").lower() == "images":
+                if model_id not in known_image_models:
+                    self.combo_image_model.append_text(model_id)
+
         current_image_model = getattr(self, "image_model", "dall-e-3")
         active_index = 0
-        for idx, model_id in enumerate(known_image_models):
+        all_models = known_image_models + [
+            model_id for model_id, cfg in self.custom_models.items()
+            if (cfg.get("api_type") or "").lower() == "images" and model_id not in known_image_models
+        ]
+        for idx, model_id in enumerate(all_models):
             if model_id == current_image_model:
                 active_index = idx
                 break
-        self.combo_image_model.set_active(active_index)
+        
+        # If current model is not in the list, set it as the entry text
+        if current_image_model not in all_models:
+            entry = self.combo_image_model.get_child()
+            if entry:
+                entry.set_text(current_image_model)
+        else:
+            self.combo_image_model.set_active(active_index)
 
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.combo_image_model, False, True, 0)
@@ -1529,6 +1593,9 @@ class SettingsDialog(Gtk.Dialog):
                 self.custom_models[model_id] = data
                 save_custom_models(self.custom_models)
                 self._refresh_custom_models_list()
+                # Refresh image model dropdown if this is an image model
+                if (data.get("api_type") or "").lower() == "images":
+                    self._refresh_image_model_dropdown()
                 # Update whitelist page if it's built and has entries for this model
                 if hasattr(self, 'model_display_entries'):
                     for provider_key, entries in self.model_display_entries.items():
@@ -1557,6 +1624,9 @@ class SettingsDialog(Gtk.Dialog):
                 self.custom_models[new_id] = data
                 save_custom_models(self.custom_models)
                 self._refresh_custom_models_list()
+                # Refresh image model dropdown if this is an image model or was an image model
+                if (data.get("api_type") or "").lower() == "images" or (cfg.get("api_type") or "").lower() == "images":
+                    self._refresh_image_model_dropdown()
                 # Update whitelist page if it's built and has entries for this model
                 if hasattr(self, 'model_display_entries'):
                     # Update the display name entry if it exists
@@ -1575,9 +1645,14 @@ class SettingsDialog(Gtk.Dialog):
 
     def _on_delete_custom_model(self, button, model_id):
         if model_id in self.custom_models:
+            cfg = self.custom_models.get(model_id, {})
+            was_image_model = (cfg.get("api_type") or "").lower() == "images"
             self.custom_models.pop(model_id, None)
             save_custom_models(self.custom_models)
             self._refresh_custom_models_list()
+            # Refresh image model dropdown if deleted model was an image model
+            if was_image_model:
+                self._refresh_image_model_dropdown()
             if hasattr(self, "_model_cache"):
                 self._model_cache["custom"] = sorted(self.custom_models.keys())
 
@@ -2386,7 +2461,7 @@ class SettingsDialog(Gtk.Dialog):
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
             'latex_color': self.btn_latex_color.get_rgba().to_string(),
             'tts_hd': self.switch_hd.get_active(),
-            'image_model': self.combo_image_model.get_active_text() or 'dall-e-3',
+            'image_model': self.combo_image_model.get_active_text() or (self.combo_image_model.get_child().get_text() if self.combo_image_model.get_child() else '') or 'dall-e-3',
             'image_tool_enabled': self.switch_image_tool_settings.get_active(),
             'music_tool_enabled': self.switch_music_tool_settings.get_active(),
             'web_search_enabled': self.switch_web_search_settings.get_active(),

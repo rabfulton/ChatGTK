@@ -499,12 +499,28 @@ class ToolManager:
             return "claude"
         return "openai"
 
-    def is_image_model_for_provider(self, model_name: str, provider_name: str) -> bool:
+    def is_image_model_for_provider(self, model_name: str, provider_name: str, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model is an image-generation model.
+        
+        Parameters
+        ----------
+        model_name : str
+            The model name.
+        provider_name : str
+            The provider name.
+        custom_models : Optional[Dict[str, Dict[str, Any]]]
+            Optional dict of custom model configurations. If provided and provider_name is "custom",
+            checks if the model has api_type "images".
         """
         if not model_name:
             return False
+        
+        # Check custom models first if provided
+        if provider_name == "custom" and custom_models:
+            cfg = custom_models.get(model_name, {})
+            return (cfg.get("api_type") or "").lower() == "images"
+        
         lower = model_name.lower()
 
         if provider_name == "openai":
@@ -515,7 +531,7 @@ class ToolManager:
             return lower.startswith("grok-2-image")
         return False
 
-    def supports_image_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None) -> bool:
+    def supports_image_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the image-generation tool.
         """
@@ -531,10 +547,11 @@ class ToolManager:
         lower = model_name.lower()
         if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
             return False
-        if self.is_image_model_for_provider(model_name, provider):
+        if self.is_image_model_for_provider(model_name, provider, custom_models):
             return False
 
         # Custom models: assume they support tools if they use chat.completions API
+        # (exclude image-only models which are already filtered above)
         if provider == "custom":
             return True
 
@@ -561,7 +578,7 @@ class ToolManager:
 
         return False
 
-    def supports_music_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None) -> bool:
+    def supports_music_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the music-control tool.
         """
@@ -577,7 +594,7 @@ class ToolManager:
         lower = model_name.lower()
         if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
             return False
-        if self.is_image_model_for_provider(model_name, provider):
+        if self.is_image_model_for_provider(model_name, provider, custom_models):
             return False
 
         # Custom models: assume they support tools if they use chat.completions API
@@ -607,7 +624,7 @@ class ToolManager:
 
         return False
 
-    def supports_read_aloud_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None) -> bool:
+    def supports_read_aloud_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the read-aloud tool.
         """
@@ -623,7 +640,7 @@ class ToolManager:
         lower = model_name.lower()
         if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
             return False
-        if self.is_image_model_for_provider(model_name, provider):
+        if self.is_image_model_for_provider(model_name, provider, custom_models):
             return False
 
         # Custom models: assume they support tools if they use chat.completions API
@@ -657,16 +674,17 @@ class ToolManager:
         self,
         model_name: str,
         model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Set[str]:
         """
         Return the set of tool names enabled for the given model.
         """
         enabled: Set[str] = set()
-        if self.supports_image_tools(model_name, model_provider_map):
+        if self.supports_image_tools(model_name, model_provider_map, custom_models):
             enabled.add("generate_image")
-        if self.supports_music_tools(model_name, model_provider_map):
+        if self.supports_music_tools(model_name, model_provider_map, custom_models):
             enabled.add("control_music")
-        if self.supports_read_aloud_tools(model_name, model_provider_map):
+        if self.supports_read_aloud_tools(model_name, model_provider_map, custom_models):
             enabled.add("read_aloud")
         return enabled
 
@@ -677,6 +695,7 @@ class ToolManager:
         music_handler: Optional[Callable[[str, Optional[str], Optional[float]], str]] = None,
         read_aloud_handler: Optional[Callable[[str], str]] = None,
         model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> ToolContext:
         """
         Build a ToolContext with handlers for the tools supported by the model.
@@ -693,6 +712,8 @@ class ToolManager:
             Handler for read aloud.
         model_provider_map : Optional[Dict[str, str]]
             Optional mapping of model names to provider names.
+        custom_models : Optional[Dict[str, Dict[str, Any]]]
+            Optional dict of custom model configurations.
 
         Returns
         -------
@@ -700,11 +721,11 @@ class ToolManager:
             A context with the appropriate handlers set.
         """
         ctx = ToolContext()
-        if self.supports_image_tools(model_name, model_provider_map):
+        if self.supports_image_tools(model_name, model_provider_map, custom_models):
             ctx.image_handler = image_handler
-        if self.supports_music_tools(model_name, model_provider_map):
+        if self.supports_music_tools(model_name, model_provider_map, custom_models):
             ctx.music_handler = music_handler
-        if self.supports_read_aloud_tools(model_name, model_provider_map):
+        if self.supports_read_aloud_tools(model_name, model_provider_map, custom_models):
             ctx.read_aloud_handler = read_aloud_handler
         return ctx
 

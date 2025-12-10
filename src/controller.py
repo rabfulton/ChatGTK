@@ -369,7 +369,7 @@ class ChatController:
         # Get enabled tools for this model and append guidance
         try:
             enabled_tools = self.tool_manager.get_enabled_tools_for_model(
-                model_name, self.model_provider_map
+                model_name, self.model_provider_map, self.custom_models
             )
             new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
         except Exception as e:
