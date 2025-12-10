@@ -540,7 +540,7 @@ class ToolManager:
 
         # OpenAI GPT chat models.
         if provider == "openai":
-            return lower.startswith("gpt-")
+            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
 
         # Gemini chat models that support function calling.
         if provider == "gemini":
@@ -586,7 +586,7 @@ class ToolManager:
 
         # OpenAI GPT chat models.
         if provider == "openai":
-            return lower.startswith("gpt-")
+            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
 
         # Gemini chat models that support function calling.
         if provider == "gemini":
@@ -632,7 +632,7 @@ class ToolManager:
 
         # OpenAI GPT chat models.
         if provider == "openai":
-            return lower.startswith("gpt-")
+            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
 
         # Gemini chat models that support function calling.
         if provider == "gemini":

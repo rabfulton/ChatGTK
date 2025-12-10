@@ -73,6 +73,7 @@ from conversation import (
     create_assistant_message,
     get_first_user_content,
 )
+from controller import ChatController
 # Initialize provider as None
 ai_provider = None
 
@@ -98,14 +99,15 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             print(f"Could not load application icon: {e}")
 
-        # Load settings
+        # Initialize the controller FIRST - it manages state and business logic
+        # Must be created before apply_settings since property setters delegate to controller
+        self.controller = ChatController()
+        self.controller.initialize_providers_from_env()
+
+        # Load and apply settings (for UI settings like window_width, font_size, etc.)
+        # Note: settings like system_message will be routed to controller via properties
         loaded = load_settings()
-        
-        # Apply all settings as attributes
         apply_settings(self, loaded)
-        
-        # Initialize system prompts from settings (before conversation_history)
-        self._init_system_prompts_from_settings()
         
         # Initialize window
         self.set_default_size(self.window_width, self.window_height)
@@ -116,29 +118,17 @@ class OpenAIGTKClient(Gtk.Window):
         # Flag to prevent minimize events during restoration
         self._restoring_from_tray = False
 
-        # Initialize chat state
-        self.current_chat_id = None  # None means this is a new, unsaved chat
-        # Each message can carry optional provider-specific metadata in provider_meta.
-        self.conversation_history = [create_system_message(self.system_message)]
-        # Track message widgets (excludes system message)
-        self.message_widgets = []
-        self.providers = {}
-        self.model_provider_map = {}
-        # Load any API keys saved from a previous session; individual providers
-        # will be initialized below using either environment variables or these
-        # persisted values.
-        self.api_keys = load_api_keys()
-        # Load custom model definitions (including per-model API keys)
-        self.custom_models = load_custom_models()
-        # Cache instantiated custom providers per model_id
-        self.custom_providers = {}
-        
-        # Initialize ToolManager with current settings
-        self.tool_manager = ToolManager(
-            image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
-            music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
-            read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
-        )
+        # Reference controller's mutable objects (dicts/lists share the same object)
+        # These aliases allow existing code to work without changes
+        # Note: conversation_history is now a property, not an alias
+        self.message_widgets = []  # UI-only, stays on window
+        self.providers = self.controller.providers
+        self.model_provider_map = self.controller.model_provider_map
+        self.api_keys = self.controller.api_keys
+        self.custom_models = self.controller.custom_models
+        self.custom_providers = self.controller.custom_providers
+        self.tool_manager = self.controller.tool_manager
+        self.system_prompts = self.controller.system_prompts
 
         # Remember the current geometry if not maximized
         self.current_geometry = (self.window_width, self.window_height)
@@ -220,50 +210,14 @@ class OpenAIGTKClient(Gtk.Window):
         self.combo_model = Gtk.ComboBoxText()
         self.combo_model.connect('changed', self.on_model_changed)
         
-        # Check for API keys in environment variables and initialize providers if they exist.
-        # Environment variables take precedence over saved keys for the current run.
-        env_openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
-        env_gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
-        env_grok_key = os.environ.get('GROK_API_KEY', '').strip()
-        # Support both CLAUDE_API_KEY (app-specific) and ANTHROPIC_API_KEY (per docs
-        # at `https://platform.claude.com/docs/en/api/openai-sdk`) for Claude.
-        env_claude_key = (
-            os.environ.get('CLAUDE_API_KEY', '').strip()
-            or os.environ.get('ANTHROPIC_API_KEY', '').strip()
-        )
-        env_perplexity_key = os.environ.get('PERPLEXITY_API_KEY', '').strip()
-
-        # Choose the effective key for each provider: environment overrides saved.
-        openai_key = env_openai_key or self.api_keys.get('openai', '').strip()
-        gemini_key = env_gemini_key or self.api_keys.get('gemini', '').strip()
-        grok_key = env_grok_key or self.api_keys.get('grok', '').strip()
-        claude_key = env_claude_key or self.api_keys.get('claude', '').strip()
-        perplexity_key = env_perplexity_key or self.api_keys.get('perplexity', '').strip()
-
-        if openai_key:
-            self.api_keys['openai'] = openai_key
-            self.initialize_provider('openai', openai_key)
-        if gemini_key:
-            self.api_keys['gemini'] = gemini_key
-            self.initialize_provider('gemini', gemini_key)
-        if grok_key:
-            self.api_keys['grok'] = grok_key
-            self.initialize_provider('grok', grok_key)
-        if claude_key:
-            self.api_keys['claude'] = claude_key
-            # Ensure both environment variables are set for consistency.
-            os.environ['CLAUDE_API_KEY'] = claude_key
-            os.environ['ANTHROPIC_API_KEY'] = claude_key
-            self.initialize_provider('claude', claude_key)
-        if perplexity_key:
-            self.api_keys['perplexity'] = perplexity_key
-            self.initialize_provider('perplexity', perplexity_key)
-        
+        # Provider initialization is now handled by self.controller.initialize_providers_from_env()
+        # called above. Here we just fetch models if we have any providers.
         if self.providers or self.custom_models:
             self.fetch_models_async()
         else:
-            default_models = self._default_models_for_provider('openai')
+            default_models = self.controller.get_default_models_for_provider('openai')
             self.model_provider_map = {model: 'openai' for model in default_models}
+            self.controller.model_provider_map = self.model_provider_map
             self.update_model_list(default_models, self.default_model)
 
         hbox_top.pack_start(self.combo_model, False, False, 0)
@@ -659,57 +613,52 @@ class OpenAIGTKClient(Gtk.Window):
             self._updating_model = False
 
     # -----------------------------------------------------------------------
-    # System prompts management
+    # System prompts management - delegated to controller
     # -----------------------------------------------------------------------
 
-    def _init_system_prompts_from_settings(self):
-        """
-        Initialize system prompts from settings.
-        
-        Parses SYSTEM_PROMPTS_JSON and sets up self.system_prompts (list of dicts)
-        and self.active_system_prompt_id. Also updates self.system_message to
-        the active prompt's content for backward compatibility.
-        """
-        prompts = []
-        raw = getattr(self, "system_prompts_json", "") or ""
-        if raw.strip():
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    for p in parsed:
-                        if isinstance(p, dict) and "id" in p and "name" in p and "content" in p:
-                            prompts.append(p)
-            except json.JSONDecodeError:
-                pass
-        
-        # Fallback: synthesize a single prompt from system_message
-        if not prompts:
-            prompts = [{
-                "id": "default",
-                "name": "Default",
-                "content": getattr(self, "system_message", "You are a helpful assistant.")
-            }]
-        
-        self.system_prompts = prompts
-        
-        # Determine active prompt ID
-        active_id = getattr(self, "active_system_prompt_id", "") or ""
-        valid_ids = {p["id"] for p in self.system_prompts}
-        if active_id not in valid_ids:
-            active_id = self.system_prompts[0]["id"] if self.system_prompts else ""
-        self.active_system_prompt_id = active_id
-        
-        # Update system_message to the active prompt's content
-        active_prompt = self._get_system_prompt_by_id(active_id)
-        if active_prompt:
-            self.system_message = active_prompt["content"]
+    @property
+    def current_chat_id(self):
+        """Get the current chat ID from controller."""
+        return self.controller.current_chat_id
+
+    @current_chat_id.setter
+    def current_chat_id(self, value):
+        """Set the current chat ID on controller."""
+        self.controller.current_chat_id = value
+
+    @property
+    def system_message(self):
+        """Get the system message from controller."""
+        return self.controller.system_message
+
+    @system_message.setter
+    def system_message(self, value):
+        """Set the system message on controller."""
+        self.controller.system_message = value
+
+    @property
+    def active_system_prompt_id(self):
+        """Get the active system prompt ID from controller."""
+        return self.controller.active_system_prompt_id
+
+    @active_system_prompt_id.setter
+    def active_system_prompt_id(self, value):
+        """Set the active system prompt ID on controller."""
+        self.controller.active_system_prompt_id = value
+
+    @property
+    def conversation_history(self):
+        """Get the conversation history from controller."""
+        return self.controller.conversation_history
+
+    @conversation_history.setter
+    def conversation_history(self, value):
+        """Set the conversation history on controller."""
+        self.controller.conversation_history = value
 
     def _get_system_prompt_by_id(self, prompt_id):
-        """Return the system prompt dict with the given ID, or None."""
-        for p in getattr(self, "system_prompts", []):
-            if p["id"] == prompt_id:
-                return p
-        return None
+        """Delegate to controller."""
+        return self.controller.get_system_prompt_by_id(prompt_id)
 
     def _refresh_system_prompt_combo(self):
         """
@@ -822,151 +771,28 @@ class OpenAIGTKClient(Gtk.Window):
         threading.Thread(target=fetch_thread, daemon=True).start()
 
     def _default_models_for_provider(self, provider_name):
-        if provider_name == 'gemini':
-            return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-3-pro-preview"]
-        if provider_name == 'grok':
-            # Basic Grok chat and image models
-            return ["grok-2", "grok-2-mini", "grok-2-image-1212"]
-        if provider_name == 'claude':
-            # Basic Claude chat models via the OpenAI SDK compatibility layer.
-            # See `https://platform.claude.com/docs/en/api/openai-sdk`.
-            return ["claude-sonnet-4-5", "claude-3-5-sonnet-latest"]
-        if provider_name == 'perplexity':
-            # Perplexity Sonar models with built-in web search.
-            # See https://docs.perplexity.ai/guides/chat-completions-guide
-            return ["sonar", "sonar-pro", "sonar-reasoning"]
-        return ["gpt-3.5-turbo", "gpt-4", "gpt-4o-mini"]
+        """Delegate to controller."""
+        return self.controller.get_default_models_for_provider(provider_name)
 
     def initialize_provider(self, provider_name, api_key):
-        """Initialize and cache providers when keys change.
-
-        This reuses existing provider instances so that any internal caches
-        (such as uploaded file IDs) are preserved across calls, and only
-        reinitializes when the API key actually changes.
-        """
+        """Delegate to controller, then update global ai_provider if needed."""
         global ai_provider
-        api_key = (api_key or "").strip()
-        self.api_keys[provider_name] = api_key
-
-        # If the key was cleared, drop the provider.
-        if not api_key:
-            self.providers.pop(provider_name, None)
-            if provider_name == 'openai':
-                ai_provider = None
-            return None
-
-        # Reuse an existing provider instance when available so caches survive.
-        provider = self.providers.get(provider_name)
-        if provider is None:
-            provider = get_ai_provider(provider_name)
-
-        # Let the provider decide how to handle key changes (e.g., clear caches).
-        provider.initialize(api_key)
-        self.providers[provider_name] = provider
-
+        provider = self.controller.initialize_provider(provider_name, api_key)
         if provider_name == 'openai':
             ai_provider = provider
         return provider
 
     def _get_conversation_buffer_limit(self):
-        """
-        Return the configured conversation buffer length as an integer.
-
-        Returns:
-            None: send the full conversation history (ALL).
-            0:    send only the latest non-system message.
-            N>0:  send the last N non-system messages.
-        """
-        raw = getattr(self, "conversation_buffer_length", None)
-        if raw is None:
-            return None
-
-        # Accept both numeric and string values for robustness.
-        if isinstance(raw, (int, float)):
-            value = int(raw)
-            return max(value, 0)
-
-        text = str(raw).strip()
-        if not text:
-            return None
-
-        if text.upper() == "ALL":
-            return None
-
-        try:
-            value = int(text)
-            return max(value, 0)
-        except ValueError:
-            print(f"Invalid CONVERSATION_BUFFER_LENGTH value '{raw}', defaulting to ALL.")
-            return None
+        """Delegate to controller."""
+        return self.controller.get_conversation_buffer_limit()
 
     def _apply_conversation_buffer_limit(self, history):
-        """
-        Apply the configured conversation buffer length to the given history.
-
-        The system message (first entry) is always preserved when present.
-        """
-        if not history:
-            return history
-
-        limit = self._get_conversation_buffer_limit()
-        if limit is None or len(history) <= 1:
-            # No limit configured, or only system + one message.
-            return history
-
-        first = history[0]
-        non_system = history[1:]
-        if not non_system:
-            return history
-
-        if limit == 0:
-            trimmed = [non_system[-1]]
-        else:
-            trimmed = non_system[-limit:]
-
-        return [first] + trimmed
+        """Delegate to controller."""
+        return self.controller.apply_conversation_buffer_limit(history)
 
     def _messages_for_model(self, model_name):
-        """
-        Return the conversation history, appending additional system guidance for
-        certain models:
-        - SYSTEM_PROMPT_APPENDIX for standard chat completion models.
-        - Tool-specific guidance when tools are available.
-        """
-        if not self.conversation_history:
-            return []
-
-        # For non-chat-completion models, we still respect the buffer limit but
-        # skip any extra system guidance.
-        if not is_chat_completion_model(model_name):
-            return self._apply_conversation_buffer_limit(self.conversation_history)
-
-        first_message = self.conversation_history[0]
-        if first_message.get("role") != "system":
-            return self._apply_conversation_buffer_limit(self.conversation_history)
-
-        current_prompt = first_message.get("content", "") or ""
-
-        # Get enabled tools for this model and append guidance using the tools module.
-        try:
-            enabled_tools = self.tool_manager.get_enabled_tools_for_model(
-                model_name, self.model_provider_map
-            )
-            new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
-        except Exception as e:
-            print(f"Error while appending tool guidance: {e}")
-            new_prompt = current_prompt
-
-        # Start from the current conversation history and apply the buffer limit.
-        limited_history = self._apply_conversation_buffer_limit(self.conversation_history)
-
-        # If nothing changed in the prompt, just return the (possibly trimmed) history.
-        if new_prompt == current_prompt:
-            return limited_history
-
-        messages = [msg.copy() for msg in limited_history]
-        messages[0]["content"] = new_prompt
-        return messages
+        """Delegate to controller."""
+        return self.controller.messages_for_model(model_name)
 
     def _clean_messages_for_perplexity(self, messages):
         """
@@ -1964,8 +1790,16 @@ class OpenAIGTKClient(Gtk.Window):
                 code_content = re.sub(r'^--- Code Block Start \(.*?\) ---', '', seg)
                 code_content = re.sub(r'--- Code Block End ---$', '', code_content).strip('\n')
                 source_view = create_source_view(code_content, code_lang, self.font_size, self.source_theme)
+                
+                # Wrap in ScrolledWindow to allow horizontal scrolling
+                scrolled_sw = Gtk.ScrolledWindow()
+                scrolled_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+                scrolled_sw.set_propagate_natural_height(True)
+                scrolled_sw.set_shadow_type(Gtk.ShadowType.NONE)
+                scrolled_sw.add(source_view)
+                
                 frame = Gtk.Frame()
-                frame.add(source_view)
+                frame.add(scrolled_sw)
                 content_container.pack_start(frame, False, False, 5)
                 full_text.append("Code block follows.")
             elif seg.startswith('--- Table Start ---'):
@@ -2174,7 +2008,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Check if we're in realtime mode
         if "realtime" in target_model.lower():
             if not hasattr(self, 'ws_provider'):
-                self.ws_provider = OpenAIWebSocketProvider()
+                self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
                 # Connect to WebSocket server
                 success = self.ws_provider.connect(
                     model=target_model,
@@ -2836,7 +2670,7 @@ class OpenAIGTKClient(Gtk.Window):
                     
                     # Initialize WebSocket provider if needed
                     if not hasattr(self, 'ws_provider'):
-                        self.ws_provider = OpenAIWebSocketProvider()
+                        self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
                         self.ws_provider.microphone = self.microphone  # Pass selected microphone
                     
                     # Connect to WebSocket before starting stream
