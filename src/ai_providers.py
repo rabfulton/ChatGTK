@@ -614,7 +614,42 @@ class CustomProvider(AIProvider):
         data = resp.json()
         # Expect OpenAI-style {data:[{url:...}]} or base64
         first = (data.get("data") or [{}])[0]
-        return first.get("url") or first.get("b64_json") or ""
+        
+        # Extract image data (URL or base64)
+        image_url = first.get("url")
+        b64_json = first.get("b64_json")
+        final_image_bytes = None
+        
+        if image_url:
+            try:
+                download_response = requests.get(image_url, timeout=30)
+                download_response.raise_for_status()
+                final_image_bytes = download_response.content
+            except Exception as e:
+                return f"Error downloading image from URL: {e}\nURL: {image_url}"
+        elif b64_json:
+            try:
+                final_image_bytes = base64.b64decode(b64_json)
+            except Exception as e:
+                return f"Error decoding base64 image: {e}"
+        else:
+            return "Error: Image response missing both URL and base64 data"
+            
+        # Save to local file in history directory
+        try:
+            images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
+            images_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Sanitize model name for filename
+            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or model))
+            image_path = images_dir / f"{safe_model}_{timestamp}.png"
+            
+            image_path.write_bytes(final_image_bytes)
+            
+            return f'<img src="{image_path}"/>'
+        except Exception as e:
+            return f"Error saving generated image: {e}"
 
     def transcribe_audio(self, audio_file):
         raise NotImplementedError("Transcription not implemented for custom provider")

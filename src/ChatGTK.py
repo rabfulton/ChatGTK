@@ -704,6 +704,27 @@ class OpenAIGTKClient(Gtk.Window):
         """Delegate to controller."""
         return self.controller.get_system_prompt_by_id(prompt_id)
 
+    def _init_system_prompts_from_settings(self):
+        """
+        Re-initialize system prompts from updated settings.
+        
+        This delegates to the controller to parse the settings and then
+        syncs the local state (system_prompts, active_system_prompt_id).
+        """
+        # Ensure controller has the latest settings (pushed via apply_settings on self)
+        # Note: self.system_prompts_json was updated in on_open_settings via apply_settings
+        self.controller.system_prompts_json = getattr(self, "system_prompts_json", "")
+        self.controller.active_system_prompt_id = getattr(self, "active_system_prompt_id", "")
+        
+        # Let controller parse/init
+        if hasattr(self.controller, '_init_system_prompts_from_settings'):
+            self.controller._init_system_prompts_from_settings()
+        
+        # Sync back local references
+        self.system_prompts = self.controller.system_prompts
+        self.active_system_prompt_id = self.controller.active_system_prompt_id
+        self.system_message = self.controller.system_message
+
     def _refresh_system_prompt_combo(self):
         """
         Refresh the system prompt combo box from self.system_prompts.
