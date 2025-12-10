@@ -1590,6 +1590,29 @@ class SettingsDialog(Gtk.Dialog):
             try:
                 data = dialog.get_data()
                 model_id = data["model_id"]
+                
+                # Check if model_id already exists
+                if model_id in self.custom_models:
+                    # Show confirmation dialog
+                    confirm_dialog = Gtk.MessageDialog(
+                        transient_for=self,
+                        flags=0,
+                        message_type=Gtk.MessageType.WARNING,
+                        buttons=Gtk.ButtonsType.YES_NO,
+                        text=f"Model '{model_id}' already exists"
+                    )
+                    confirm_dialog.format_secondary_text(
+                        "A custom model with this ID already exists. "
+                        "Do you want to overwrite it? If you want to edit the existing model, "
+                        "please use the Edit button instead."
+                    )
+                    overwrite_response = confirm_dialog.run()
+                    confirm_dialog.destroy()
+                    
+                    if overwrite_response != Gtk.ResponseType.YES:
+                        dialog.destroy()
+                        return
+                
                 self.custom_models[model_id] = data
                 save_custom_models(self.custom_models)
                 self._refresh_custom_models_list()

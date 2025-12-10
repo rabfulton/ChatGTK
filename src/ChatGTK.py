@@ -1091,13 +1091,22 @@ class OpenAIGTKClient(Gtk.Window):
         """
         Generate an image using the user-configured preferred image model,
         falling back to a safe OpenAI default if necessary.
+        
+        Note: We trust the user's selection here - if they've explicitly chosen
+        a model as the image handler, we'll try to use it even if it's not
+        recognized as a standard image model.
         """
         preferred_model = getattr(self, "image_model", None) or "dall-e-3"
         provider_name = self.get_provider_name_for_model(preferred_model)
 
-        # Ensure the preferred model is recognized as an image model; otherwise
-        # fall back to a known-safe default.
-        if not self._is_image_model_for_provider(preferred_model, provider_name):
+        # For standard image models, verify they're recognized. For custom models,
+        # trust the user's selection - they may have configured a responses API model
+        # that can generate images.
+        is_standard_image_model = self._is_image_model_for_provider(preferred_model, provider_name)
+        is_custom_model = provider_name == "custom" and preferred_model in (self.custom_models or {})
+        
+        if not is_standard_image_model and not is_custom_model:
+            # Only fall back if it's not a recognized image model AND not a custom model
             preferred_model = "dall-e-3"
             provider_name = "openai"
 

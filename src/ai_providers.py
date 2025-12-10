@@ -109,12 +109,46 @@ class CustomProvider(AIProvider):
         base = re.sub(r'/(chat/completions|responses|images/generations|audio/speech)(/.*)?$', '', base)
         return base
 
-    def _extract_text(self, data: dict) -> str:
+    def _extract_text(self, data: dict, chat_id: str = None) -> str:
+        """
+        Extract text and images from API response data.
+        
+        Parameters
+        ----------
+        data : dict
+            Response data from API.
+        chat_id : str, optional
+            Chat ID for saving images.
+        
+        Returns
+        -------
+        str
+            Text content with <img> tags for any images found.
+        """
         # Try OpenAI chat/completions style
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         if isinstance(message, dict) and "content" in message:
-            return message.get("content") or ""
+            content = message.get("content") or ""
+            # Handle structured content (list of content parts)
+            if isinstance(content, list):
+                text_parts = []
+                image_tags = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif part.get("type") == "image_url" or "image_url" in part or "url" in part:
+                            img_tag = self._save_image_from_response(part, chat_id)
+                            if img_tag:
+                                image_tags.append(img_tag)
+                        elif "text" in part:
+                            text_parts.append(part.get("text", ""))
+                result = "".join(text_parts)
+                if image_tags:
+                    result += "\n\n" + "\n\n".join(image_tags) if result else "\n\n".join(image_tags)
+                return result
+            return content
 
         # Try Responses API format
         # Responses API returns: {"output": [{"type": "message", "content": [{"text": "..."}]}]}
@@ -122,19 +156,48 @@ class CustomProvider(AIProvider):
             output = data["output"]
             if isinstance(output, list):
                 text_content = ""
+                image_tags = []
                 for item in output:
                     if isinstance(item, dict):
                         item_type = item.get("type")
-                        # Handle message output (contains text)
+                        # Handle message output (contains text and potentially images)
                         if item_type == "message":
                             content = item.get("content", [])
                             if isinstance(content, list):
                                 for content_item in content:
-                                    if isinstance(content_item, dict) and "text" in content_item:
-                                        text_content += content_item.get("text", "")
+                                    if isinstance(content_item, dict):
+                                        if "text" in content_item:
+                                            text_content += content_item.get("text", "")
+                                        elif content_item.get("type") == "image" or "image_url" in content_item or "url" in content_item:
+                                            img_tag = self._save_image_from_response(content_item, chat_id)
+                                            if img_tag:
+                                                image_tags.append(img_tag)
+                        # Handle standalone image output
+                        elif item_type == "image":
+                            img_tag = self._save_image_from_response(item, chat_id)
+                            if img_tag:
+                                image_tags.append(img_tag)
+                        # Handle image_generation_call (e.g., from flux models)
+                        elif item_type == "image_generation_call":
+                            # Image data is in the "result" field as a data URL
+                            result = item.get("result")
+                            if result:
+                                # Create a temporary dict with image_url for the save method
+                                img_item = {"image_url": result}
+                                img_tag = self._save_image_from_response(img_item, chat_id)
+                                if img_tag:
+                                    image_tags.append(img_tag)
                         # Handle direct text in output item (fallback)
                         elif "text" in item:
                             text_content += item.get("text", "")
+                
+                # Combine text and images
+                if image_tags:
+                    if text_content:
+                        text_content += "\n\n" + "\n\n".join(image_tags)
+                    else:
+                        text_content = "\n\n".join(image_tags)
+                
                 if text_content:
                     return text_content
         
@@ -168,6 +231,7 @@ class CustomProvider(AIProvider):
                 messages,
                 temperature,
                 max_tokens,
+                chat_id=chat_id,
                 image_tool_handler=image_tool_handler,
                 music_tool_handler=music_tool_handler,
                 read_aloud_tool_handler=read_aloud_tool_handler,
@@ -199,7 +263,7 @@ class CustomProvider(AIProvider):
             resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
             resp.raise_for_status()
             data = resp.json()
-            return self._extract_text(data)
+            return self._extract_text(data, chat_id=chat_id)
         
         # Tool-aware flow: allow the model to call tools, route those through
         # handlers, then continue the conversation until we get a final answer.
@@ -280,23 +344,113 @@ class CustomProvider(AIProvider):
             raise RuntimeError("No response received from custom provider.")
         
         # Extract final text from the last response
-        base_text = self._extract_text(last_response_data)
+        base_text = self._extract_text(last_response_data, chat_id=chat_id)
         if tool_result_snippets:
             return base_text + "\n\n" + "\n\n".join(tool_result_snippets)
         return base_text
 
-    def _extract_responses_output(self, data: dict) -> tuple:
+    def _save_image_from_response(self, image_item: dict, chat_id: str = None) -> str:
         """
-        Extract text content and function calls from a Responses API response.
+        Save an image from a Responses API image item and return an <img> tag.
+        
+        Parameters
+        ----------
+        image_item : dict
+            Image item from Responses API, which may contain:
+            - "image_url": data URL, HTTP URL, or dict with "url" key (OpenAI format)
+            - "url": HTTP URL (alternative field name)
+            - "image": base64 data (alternative format)
+        chat_id : str, optional
+            Chat ID for organizing saved images.
+        
+        Returns
+        -------
+        str
+            HTML img tag pointing to saved image, or empty string on error.
+        """
+        if not chat_id:
+            chat_id = "temp"
+        
+        # Extract image data from various possible formats
+        image_url_raw = image_item.get("image_url") or image_item.get("url")
+        image_data = image_item.get("image")
+        final_image_bytes = None
+        
+        # Handle nested image_url structure (OpenAI format: {"image_url": {"url": "..."}})
+        if isinstance(image_url_raw, dict):
+            image_url = image_url_raw.get("url", "")
+        else:
+            image_url = image_url_raw
+        
+        # Handle data URL (data:image/png;base64,...)
+        if image_url and isinstance(image_url, str) and image_url.startswith("data:"):
+            try:
+                # Extract base64 part from data URL
+                header, encoded = image_url.split(",", 1)
+                final_image_bytes = base64.b64decode(encoded)
+            except Exception as e:
+                print(f"[CustomProvider] Error decoding data URL image: {e}")
+                return ""
+        # Handle HTTP URL
+        elif image_url and isinstance(image_url, str) and image_url.startswith("http"):
+            try:
+                download_response = requests.get(image_url, timeout=30)
+                download_response.raise_for_status()
+                final_image_bytes = download_response.content
+            except Exception as e:
+                print(f"[CustomProvider] Error downloading image from URL: {e}")
+                return ""
+        # Handle direct base64 data
+        elif image_data:
+            try:
+                # Remove data URL prefix if present
+                if isinstance(image_data, str) and "," in image_data:
+                    image_data = image_data.split(",", 1)[1]
+                final_image_bytes = base64.b64decode(image_data)
+            except Exception as e:
+                print(f"[CustomProvider] Error decoding base64 image: {e}")
+                return ""
+        else:
+            print(f"[CustomProvider] Image item missing image data: {image_item}")
+            return ""
+        
+        # Save to local file
+        try:
+            images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
+            images_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or "custom"))
+            image_path = images_dir / f"{safe_model}_{timestamp}.png"
+            
+            image_path.write_bytes(final_image_bytes)
+            
+            return f'<img src="{image_path}"/>'
+        except Exception as e:
+            print(f"[CustomProvider] Error saving image: {e}")
+            return ""
+
+    def _extract_responses_output(self, data: dict, chat_id: str = None) -> tuple:
+        """
+        Extract text content, images, and function calls from a Responses API response.
+        
+        Parameters
+        ----------
+        data : dict
+            Response data from Responses API.
+        chat_id : str, optional
+            Chat ID for saving images.
         
         Returns
         -------
         tuple
-            (text_content, function_calls) where function_calls is a list of
-            dicts with keys: call_id, name, arguments
+            (text_content, function_calls) where:
+            - text_content includes text and <img> tags for any images found
+            - function_calls is a list of dicts with keys: call_id, name, arguments
         """
         text_content = ""
         function_calls = []
+        image_tags = []
         
         if "output" in data:
             output = data["output"]
@@ -305,13 +459,37 @@ class CustomProvider(AIProvider):
                     if isinstance(item, dict):
                         item_type = item.get("type")
                         
-                        # Handle message output (contains text)
+                        # Handle message output (contains text and potentially images)
                         if item_type == "message":
                             content = item.get("content", [])
                             if isinstance(content, list):
                                 for content_item in content:
-                                    if isinstance(content_item, dict) and "text" in content_item:
-                                        text_content += content_item.get("text", "")
+                                    if isinstance(content_item, dict):
+                                        # Extract text
+                                        if "text" in content_item:
+                                            text_content += content_item.get("text", "")
+                                        # Extract images from message content
+                                        elif content_item.get("type") == "image" or "image_url" in content_item or "url" in content_item:
+                                            img_tag = self._save_image_from_response(content_item, chat_id)
+                                            if img_tag:
+                                                image_tags.append(img_tag)
+                        
+                        # Handle standalone image output
+                        elif item_type == "image":
+                            img_tag = self._save_image_from_response(item, chat_id)
+                            if img_tag:
+                                image_tags.append(img_tag)
+                        
+                        # Handle image_generation_call (e.g., from flux models)
+                        elif item_type == "image_generation_call":
+                            # Image data is in the "result" field as a data URL
+                            result = item.get("result")
+                            if result:
+                                # Create a temporary dict with image_url for the save method
+                                img_item = {"image_url": result}
+                                img_tag = self._save_image_from_response(img_item, chat_id)
+                                if img_tag:
+                                    image_tags.append(img_tag)
                         
                         # Handle function_call output
                         elif item_type == "function_call":
@@ -324,6 +502,13 @@ class CustomProvider(AIProvider):
                                     "name": name,
                                     "arguments": arguments,
                                 })
+        
+        # Append image tags to text content
+        if image_tags:
+            if text_content:
+                text_content += "\n\n" + "\n\n".join(image_tags)
+            else:
+                text_content = "\n\n".join(image_tags)
         
         return text_content, function_calls
 
@@ -473,6 +658,7 @@ class CustomProvider(AIProvider):
         messages,
         temperature,
         max_tokens,
+        chat_id=None,
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
@@ -520,7 +706,7 @@ class CustomProvider(AIProvider):
                 resp = self.session.post(url, headers=self._headers(), json=params, timeout=60)
                 resp.raise_for_status()
                 data = resp.json()
-                result = self._extract_text(data)
+                result = self._extract_text(data, chat_id=chat_id)
                 # Debug: log response structure if extraction failed
                 if not result:
                     print(f"[CustomProvider] Warning: Failed to extract text from response. Response structure: {json.dumps(data, indent=2)[:500]}")
@@ -564,7 +750,7 @@ class CustomProvider(AIProvider):
                 print(f"[CustomProvider] Request payload: {json.dumps(payload, indent=2)[:1000]}")
                 raise
             
-            text_content, function_calls = self._extract_responses_output(data)
+            text_content, function_calls = self._extract_responses_output(data, chat_id=chat_id)
             
             print(f"[CustomProvider] Round {round_num + 1}: text_content={text_content[:100] if text_content else 'None'}, function_calls={len(function_calls)}")
             
@@ -607,6 +793,70 @@ class CustomProvider(AIProvider):
 
     def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
         api_type = (self.api_type or "").lower()
+        
+        # Handle responses API models that can generate images
+        if api_type == "responses":
+            # Use the responses API to generate the image
+            base = self._get_base_endpoint()
+            url = base + "/responses" if base else "/responses"
+            
+            input_items = [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}]
+                }
+            ]
+            
+            params = {
+                "model": self.model_name or model,
+                "input": input_items,
+            }
+            
+            try:
+                resp = self.session.post(url, headers=self._headers(), json=params, timeout=60)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                # Extract images from the response using our existing extraction logic
+                image_tags = []
+                if "output" in data:
+                    for item in data.get("output", []):
+                        if isinstance(item, dict):
+                            item_type = item.get("type")
+                            # Handle image_generation_call format
+                            if item_type == "image_generation_call":
+                                result_data = item.get("result")
+                                if result_data:
+                                    img_item = {"image_url": result_data}
+                                    img_tag = self._save_image_from_response(img_item, chat_id)
+                                    if img_tag:
+                                        image_tags.append(img_tag)
+                            # Handle standalone image output
+                            elif item_type == "image":
+                                img_tag = self._save_image_from_response(item, chat_id)
+                                if img_tag:
+                                    image_tags.append(img_tag)
+                            # Handle images in message content
+                            elif item_type == "message":
+                                content = item.get("content", [])
+                                if isinstance(content, list):
+                                    for content_item in content:
+                                        if isinstance(content_item, dict):
+                                            if content_item.get("type") == "image" or "image_url" in content_item or "url" in content_item:
+                                                img_tag = self._save_image_from_response(content_item, chat_id)
+                                                if img_tag:
+                                                    image_tags.append(img_tag)
+                
+                if image_tags:
+                    return "\n\n".join(image_tags)
+                else:
+                    return f"Error: No image found in response from {model}. Response structure: {json.dumps(data, indent=2)[:500]}"
+                    
+            except Exception as e:
+                return f"Error generating image via responses API: {e}"
+        
+        # Handle /images/generations endpoint (standard image API)
         url = self._url("/images/generations")
         payload = {"model": self.model_name or model, "prompt": prompt}
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
