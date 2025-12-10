@@ -32,6 +32,8 @@ from utils import (
     save_custom_models,
     load_model_display_names,
     save_model_display_names,
+    get_object_settings,
+    convert_settings_for_save,
 )
 from ai_providers import CustomProvider
 
@@ -1616,10 +1618,28 @@ class SettingsDialog(Gtk.Dialog):
                 self.custom_models[model_id] = data
                 save_custom_models(self.custom_models)
                 self._refresh_custom_models_list()
+                
+                # Automatically enable the model in the whitelist
+                current_whitelist = getattr(self, 'custom_model_whitelist', '') or ''
+                whitelist_models = set(m.strip() for m in current_whitelist.split(",") if m.strip())
+                if model_id not in whitelist_models:
+                    whitelist_models.add(model_id)
+                    self.custom_model_whitelist = ",".join(sorted(whitelist_models))
+                    # Save the updated whitelist immediately
+                    settings = get_object_settings(self)
+                    save_settings(convert_settings_for_save(settings))
+                
                 # Refresh image model dropdown if this is an image model
                 if (data.get("api_type") or "").lower() == "images":
                     self._refresh_image_model_dropdown()
-                # Update whitelist page if it's built and has entries for this model
+                # Update whitelist page if it's built
+                if hasattr(self, '_model_whitelist_built') and self._model_whitelist_built:
+                    # Refresh the whitelist page to show the new model with checkbox checked
+                    self._populate_model_whitelist_sections(preserve_selections=True)
+                elif hasattr(self, 'model_checkboxes') and 'custom' in self.model_checkboxes:
+                    # Update checkbox if it exists (fallback for edge cases)
+                    if model_id in self.model_checkboxes['custom']:
+                        self.model_checkboxes['custom'][model_id].set_active(True)
                 if hasattr(self, 'model_display_entries'):
                     for provider_key, entries in self.model_display_entries.items():
                         if model_id in entries:

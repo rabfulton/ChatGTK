@@ -64,6 +64,98 @@ class MessageRenderer:
         """Update the current chat ID for image paths."""
         self.current_chat_id = chat_id
 
+    def _apply_css_override(self, widget, css_string: str):
+        """Apply CSS with APPLICATION priority to override existing styles."""
+        style_provider = Gtk.CssProvider()
+        style_provider.load_from_data(css_string.encode("utf-8"))
+        Gtk.StyleContext.add_provider(
+            widget.get_style_context(),
+            style_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+    def update_existing_message_colors(self):
+        """Update colors of existing messages to reflect current settings."""
+        for widget in self.message_widgets:
+            # User messages: EventBox containing a Label
+            if isinstance(widget, Gtk.EventBox):
+                child = widget.get_child()
+                if isinstance(child, Gtk.Label):
+                    # Update user message color
+                    css = (
+                        f"label {{ color: {self.settings.user_color}; "
+                        f"font-family: {self.settings.font_family}; "
+                        f"font-size: {self.settings.font_size}pt; "
+                        f"background-color: @theme_base_color; border-radius: 12px; padding: 10px; }}"
+                    )
+                    self._apply_css_override(child, css)
+            
+            # AI messages: Box containing content_container
+            elif isinstance(widget, Gtk.Box):
+                # Find all labels and text views in the AI message
+                def update_widget_colors(container):
+                    """Recursively update colors in a container."""
+                    if isinstance(container, Gtk.Label):
+                        # Update all labels in AI messages to use AI color
+                        # Check if it's the AI name label (needs background-color)
+                        text = container.get_text() or ""
+                        if text.startswith(f"{self.settings.ai_name}:"):
+                            # AI name label
+                            css = (
+                                f"label {{ color: {self.settings.ai_color}; "
+                                f"font-family: {self.settings.font_family}; "
+                                f"font-size: {self.settings.font_size}pt; "
+                                f"background-color: @theme_base_color;}}"
+                            )
+                        else:
+                            # Other AI message labels (table cells, fallback labels, etc.)
+                            css = (
+                                f"label {{ color: {self.settings.ai_color}; "
+                                f"font-family: {self.settings.font_family}; "
+                                f"font-size: {self.settings.font_size}pt; }}"
+                            )
+                        self._apply_css_override(container, css)
+                    elif isinstance(container, Gtk.TextView):
+                        # Update text view color
+                        css = f"""
+                            textview {{
+                                font-family: {self.settings.font_family};
+                                font-size: {self.settings.font_size}pt;
+                            }}
+                            textview text {{
+                                color: {self.settings.ai_color};
+                            }}
+                        """
+                        css_provider = Gtk.CssProvider()
+                        css_provider.load_from_data(css.encode())
+                        container.get_style_context().add_provider(
+                            css_provider,
+                            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                        )
+                    elif isinstance(container, Gtk.Separator):
+                        # Update separator color
+                        separator_css = f"""
+                            separator {{
+                                background-color: {self.settings.ai_color};
+                                color: {self.settings.ai_color};
+                                min-height: 2px;
+                                margin-top: 8px;
+                                margin-bottom: 8px;
+                            }}
+                        """
+                        css_provider = Gtk.CssProvider()
+                        css_provider.load_from_data(separator_css.encode())
+                        container.get_style_context().add_provider(
+                            css_provider, 
+                            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                        )
+                    elif isinstance(container, Gtk.Container):
+                        # Recursively process children
+                        for child in container.get_children():
+                            update_widget_colors(child)
+                
+                update_widget_colors(widget)
+
     def append_message(self, sender: str, text: str, index: int):
         """Append a message to the conversation box."""
         if sender == 'user':

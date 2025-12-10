@@ -1487,6 +1487,11 @@ class OpenAIGTKClient(Gtk.Window):
             apply_settings(self, new_settings)
             save_settings(convert_settings_for_save(get_object_settings(self)))
 
+            # Update message renderer settings and refresh existing message colors
+            self._update_message_renderer_settings()
+            if hasattr(self, 'message_renderer'):
+                self.message_renderer.update_existing_message_colors()
+
             # Re-initialize system prompts from updated settings and refresh the combo
             self._init_system_prompts_from_settings()
             self._refresh_system_prompt_combo()

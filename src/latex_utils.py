@@ -609,13 +609,31 @@ class ProtectedRegions:
         def codeblock_repl(match):
             language = match.group(1) or ""
             code = match.group(2)
+            
+            # Map invalid/unsupported languages to valid ones or remove language
+            language_map = {
+                'javascript': 'java',
+                'pango': '',  # Not supported, use default
+                'css': '',    # Not supported, use default
+            }
+            
             # Normalize language for lstlisting
             if not language:
                 language = "{[LaTeX]TeX}"
-            elif language.lower() == 'javascript':
-                language = 'java'
-            # Create lstlisting environment - preserve code exactly as-is
-            formatted = f"\n\\begin{{lstlisting}}[language={language}]\n{code}\n\\end{{lstlisting}}\n"
+            elif language.lower() in language_map:
+                mapped = language_map[language.lower()]
+                language = mapped if mapped else ""
+            
+            # Escape HTML/XML tags in code to prevent LaTeX UTF-8 errors
+            # Replace < and > with LaTeX equivalents
+            code = code.replace('<', r'\textless{}')
+            code = code.replace('>', r'\textgreater{}')
+            
+            # Create lstlisting environment
+            if language:
+                formatted = f"\n\\begin{{lstlisting}}[language={language}]\n{code}\n\\end{{lstlisting}}\n"
+            else:
+                formatted = f"\n\\begin{{lstlisting}}\n{code}\n\\end{{lstlisting}}\n"
             return self._store("CODEBLOCK", formatted)
         
         # Process closed code blocks first
@@ -1161,7 +1179,11 @@ def format_message_content(content: str, chat_id=None) -> str:
     
     # --- Step 1: Remove custom tags ---
     # Remove audio tags entirely
-    content = re.sub(r'\n?<audio_file>.*?</audio_file>', '', content)
+    content = re.sub(r'\n?<audio_file>.*?</audio_file>', '', content, flags=re.DOTALL)
+    # Remove reasoning tags (from reasoning models like o1/o3)
+    # These tags contain internal reasoning that shouldn't appear in exports
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
     
     # --- Step 2: Protect all sensitive regions (order matters!) ---
     # Code blocks first (they may contain anything, including math-like syntax)
