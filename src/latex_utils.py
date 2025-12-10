@@ -1150,8 +1150,14 @@ def format_message_content(content: str, chat_id=None) -> str:
         5. Insert forced newlines in plain text only
         6. Restore all protected regions
     """
+
     # Initialize the unified protection system
     regions = ProtectedRegions()
+    
+    # --- Step 0: Remove emojis ---
+    # Remove characters from the Supplementary Multilingual Plane (where most emojis live)
+    # This prevents failures with pdflatex which struggles with these characters
+    content = re.sub(r'[\U00010000-\U0010FFFF]', '', content)
     
     # --- Step 1: Remove custom tags ---
     # Remove audio tags entirely
