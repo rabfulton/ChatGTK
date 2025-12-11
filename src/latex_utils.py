@@ -551,11 +551,29 @@ def escape_latex_text_simple(text: str) -> str:
         '\u2022': r'\textbullet{}',   # •
         '\u2014': r'\textemdash{}',   # —
         '\u2013': r'\textendash{}',   # –
+        '\u2011': r'-',                # NON-BREAKING HYPHEN (treat as regular hyphen)
+        '\u2500': r'--',                # ─ BOX DRAWINGS LIGHT HORIZONTAL (treat as double dash)
+        '\u202F': r'~',                 # NARROW NO-BREAK SPACE (treat as non-breaking space)
+        '\u00A0': r'~',                 # NO-BREAK SPACE (treat as non-breaking space)
+        '\u2009': r' ',                 # THIN SPACE (treat as regular space)
+        '\u200A': r' ',                 # HAIR SPACE (treat as regular space)
+        '\u200B': r'',                  # ZERO WIDTH SPACE (remove)
+        '\u200C': r'',                  # ZERO WIDTH NON-JOINER (remove)
+        '\u200D': r'',                  # ZERO WIDTH JOINER (remove)
+        '\uFEFF': r'',                  # ZERO WIDTH NO-BREAK SPACE (remove)
         # Smart quotes (using unicode escapes to be explicit)
         '\u2018': r'`',    # ' left single quote
         '\u2019': r"'",    # ' right single quote  
         '\u201c': r"``",   # " left double quote
         '\u201d': r"''",   # " right double quote
+        # Ellipsis
+        '\u2026': r'\ldots{}',         # … HORIZONTAL ELLIPSIS
+        # Latin characters with diacritics (these should pass through with utf8 inputenc)
+        # But we add them to escapes to prevent warnings
+        '\u00E1': r'\'{a}',            # á LATIN SMALL LETTER A WITH ACUTE
+        '\u00E4': r'\"{a}',            # ä LATIN SMALL LETTER A WITH DIAERESIS
+        '\u00F3': r'\'{o}',            # ó LATIN SMALL LETTER O WITH ACUTE
+        '\u00F6': r'\"{o}',            # ö LATIN SMALL LETTER O WITH DIAERESIS
     }
     
     for char, escape in escapes.items():
@@ -1176,6 +1194,32 @@ def format_message_content(content: str, chat_id=None) -> str:
     # Remove characters from the Supplementary Multilingual Plane (where most emojis live)
     # This prevents failures with pdflatex which struggles with these characters
     content = re.sub(r'[\U00010000-\U0010FFFF]', '', content)
+    
+    # Remove common emojis from Basic Multilingual Plane that cause LaTeX errors
+    # Replace with text equivalents for better readability
+    emoji_replacements = {
+        '⭐': '[star]',
+        '✅': '[check]',
+        '❌': '[cross]',
+        '➡️': '[right arrow]',
+        '⬅️': '[left arrow]',
+        '➡': '[right arrow]',
+        '⬅': '[left arrow]',
+    }
+    for emoji, replacement in emoji_replacements.items():
+        content = content.replace(emoji, replacement)
+    
+    # Remove emoji-related Unicode ranges that cause issues
+    # These ranges include many emojis and symbols that LaTeX can't handle
+    emoji_patterns = [
+        r'[\u2600-\u26FF]',   # Miscellaneous Symbols (includes ⭐ and other symbols)
+        r'[\u2700-\u27BF]',   # Dingbats (includes ✅ ❌ and other symbols)
+        r'[\u2B00-\u2BFF]',   # Miscellaneous Symbols and Arrows (includes ➡ ⬅)
+        r'[\uFE00-\uFE0F]',   # Variation Selectors (emoji modifiers like ️)
+        r'[\u200D]',          # Zero Width Joiner (used in emoji sequences)
+    ]
+    for pattern in emoji_patterns:
+        content = re.sub(pattern, '', content)
     
     # --- Step 1: Remove custom tags ---
     # Remove audio tags entirely
