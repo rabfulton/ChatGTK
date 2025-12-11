@@ -531,7 +531,24 @@ def escape_latex_text_simple(text: str) -> str:
     
     Note: Order matters! Backslash must be escaped first, then other chars.
     """
-    # First escape backslashes (must be done first to avoid double-escaping)
+    # First, protect existing LaTeX escape sequences (like \$ \& \% etc.)
+    # so we don't double-escape them when we escape backslashes
+    # Use placeholders without underscores to avoid them being escaped
+    latex_escapes = {
+        r'\$': '\x00LATEXESC1\x00',  # DOLLAR
+        r'\%': '\x00LATEXESC2\x00',  # PERCENT
+        r'\&': '\x00LATEXESC3\x00',  # AMPERSAND
+        r'\#': '\x00LATEXESC4\x00',  # HASH
+        r'\_': '\x00LATEXESC5\x00',  # UNDERSCORE
+        r'\{': '\x00LATEXESC6\x00',  # LBRACE
+        r'\}': '\x00LATEXESC7\x00',  # RBRACE
+    }
+    
+    # Protect LaTeX escape sequences
+    for escape_seq, placeholder in latex_escapes.items():
+        text = text.replace(escape_seq, placeholder)
+    
+    # Now escape remaining backslashes (must be done before other escapes)
     # We use a placeholder to avoid the replacement being affected by later escapes
     text = text.replace('\\', '\x00BACKSLASH\x00')
     
@@ -546,6 +563,7 @@ def escape_latex_text_simple(text: str) -> str:
         '}': r'\}',
         '~': r'\textasciitilde{}',
         '^': r'\textasciicircum{}',
+        '|': r'\textbar{}',
         '"': r"''",
         # Bullet and dashes
         '\u2022': r'\textbullet{}',   # •
@@ -568,21 +586,64 @@ def escape_latex_text_simple(text: str) -> str:
         '\u201d': r"''",   # " right double quote
         # Ellipsis
         '\u2026': r'\ldots{}',         # … HORIZONTAL ELLIPSIS
-        # Latin characters with diacritics (these should pass through with utf8 inputenc)
-        # But we add them to escapes to prevent warnings
-        '\u00E1': r'\'{a}',            # á LATIN SMALL LETTER A WITH ACUTE
-        '\u00E4': r'\"{a}',            # ä LATIN SMALL LETTER A WITH DIAERESIS
-        '\u00F3': r'\'{o}',            # ó LATIN SMALL LETTER O WITH ACUTE
-        '\u00F6': r'\"{o}',            # ö LATIN SMALL LETTER O WITH DIAERESIS
+        # Latin characters with diacritics: NOT escaped because XeLaTeX with fontspec
+        # supports Unicode natively. These characters will pass through as-is.
+        # Removing escapes for: á (E1), ä (E4), ó (F3), ö (F6) and all other accented chars
     }
     
+    # Apply escapes - ensure $ is escaped first and explicitly
+    # This prevents issues where $ might be missed in edge cases
+    text = text.replace('$', r'\$')
+    
+    # Apply other escapes
     for char, escape in escapes.items():
-        text = text.replace(char, escape)
+        if char != '$':  # Already handled above
+            text = text.replace(char, escape)
     
     # Finally replace the backslash placeholder
     text = text.replace('\x00BACKSLASH\x00', r'\textbackslash{}')
     
+    # Restore protected LaTeX escape sequences
+    reverse_escapes = {v: k for k, v in latex_escapes.items()}
+    for placeholder, escape_seq in reverse_escapes.items():
+        text = text.replace(placeholder, escape_seq)
+    
     return text
+
+
+def normalize_problematic_unicode(text: str) -> str:
+    """
+    Normalize Unicode characters that frequently break LaTeX/listings.
+    
+    Focus on the characters observed in logs: en dash, em dash, non-breaking
+    hyphen, and ellipsis. Convert them to ASCII-safe equivalents.
+    """
+    replacements = {
+        '\u2010': '-',   # hyphen
+        '\u2011': '-',   # non-breaking hyphen
+        '\u2012': '-',   # figure dash
+        '\u2013': '-',   # en dash
+        '\u2014': '--',  # em dash
+        '\u2026': '...', # ellipsis
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return text
+
+
+def escape_latex_specials_in_code(code: str) -> str:
+    """
+    Escape LaTeX special characters inside code using listings' escape markers.
+    
+    The literate option properly handles these characters for rendering, so we
+    can rely on it instead of using escape markers.
+    
+    This function is kept for potential future use, but currently returns the
+    code unchanged since literate handles everything we need.
+    """
+    # All special characters are handled by the literate option in lstset
+    # No escaping needed - literate will handle $, %, &, #, _, \, | correctly
+    return code
 
 
 class ProtectedRegions:
@@ -628,6 +689,10 @@ class ProtectedRegions:
             language = match.group(1) or ""
             code = match.group(2)
             
+            # Normalize problematic Unicode and escape LaTeX-special characters
+            #code = normalize_problematic_unicode(code)
+            #code = escape_latex_specials_in_code(code)
+
             # Map invalid/unsupported languages to valid ones or remove language
             language_map = {
                 'javascript': 'java',
@@ -669,19 +734,61 @@ class ProtectedRegions:
         """
         def choose_delim(code_content):
             """Choose a delimiter that doesn't appear in the code."""
-            candidates = ['|', '!', '/', ':', ';', '@', '+', '=']
+            # Use a wide set of delimiter candidates (single characters only for lstinline)
+            # Order by likelihood of not appearing in code
+            candidates = ['|', '!', '/', ':', ';', '@', '+', '=', '-', '_', '.', ',', '?', 
+                        '~', '#', '%', '&', '*', '(', ')', '[', ']', '{', '}', '<', '>']
             for d in candidates:
                 if d not in code_content:
                     return d
+            # Fallback: use | even if it appears (shouldn't happen after escaping)
             return '|'
         
         def inline_code_repl(match):
             content = match.group(1)
             # Don't allow inline code to span newlines - this causes issues
-            if '\n' in content:
+            if '\n' in content or '\r' in content:
                 # Just escape it as regular text instead
                 return '`' + content + '`'
+            # Strip whitespace and control characters that could break lstinline
+            content = content.strip()
+            # Remove control characters except common ones
+            content = ''.join(c for c in content if ord(c) >= 32 or c in '\t')
+            
+            # Check if content contains problematic characters that break \lstinline
+            # If it contains complex Unicode or characters that cause issues, use \texttt instead
+            problematic_chars = ['∫', '∑', '∏', '√', '∞', '±', '×', '÷', '≤', '≥', '≠', '≈', 
+                              '→', '←', '↔', '∂', '∇', 'α', 'β', 'γ', 'δ', 'ε', 'θ', 'λ', 
+                              'μ', 'π', 'σ', 'φ', 'ω', 'Ω', '²', '³', '¹', '⁰', '⁴', '⁵', 
+                              '⁶', '⁷', '⁸', '⁹']
+            has_problematic = any(char in content for char in problematic_chars)
+            
+            # Normalize problematic Unicode
+            content = normalize_problematic_unicode(content)
+            
+            # If content is too complex or contains problematic characters, use \texttt instead
+            # This is more robust than \lstinline for complex Unicode
+            if has_problematic or len(content) > 100:
+                # Use \texttt for complex content - escape for regular LaTeX (not listings)
+                escaped_content = escape_latex_text_simple(content)
+                formatted = f"\\texttt{{{escaped_content}}}"
+                return self._store("INLINECODE", formatted)
+            
+            # For simpler content, use \lstinline with listings escape markers
+            content = escape_latex_specials_in_code(content)
+            
+            # Choose delimiter after escaping (so escaped | won't conflict)
             delim = choose_delim(content)
+            # Double-check that delimiter doesn't appear in escaped content
+            # (This shouldn't happen after escaping, but be safe)
+            if delim in content:
+                # If delimiter still appears, use \texttt as fallback
+                # Remove listings escape markers and use regular LaTeX escaping
+                clean_content = content.replace('(*@', '').replace('@*)', '')
+                escaped_content = escape_latex_text_simple(clean_content)
+                formatted = f"\\texttt{{{escaped_content}}}"
+                return self._store("INLINECODE", formatted)
+            
             formatted = f"\\lstinline{delim}{content}{delim}"
             return self._store("INLINECODE", formatted)
         
@@ -705,6 +812,9 @@ class ProtectedRegions:
         """
         Extract inline math ($...$ or \\(...\\)) and replace with tokens.
         Normalizes to $...$ format.
+        
+        Important: We need to avoid matching currency amounts like $56 or $56 from $66.
+        We only match $...$ patterns that look like actual math (contain math-like content).
         """
         # First convert \(...\) to $...$
         text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text)
@@ -715,6 +825,17 @@ class ProtectedRegions:
             content = match.group(1)
             if not content.strip():
                 return match.group(0)  # Empty math, leave as-is
+            
+            # Don't match if content looks like currency (starts with digits or common currency patterns)
+            # This prevents matching $56, $56 from $66, etc.
+            content_stripped = content.strip()
+            if re.match(r'^\d+', content_stripped):  # Starts with digits - likely currency
+                return match.group(0)  # Don't treat as math
+            if re.match(r'^\d+\.\d+', content_stripped):  # Decimal number - likely currency
+                return match.group(0)  # Don't treat as math
+            if ' from ' in content or ' to ' in content or ' of ' in content:  # Common currency phrases
+                return match.group(0)  # Don't treat as math
+            
             return self._store("INLINEMATH", match.group(0))
         
         return re.sub(r'(?<!\$)\$([^$]+)\$(?!\$)', inline_math_repl, text)
@@ -750,13 +871,15 @@ class ProtectedRegions:
             title = ''.join(escaped_parts)
 
             if level == 1:
-                cmd = f"\\section*{{{title}}}"
+                cmd = f"\\section*{{{title}}}\n"
             elif level == 2:
-                cmd = f"\\subsection*{{{title}}}"
+                cmd = f"\\subsection*{{{title}}}\n"
             elif level == 3:
-                cmd = f"\\subsubsection*{{{title}}}"
+                cmd = f"\\subsubsection*{{{title}}}\n"
             else:
-                cmd = f"\\paragraph*{{{title}}}"
+                # \paragraph* doesn't create a visual line break - it runs into following text
+                # Add \mbox{} to create content to break from, then \newline
+                cmd = f"\\paragraph*{{{title}}}\\mbox{{}}\\newline\n"
             return self._store("HEADER", cmd)
         
         return re.sub(r'^(#{1,4})\s*(.+)$', header_repl, text, flags=re.MULTILINE)
@@ -765,15 +888,87 @@ class ProtectedRegions:
         """
         Protect existing LaTeX commands from escaping.
         This handles commands like \\textbf{}, \\textit{}, \\lstinline, etc.
+        Handles nested commands like \\textbf{\\textit{...}} by matching balanced braces.
         """
         def cmd_repl(match):
             return self._store("LATEXCMD", match.group(0))
         
-        # Protect commands with braces: \cmd{...} or \cmd*{...}
-        # Use a pattern that handles escaped braces inside: \{ and \}
-        # Match: \command{ then any chars except unescaped }, then }
-        # This handles content like \textbf{hello \& world}
-        text = re.sub(r'\\[a-zA-Z]+\*?\{(?:[^{}]|\\[{}])*\}', cmd_repl, text)
+        def match_nested_braces(text, start_pos):
+            """
+            Match a LaTeX command with nested braces starting at start_pos.
+            Returns (end_pos, full_match) or None if not found.
+            """
+            # Find the command name (e.g., \textbf or \textit)
+            cmd_match = re.match(r'\\([a-zA-Z]+\*?)\{', text[start_pos:])
+            if not cmd_match:
+                return None
+            
+            # Start after the opening brace
+            pos = start_pos + len(cmd_match.group(0))
+            brace_count = 1  # We've already seen one opening brace
+            
+            # Track if we're in an escaped sequence
+            i = pos
+            while i < len(text) and brace_count > 0:
+                if text[i] == '\\' and i + 1 < len(text):
+                    # Skip escaped characters (including \{ and \})
+                    i += 2
+                    continue
+                elif text[i] == '{':
+                    brace_count += 1
+                    i += 1
+                elif text[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        # Found the matching closing brace
+                        return (i + 1, text[start_pos:i+1])
+                    i += 1
+                else:
+                    i += 1
+            
+            return None
+        
+        # Find and protect all LaTeX commands with nested braces
+        # First, get token pattern to skip already-protected tokens
+        token_pattern = self.get_token_pattern()
+        
+        result = []
+        i = 0
+        while i < len(text):
+            # Check if we're at a token - if so, skip it
+            token_match = re.match(token_pattern, text[i:])
+            if token_match:
+                result.append(token_match.group(0))
+                i += len(token_match.group(0))
+                continue
+            
+            # Look for LaTeX command start: \command{
+            match = re.search(r'\\[a-zA-Z]+\*?\{', text[i:])
+            if not match:
+                # No more commands, add rest of text
+                result.append(text[i:])
+                break
+            
+            # Add text before the command
+            result.append(text[i:i + match.start()])
+            
+            # Try to match the full command with nested braces
+            cmd_start = i + match.start()
+            nested_match = match_nested_braces(text, cmd_start)
+            
+            if nested_match:
+                end_pos, full_cmd = nested_match
+                # Store the command as a token
+                token = self._store("LATEXCMD", full_cmd)
+                result.append(token)
+                i = end_pos
+            else:
+                # Couldn't match nested braces - might be malformed
+                # Just advance past the opening brace to avoid infinite loop
+                result.append(text[cmd_start:cmd_start + match.end()])
+                i = cmd_start + match.end()
+        
+        text = ''.join(result)
         
         # Protect \lstinline commands (which use delimiters, not braces)
         text = re.sub(r'\\lstinline[|!/:;@+=][^|!/:;@+=]*[|!/:;@+=]', cmd_repl, text)
@@ -866,7 +1061,23 @@ class ProtectedRegions:
                 # This reuses the same logic as normal text, but is applied
                 # before the table block is tokenized, so later passes won't
                 # touch it again.
-                return process_bold_italic(content.strip())
+                cell_text = process_bold_italic(content.strip())
+                
+                # Escape LaTeX special characters in the cell content
+                # We need to escape dollar signs and other special chars that aren't
+                # already part of LaTeX commands (like \textbf{})
+                # Split by LaTeX commands to preserve them while escaping plain text
+                token_pattern = r'\\[a-zA-Z]+\*?\{[^}]*\}'
+                parts = re.split(f'({token_pattern})', cell_text)
+                result_parts = []
+                for part in parts:
+                    if re.fullmatch(token_pattern, part):
+                        # This is a LaTeX command (like \textbf{...}) - keep as-is
+                        result_parts.append(part)
+                    else:
+                        # This is plain text - escape it (including dollar signs)
+                        result_parts.append(escape_latex_text_simple(part))
+                return ''.join(result_parts)
 
             header_tex = ' & '.join(process_cell(c) for c in header_cells) + r' \\ \hline'
             body_rows = []
@@ -917,9 +1128,154 @@ class ProtectedRegions:
 
         return '\n'.join(result_lines)
     
+    def protect_lists(self, text: str) -> str:
+        """
+        Convert markdown list items to LaTeX itemize environments.
+        
+        Handles:
+        - Unordered lists: * Item or - Item
+        - Nested lists (indented items)
+        - Mixed content (text between lists)
+        """
+        def is_list_item(line: str) -> bool:
+            """Check if a line is a list item."""
+            stripped = line.strip()
+            # Match * Item or - Item (with optional leading whitespace)
+            return bool(re.match(r'^\s*[\*\-]\s+', stripped))
+        
+        def get_indent_level(line: str) -> int:
+            """Get the indentation level (number of leading spaces, in groups of 2-4)."""
+            match = re.match(r'^(\s*)', line)
+            if match:
+                spaces = len(match.group(1))
+                # Typically markdown uses 2-4 spaces per level
+                return spaces // 4  # 4 spaces per level
+            return 0
+        
+        def process_list_item(line: str) -> str:
+            """Process a single list item, removing the marker and processing content."""
+            # Remove the list marker (* or -) and leading whitespace
+            content = re.sub(r'^\s*[\*\-]\s+', '', line)
+            
+            # Process bold/italic in the item content
+            content = process_bold_italic(content)
+            
+            # Protect LaTeX commands
+            content = self.protect_latex_commands(content)
+            
+            # Escape LaTeX special characters in plain text
+            segments = self.split_by_tokens(content)
+            escaped_parts = []
+            for is_token, segment in segments:
+                if is_token:
+                    escaped_parts.append(segment)
+                else:
+                    escaped_parts.append(escape_latex_text_simple(segment))
+            content = ''.join(escaped_parts)
+            
+            return content
+        
+        def process_list_block(start_idx: int, base_indent: int) -> tuple[int, str]:
+            """
+            Process a block of list items starting at start_idx.
+            Returns (next_index, latex_code).
+            Handles nested lists recursively.
+            """
+            items = []
+            i = start_idx
+            
+            while i < n:
+                line = lines[i]
+                
+                if not is_list_item(line):
+                    # Not a list item - end of list (allow one blank line)
+                    if line.strip() == "" and i < n - 1 and is_list_item(lines[i + 1]):
+                        i += 1
+                        continue
+                    break
+                
+                item_indent = get_indent_level(line)
+                
+                if item_indent < base_indent:
+                    # Less indented - end of this list
+                    break
+                elif item_indent == base_indent:
+                    # Same level - process item
+                    item_content = process_list_item(line)
+                    i += 1
+                    
+                    # Check for nested list
+                    if i < n and is_list_item(lines[i]) and get_indent_level(lines[i]) > base_indent:
+                        # Process nested list
+                        nested_i, nested_tex = process_list_block(i, get_indent_level(lines[i]))
+                        item_content += "\n" + nested_tex
+                        i = nested_i
+                    
+                    items.append(item_content)
+                else:
+                    # More indented - should have been handled as nested
+                    break
+            
+            if items:
+                items_tex = '\n'.join(f'\\item {item}' for item in items)
+                latex_code = f'\\begin{{itemize}}\n{items_tex}\n\\end{{itemize}}'
+                return (i, latex_code)
+            else:
+                return (start_idx, "")
+        
+        lines = text.split('\n')
+        result_lines = []
+        i = 0
+        n = len(lines)
+        
+        while i < n:
+            line = lines[i]
+            
+            if is_list_item(line):
+                base_indent = get_indent_level(line)
+                next_i, list_tex = process_list_block(i, base_indent)
+                if list_tex:
+                    token = self._store("LIST", list_tex)
+                    result_lines.append(token)
+                i = next_i
+            else:
+                result_lines.append(line)
+                i += 1
+        
+        return '\n'.join(result_lines)
+    
+    def protect_horizontal_rules(self, text: str) -> str:
+        """
+        Convert markdown horizontal rules (*** or ---) to LaTeX.
+        
+        Handles:
+        - *** (three or more asterisks)
+        - --- (three or more dashes)
+        - Must be on their own line (possibly with whitespace)
+        """
+        def is_horizontal_rule(line: str) -> bool:
+            """Check if a line is a horizontal rule."""
+            stripped = line.strip()
+            # Match *** or --- (three or more)
+            return bool(re.match(r'^[\*\-]{3,}$', stripped))
+        
+        lines = text.split('\n')
+        result_lines = []
+        
+        for line in lines:
+            if is_horizontal_rule(line):
+                # Convert to LaTeX horizontal rule with spacing
+                # Use \hrule with some vertical spacing
+                token = self._store("HRULE", r"\bigskip\noindent\rule{\linewidth}{0.4pt}\bigskip")
+                result_lines.append(token)
+            else:
+                result_lines.append(line)
+        
+        return '\n'.join(result_lines)
+    
     def get_token_pattern(self) -> str:
         """Return regex pattern matching any token."""
-        return r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE)_\d+@@'
+        return r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE|LIST|HRULE)_\d+@@'
     
     def restore_all(self, text: str) -> str:
         """
@@ -1021,7 +1377,7 @@ def process_bold_italic(text: str) -> str:
     - Content inside must have special chars escaped, but tokens must be preserved
     """
     # Token pattern to protect from escaping
-    token_pattern = r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE)_\d+@@'
+    token_pattern = r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE|LIST|HRULE)_\d+@@'
     
     def escape_preserving_tokens(content):
         """Escape content but preserve any tokens it contains."""
@@ -1047,13 +1403,29 @@ def process_bold_italic(text: str) -> str:
         content = escape_preserving_tokens(content)
         return f'\\textit{{{content}}}'
     
+    def make_bold_italic(match):
+        content = match.group(1)
+        content = escape_preserving_tokens(content)
+        return f'\\textbf{{\\textit{{{content}}}}}'
+    
+    # Combined bold+italic: ***text*** → \textbf{\textit{text}}
+    # Must be processed FIRST before individual bold/italic to avoid conflicts
+    # Pattern: three asterisks, content (no asterisks), three asterisks
+    text = re.sub(r'\*\*\*([^*\n]+)\*\*\*', make_bold_italic, text)
+    
     # Bold: **text** → \textbf{text}
     # Use [^*\n]+ to avoid matching across newlines
+    # Note: This won't match ***text*** because we already processed those
     text = re.sub(r'\*\*([^*\n]+)\*\*', make_bold, text)
     
     # Italic: *text* → \textit{text}
-    # Use [^*\n]+ to avoid matching across newlines
-    text = re.sub(r'\*([^*\n]+)\*', make_italic, text)
+    # Important: Don't match list markers (which are * followed by space at start of line)
+    # List markers: "* " (asterisk + space/tab at start of line)
+    # Italic: "*text*" where text starts with non-whitespace character
+    # Strategy: Simply require that * is followed by non-whitespace
+    # This excludes "* " (list marker) but includes "*text*" (italic)
+    # The pattern [^*\n\s] ensures content starts with non-space, excluding list markers
+    text = re.sub(r'\*([^*\n\s][^*\n]*?)\*(?!\s)', make_italic, text)
     
     return text
 
@@ -1192,7 +1564,7 @@ def format_message_content(content: str, chat_id=None) -> str:
     
     # --- Step 0: Remove emojis ---
     # Remove characters from the Supplementary Multilingual Plane (where most emojis live)
-    # This prevents failures with pdflatex which struggles with these characters
+    # This prevents LaTeX processing issues with these characters
     content = re.sub(r'[\U00010000-\U0010FFFF]', '', content)
     
     # Remove common emojis from Basic Multilingual Plane that cause LaTeX errors
@@ -1249,6 +1621,12 @@ def format_message_content(content: str, chat_id=None) -> str:
     # Tables (markdown-style) - after math/code/images so cells can contain tokens
     content = regions.protect_tables(content)
     
+    # Lists (markdown-style) - after tables so list items can contain tokens
+    content = regions.protect_lists(content)
+    
+    # Horizontal rules (*** or ---) - after lists
+    content = regions.protect_horizontal_rules(content)
+    
     # --- Step 3: Process markdown formatting in remaining plain text ---
     # Bold and italic (these create LaTeX commands that we then protect)
     content = process_bold_italic(content)
@@ -1296,7 +1674,15 @@ def format_chat_message(message, chat_id=None):
 """ % (color, role, content)
 
 def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
-    """Export a chat conversation to PDF with image support."""
+    """
+    Export a chat conversation to PDF with image support.
+    
+    Returns:
+        tuple: (success: bool, engine_name: str or None)
+        - success: True if PDF was successfully created, False otherwise
+        - engine_name: Name of the LaTeX engine used ('XeLaTeX'), 
+          or None if export failed
+    """
     try:
         # Format title and date
         export_date = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1332,11 +1718,10 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
         print(f"DEBUG: Created temp directory at {temp_dir}")
         
         try:
-            # Updated LaTeX preamble with textcomp package and robust custom inline code macro
-            latex_preamble = r"""
+            # LaTeX preamble for XeLaTeX (with native Unicode support)
+            latex_preamble_xelatex = r"""
 \documentclass{article}
-\usepackage[utf8]{inputenc}
-\DeclareTextSymbol{\textquotedbl}{OT1}{34}
+\usepackage{fontspec}
 \usepackage{geometry}
 \usepackage{xcolor}
 \usepackage{parskip}
@@ -1348,43 +1733,26 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 \usepackage{textcomp}
 \usepackage[hidelinks]{hyperref}
 
-% Handle common math symbols
-\DeclareUnicodeCharacter{03A9}{\ensuremath{\Omega}}  % Ω
-\DeclareUnicodeCharacter{03C0}{\ensuremath{\pi}}    % π
-\DeclareUnicodeCharacter{03BC}{\ensuremath{\mu}}    % μ
-\DeclareUnicodeCharacter{03B8}{\ensuremath{\theta}} % θ
-\DeclareUnicodeCharacter{03B1}{\ensuremath{\alpha}} % α
-\DeclareUnicodeCharacter{03B2}{\ensuremath{\beta}}  % β
-\DeclareUnicodeCharacter{03B3}{\ensuremath{\gamma}} % γ
-\DeclareUnicodeCharacter{03C3}{\ensuremath{\sigma}} % σ
-\DeclareUnicodeCharacter{03C6}{\ensuremath{\phi}}   % φ
-\DeclareUnicodeCharacter{2211}{\ensuremath{\sum}}   % ∑
-\DeclareUnicodeCharacter{222B}{\ensuremath{\int}}   % ∫
-\DeclareUnicodeCharacter{221E}{\ensuremath{\infty}} % ∞
-\DeclareUnicodeCharacter{2248}{\ensuremath{\approx}} % ≈
-\DeclareUnicodeCharacter{2260}{\ensuremath{\neq}}   % ≠
-\DeclareUnicodeCharacter{2264}{\ensuremath{\leq}}   % ≤
-\DeclareUnicodeCharacter{2265}{\ensuremath{\geq}}   % ≥
-\DeclareUnicodeCharacter{00B1}{\ensuremath{\pm}}    % ±
-\DeclareUnicodeCharacter{00D7}{\ensuremath{\times}} % ×
-\DeclareUnicodeCharacter{00F7}{\ensuremath{\div}}   % ÷
-\DeclareUnicodeCharacter{2192}{\ensuremath{\rightarrow}} % →
-\DeclareUnicodeCharacter{2190}{\ensuremath{\leftarrow}}  % ←
-\DeclareUnicodeCharacter{2194}{\ensuremath{\leftrightarrow}} % ↔
-\DeclareUnicodeCharacter{2202}{\ensuremath{\partial}}    % ∂
-\DeclareUnicodeCharacter{2207}{\ensuremath{\nabla}}     % ∇
-\DeclareUnicodeCharacter{221A}{\ensuremath{\sqrt{\,}}}     % √
-\DeclareUnicodeCharacter{00B0}{\ensuremath{^{\circ}}}   % °
-\DeclareUnicodeCharacter{2070}{\ensuremath{^{0}}}     % ⁰
-\DeclareUnicodeCharacter{00B9}{\ensuremath{^{1}}}     % ¹
-\DeclareUnicodeCharacter{00B2}{\ensuremath{^{2}}}     % ²
-\DeclareUnicodeCharacter{00B3}{\ensuremath{^{3}}}     % ³
-\DeclareUnicodeCharacter{2074}{\ensuremath{^{4}}}     % ⁴
-\DeclareUnicodeCharacter{2075}{\ensuremath{^{5}}}     % ⁵
-\DeclareUnicodeCharacter{2076}{\ensuremath{^{6}}}     % ⁶
-\DeclareUnicodeCharacter{2077}{\ensuremath{^{7}}}     % ⁷
-\DeclareUnicodeCharacter{2078}{\ensuremath{^{8}}}     % ⁸
-\DeclareUnicodeCharacter{2079}{\ensuremath{^{9}}}     % ⁹
+% Set fonts with Unicode support
+% Try common system fonts that support Unicode
+\IfFontExistsTF{DejaVu Serif}{
+    \setmainfont{DejaVu Serif}
+}{
+    \IfFontExistsTF{Liberation Serif}{
+        \setmainfont{Liberation Serif}
+    }{
+        % Fallback to default font
+    }
+}
+\IfFontExistsTF{DejaVu Sans Mono}{
+    \setmonofont{DejaVu Sans Mono}
+}{
+    \IfFontExistsTF{Liberation Mono}{
+        \setmonofont{Liberation Mono}
+    }{
+        % Fallback to default monospace
+    }
+}
 
 % Define a robust custom macro for inline code using listings' inline code command.
 \DeclareRobustCommand{\inlinecode}[1]{\lstinline!#1!}
@@ -1422,42 +1790,13 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
     xrightmargin=\dimexpr\fboxsep+1pt\relax,
     framexleftmargin=\dimexpr\fboxsep+.4pt\relax,
     resetmargins=true,
-    literate={Ω}{$\Omega$}1
-             {π}{$\pi$}1
-             {μ}{$\mu$}1
-             {θ}{$\theta$}1
-             {α}{$\alpha$}1
-             {β}{$\beta$}1
-             {γ}{$\gamma$}1
-             {σ}{$\sigma$}1
-             {φ}{$\phi$}1
-             {∑}{$\sum$}1
-             {∫}{$\int$}1
-             {∞}{$\infty$}1
-             {≈}{$\approx$}1
-             {≠}{$\neq$}1
-             {≤}{$\leq$}1
-             {≥}{$\geq$}1
-             {±}{$\pm$}1
-             {×}{$\times$}1
-             {÷}{$\div$}1
-             {→}{$\rightarrow$}1
-             {←}{$\leftarrow$}1
-             {↔}{$\leftrightarrow$}1
-             {∂}{$\partial$}1
-             {∇}{$\nabla$}1
-             {√}{\ensuremath{\sqrt{\,}}}1
-             {°}{\ensuremath{^{\circ}}}1
-             {⁰}{\ensuremath{^{0}}}1
-             {¹}{\ensuremath{^{1}}}1
-             {²}{\ensuremath{^{2}}}1
-             {³}{\ensuremath{^{3}}}1
-             {⁴}{\ensuremath{^{4}}}1
-             {⁵}{\ensuremath{^{5}}}1
-             {⁶}{\ensuremath{^{6}}}1
-             {⁷}{\ensuremath{^{7}}}1
-             {⁸}{\ensuremath{^{8}}}1
-             {⁹}{\ensuremath{^{9}}}1
+    literate={\$}{{\$}}1
+             {\%}{{\%}}1
+             {\&}{{\&}}1
+             {\#}{{\#}}1
+             {\_}{{\_}}1
+             {\\}{{\textbackslash{}}}1
+             {|}{\textbar{}}1
 }
 
 \pagestyle{fancy}
@@ -1471,61 +1810,100 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 
 \begin{document}
 """
+            
             latex_end = r"\end{document}"
             
-            # Combine document parts
-            full_document = latex_preamble + document_content + latex_end
+            # Use XeLaTeX for Unicode support
+            engine_cmd = 'xelatex'
+            engine_name = 'XeLaTeX'
+            latex_preamble = latex_preamble_xelatex
             
-            # Write the actual LaTeX file
-            tex_file = temp_dir / "chat_export.tex"
-            tex_file.write_text(full_document, encoding='utf-8')
-            print(f"DEBUG: Wrote LaTeX file to {tex_file}")
-            
-            # Run pdflatex with detailed output
-            for i in range(2):
-                print(f"DEBUG: Running pdflatex iteration {i+1}")
-                result = subprocess.run(
-                    ['pdflatex', '-interaction=nonstopmode', str(tex_file)],
-                    cwd=temp_dir,
+            try:
+                # Check if engine is available
+                check_result = subprocess.run(
+                    [engine_cmd, '--version'],
                     capture_output=True,
                     text=True,
-                    encoding='utf-8',
-                    errors='replace'
+                    timeout=5
                 )
-                print(f"DEBUG: pdflatex return code: {result.returncode}")
-                if result.returncode != 0:
-                    print("DEBUG: pdflatex stdout:")
-                    print(result.stdout)
-                    print("DEBUG: pdflatex stderr:")
-                    print(result.stderr)
-                    # Save the problematic LaTeX file for inspection
-                    debug_file = Path('debug_failed.tex')
-                    debug_file.write_text(full_document, encoding='utf-8')
-                    print(f"DEBUG: Saved failing LaTeX to {debug_file}")
-                    # Also save the log file if it exists
-                    log_file = temp_dir / "chat_export.log"
-                    if log_file.exists():
-                        debug_log = Path('debug_failed.log')
-                        try:
-                            debug_log.write_text(log_file.read_text(encoding='utf-8', errors='replace'))
-                        except UnicodeDecodeError:
-                            # If log file contains binary data, save as binary
-                            debug_log.write_bytes(log_file.read_bytes())
-                        print(f"DEBUG: Saved LaTeX log to {debug_log}")
-                    return False
-                    
-            # Check if PDF was created
-            output_pdf = temp_dir / "chat_export.pdf"
-            if not output_pdf.exists():
-                print("DEBUG: PDF file was not created")
-                return False
+                if check_result.returncode != 0:
+                    print(f"DEBUG: {engine_name} not available")
+                    return (False, None)
+                
+                print(f"DEBUG: Using {engine_name} for PDF generation")
+                
+                # Combine document parts
+                full_document = latex_preamble + document_content + latex_end
+                
+                # Write the actual LaTeX file
+                tex_file = temp_dir / "chat_export.tex"
+                tex_file.write_text(full_document, encoding='utf-8')
+                print(f"DEBUG: Wrote LaTeX file to {tex_file}")
+                
+                # Run LaTeX engine with detailed output
+                engine_succeeded = True
+                for i in range(2):
+                    print(f"DEBUG: Running {engine_name} iteration {i+1}")
+                    result = subprocess.run(
+                        [engine_cmd, '-interaction=nonstopmode', str(tex_file)],
+                        cwd=temp_dir,
+                        capture_output=True,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace'
+                    )
+                    print(f"DEBUG: {engine_name} return code: {result.returncode}")
+                    if result.returncode != 0:
+                        print(f"DEBUG: {engine_name} stdout:")
+                        print(result.stdout)
+                        print(f"DEBUG: {engine_name} stderr:")
+                        print(result.stderr)
+                        engine_succeeded = False
+                        # Save debug info and return failure
+                        debug_file = Path('debug_failed.tex')
+                        debug_file.write_text(full_document, encoding='utf-8')
+                        print(f"DEBUG: Saved failing LaTeX to {debug_file}")
+                        # Also save the log file if it exists
+                        log_file = temp_dir / "chat_export.log"
+                        if log_file.exists():
+                            debug_log = Path('debug_failed.log')
+                            try:
+                                debug_log.write_text(log_file.read_text(encoding='utf-8', errors='replace'))
+                            except UnicodeDecodeError:
+                                # If log file contains binary data, save as binary
+                                debug_log.write_bytes(log_file.read_bytes())
+                            print(f"DEBUG: Saved LaTeX log to {debug_log}")
+                        return (False, None)
+                
+                # Only check for PDF if engine completed successfully
+                if not engine_succeeded:
+                    return (False, None)
+                
+                # Check if PDF was created
+                output_pdf = temp_dir / "chat_export.pdf"
+                if not output_pdf.exists():
+                    print(f"DEBUG: PDF file was not created with {engine_name}")
+                    return (False, None)
+                
+                print(f"DEBUG: PDF successfully created with {engine_name}")
+                        
+            except FileNotFoundError:
+                print(f"DEBUG: {engine_name} not found")
+                return (False, None)
+            except subprocess.TimeoutExpired:
+                print(f"DEBUG: {engine_name} version check timed out")
+                return (False, None)
+            except Exception as e:
+                print(f"DEBUG: Error with {engine_name}: {str(e)}")
+                return (False, None)
             
+            # Move the PDF file
+            output_pdf = temp_dir / "chat_export.pdf"
             print(f"DEBUG: Moving PDF from {output_pdf} to {filename}")
-            # Move the file
             output_path = Path(filename)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(output_pdf), filename)
-            return True
+            return (True, engine_name)
             
         finally:
             # Cleanup temporary files
@@ -1537,6 +1915,6 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
         import traceback
         print("DEBUG: Traceback:")
         traceback.print_exc()
-        return False 
+        return (False, None) 
 
  

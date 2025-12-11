@@ -2991,7 +2991,13 @@ class OpenAIGTKClient(Gtk.Window):
                     chat_id = history_row.filename
                     
                     try:
-                        success = export_chat_to_pdf(history, filename, title, chat_id)
+                        result = export_chat_to_pdf(history, filename, title, chat_id)
+                        # Handle both old (bool) and new (tuple) return formats for compatibility
+                        if isinstance(result, tuple):
+                            success, engine_name = result
+                        else:
+                            success = result
+                            engine_name = None
                         
                         if success:
                             info_dialog = Gtk.MessageDialog(
