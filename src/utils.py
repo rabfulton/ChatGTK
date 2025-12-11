@@ -130,18 +130,31 @@ def load_api_keys():
     Load saved API keys from disk.
 
     Returns a dict keyed by provider name (openai, gemini, grok, claude, perplexity),
-    defaulting to empty strings when no file or value exists.
+    plus any custom keys, defaulting to empty strings when no file or value exists.
     """
     keys = {k: '' for k in API_KEY_FIELDS}
     try:
         with open(API_KEYS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, dict):
+            # Load standard keys
             for name in API_KEY_FIELDS:
                 value = data.get(name, '')
                 if value is None:
                     value = ''
                 keys[name] = str(value).strip()
+            # Load custom keys (keys that aren't in API_KEY_FIELDS)
+            for name, value in data.items():
+                if name not in API_KEY_FIELDS and name != '_custom':
+                    if value is None:
+                        value = ''
+                    keys[name] = str(value).strip()
+            # Also check for legacy _custom section
+            if '_custom' in data and isinstance(data['_custom'], dict):
+                for name, value in data['_custom'].items():
+                    if value is None:
+                        value = ''
+                    keys[name] = str(value).strip()
     except FileNotFoundError:
         # No keys saved yet – this is fine.
         pass
@@ -154,16 +167,23 @@ def save_api_keys(api_keys: dict):
     """
     Persist API keys to disk in a small JSON file under PARENT_DIR.
 
-    Only the known provider fields are written; all values are stored as strings.
+    Standard provider fields and custom keys are written; all values are stored as strings.
     """
     try:
         Path(API_KEYS_FILE).parent.mkdir(parents=True, exist_ok=True)
         data = {}
+        # Save standard keys
         for name in API_KEY_FIELDS:
             value = api_keys.get(name, '')
             if value is None:
                 value = ''
             data[name] = str(value).strip()
+        # Save custom keys (keys that aren't in API_KEY_FIELDS)
+        for name, value in api_keys.items():
+            if name not in API_KEY_FIELDS:
+                if value is None:
+                    value = ''
+                data[name] = str(value).strip()
         with open(API_KEYS_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
     except Exception as e:

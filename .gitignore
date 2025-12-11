@@ -1,7 +1,8 @@
 settings.cfg
-todo.txt
-music_library.db
+api_keys.json
 model_cache.json
+custom_models.json
+music_library.db
 ChatGTK.code-workspace
 Backups/
 temp/
@@ -12,9 +13,9 @@ debug_export.tex
 debug_failed.tex
 *.pdf
 !screenshots/*.pdf
-custom_models.json
 debug_failed.log
 WARP.md
 PKGBUILD
 aur.txt
 .SRCINFO
+todo.txt

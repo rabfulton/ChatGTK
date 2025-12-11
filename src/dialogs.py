@@ -28,6 +28,7 @@ from utils import (
     parse_color_to_rgba,
     save_settings,
     save_api_keys,
+    load_api_keys,
     load_custom_models,
     save_custom_models,
     load_model_display_names,
@@ -153,16 +154,68 @@ class CustomModelDialog(Gtk.Dialog):
         row.pack_start(self.entry_endpoint, True, True, 0)
         box.pack_start(row, False, False, 0)
 
-        # API key
+        # API key - dropdown with text entry
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         label = Gtk.Label(label="API Key", xalign=0)
         label.set_size_request(120, -1)
-        self.entry_api_key = Gtk.Entry()
-        self.entry_api_key.set_visibility(False)
-        self.entry_api_key.set_placeholder_text("Optional")
-        self.entry_api_key.set_text(str(data.get("api_key", "")))
+        self.combo_api_key = Gtk.ComboBoxText.new_with_entry()
+        self.combo_api_key.set_entry_text_column(0)
+        # Get the entry widget for password visibility
+        entry_widget = self.combo_api_key.get_child()
+        entry_widget.set_visibility(False)
+        entry_widget.set_placeholder_text("Optional - select from known keys or enter custom")
+        
+        # Load known API keys and populate dropdown
+        from utils import API_KEY_FIELDS
+        api_keys = load_api_keys()
+        
+        # Add standard keys
+        standard_key_names = {
+            'openai': 'OpenAI',
+            'gemini': 'Gemini',
+            'grok': 'Grok',
+            'claude': 'Claude',
+            'perplexity': 'Perplexity'
+        }
+        for key_name in API_KEY_FIELDS:
+            if api_keys.get(key_name):
+                display_name = standard_key_names.get(key_name, key_name.capitalize())
+                self.combo_api_key.append_text(f"{display_name} ({key_name})")
+        
+        # Add custom keys
+        for key_name, key_value in api_keys.items():
+            if key_name not in API_KEY_FIELDS and key_value:
+                self.combo_api_key.append_text(f"{key_name} (custom)")
+        
+        # Set initial value if provided
+        initial_api_key = str(data.get("api_key", "")).strip()
+        if initial_api_key:
+            # Try to match with a known key name
+            matched = False
+            for key_name, key_value in api_keys.items():
+                if key_value == initial_api_key:
+                    # Find matching item in combobox
+                    if key_name in API_KEY_FIELDS:
+                        display_name = standard_key_names.get(key_name, key_name.capitalize())
+                        item_text = f"{display_name} ({key_name})"
+                    else:
+                        item_text = f"{key_name} (custom)"
+                    
+                    # Try to set active item
+                    for i in range(self.combo_api_key.get_model().get_n_items()):
+                        if self.combo_api_key.get_model().get_item_string(i) == item_text:
+                            self.combo_api_key.set_active(i)
+                            matched = True
+                            break
+                    if matched:
+                        break
+            
+            # If no match found, set as custom text
+            if not matched:
+                entry_widget.set_text(initial_api_key)
+        
         row.pack_start(label, False, False, 0)
-        row.pack_start(self.entry_api_key, True, True, 0)
+        row.pack_start(self.combo_api_key, True, True, 0)
         box.pack_start(row, False, False, 0)
 
         # API type
@@ -188,7 +241,44 @@ class CustomModelDialog(Gtk.Dialog):
         model_id = self.entry_model_id.get_text().strip()
         display_name = self.entry_display.get_text().strip()
         endpoint = self.entry_endpoint.get_text().strip()
-        api_key = self.entry_api_key.get_text().strip()
+        # Get API key from combobox entry
+        entry_widget = self.combo_api_key.get_child()
+        api_key_text = entry_widget.get_text().strip()
+        
+        # Check if a dropdown item is selected
+        active_id = self.combo_api_key.get_active()
+        api_key = api_key_text  # Default to entry text
+        
+        if active_id >= 0:
+            # User selected from dropdown, extract key name and get actual value
+            from utils import load_api_keys, API_KEY_FIELDS
+            import re
+            api_keys = load_api_keys()
+            active_text = self.combo_api_key.get_active_text()
+            
+            # Extract key name from dropdown text
+            # Format for standard keys: "Display Name (key_name)" -> extract "key_name" from parentheses
+            # Format for custom keys: "key_name (custom)" -> extract "key_name" before "(custom)"
+            key_name = None
+            
+            # First try to match custom key format: "key_name (custom)"
+            custom_match = re.match(r'^(.+?)\s+\(custom\)$', active_text)
+            if custom_match:
+                key_name = custom_match.group(1).strip()
+            else:
+                # Try standard key format: "Display Name (key_name)"
+                standard_match = re.search(r'\(([^)]+)\)', active_text)
+                if standard_match:
+                    key_name = standard_match.group(1).strip()
+            
+            # Look up the actual key value
+            if key_name and key_name in api_keys and api_keys[key_name]:
+                api_key = api_keys[key_name]
+            # If key not found or empty, fall through to use entry text (user may have edited it)
+        
+        # If no dropdown item selected or lookup failed, api_key is already set to entry_text
+        # This handles both custom typed values and edited dropdown selections
+        
         api_type = self.combo_api_type.get_active_text() or "chat.completions"
 
         if not model_id:
@@ -210,10 +300,13 @@ class CustomModelDialog(Gtk.Dialog):
 # Helper: build the API keys editor (reused in SettingsDialog and APIKeyDialog)
 # ---------------------------------------------------------------------------
 
-def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key='', perplexity_key=''):
+def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key='', perplexity_key='', custom_keys=None):
     """
     Build and return a Gtk.Box containing API key entry fields.
     Also returns references to the entry widgets in a dict.
+    
+    Args:
+        custom_keys: Optional dict of custom key name -> value pairs
     """
     list_box = Gtk.ListBox()
     list_box.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -223,93 +316,64 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
     list_box.set_margin_end(0)
 
     entries = {}
+    custom_keys = custom_keys or {}
+    
+    # Create size groups to make labels and entries uniform width
+    label_size_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+    entry_size_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+    size_groups = {'label': label_size_group, 'entry': entry_size_group}
+
+    def _add_key_row(key_name, label_text, value, placeholder='', is_custom=False):
+        """Helper to add a key row with uniform entry width."""
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label=label_text, xalign=0)
+        label.set_hexpand(False)  # Don't expand, use fixed width via size group
+        # Add label to size group for uniform width
+        label_size_group.add_widget(label)
+        entry = Gtk.Entry()
+        entry.set_hexpand(True)  # Entry expands to fill remaining space
+        entry.set_visibility(False)
+        if placeholder:
+            entry.set_placeholder_text(placeholder)
+        entry.set_text(value)
+        # Add entry to size group for uniform width
+        entry_size_group.add_widget(entry)
+        hbox.pack_start(label, False, False, 0)  # Pack label with False for expand
+        hbox.pack_start(entry, True, True, 0)  # Entry expands
+        # Add delete button for custom keys (will be connected in SettingsDialog)
+        if is_custom:
+            delete_btn = Gtk.Button.new_from_icon_name("edit-delete", Gtk.IconSize.BUTTON)
+            delete_btn.set_tooltip_text("Delete this custom key")
+            hbox.pack_start(delete_btn, False, False, 0)
+            row.delete_button = delete_btn  # Store reference for later connection
+        list_box.add(row)
+        entries[key_name] = entry
+        return row
 
     # OpenAI API Key
-    row = Gtk.ListBoxRow()
-    _add_listbox_row_margins(row)
-    hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    row.add(hbox)
-    label = Gtk.Label(label="OpenAI API Key", xalign=0)
-    label.set_hexpand(True)
-    entry_openai = Gtk.Entry()
-    entry_openai.set_hexpand(True)
-    entry_openai.set_visibility(False)
-    entry_openai.set_placeholder_text("sk-...")
-    entry_openai.set_text(openai_key)
-    hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_openai, True, True, 0)
-    list_box.add(row)
-    entries['openai'] = entry_openai
+    _add_key_row('openai', 'OpenAI API Key', openai_key, 'sk-...')
 
     # Gemini API Key
-    row = Gtk.ListBoxRow()
-    _add_listbox_row_margins(row)
-    hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    row.add(hbox)
-    label = Gtk.Label(label="Gemini API Key", xalign=0)
-    label.set_hexpand(True)
-    entry_gemini = Gtk.Entry()
-    entry_gemini.set_hexpand(True)
-    entry_gemini.set_visibility(False)
-    entry_gemini.set_placeholder_text("AI...")
-    entry_gemini.set_text(gemini_key)
-    hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_gemini, True, True, 0)
-    list_box.add(row)
-    entries['gemini'] = entry_gemini
+    _add_key_row('gemini', 'Gemini API Key', gemini_key, 'AI...')
 
     # Grok API Key
-    row = Gtk.ListBoxRow()
-    _add_listbox_row_margins(row)
-    hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    row.add(hbox)
-    label = Gtk.Label(label="Grok API Key", xalign=0)
-    label.set_hexpand(True)
-    entry_grok = Gtk.Entry()
-    entry_grok.set_hexpand(True)
-    entry_grok.set_visibility(False)
-    entry_grok.set_placeholder_text("gsk-...")
-    entry_grok.set_text(grok_key)
-    hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_grok, True, True, 0)
-    list_box.add(row)
-    entries['grok'] = entry_grok
+    _add_key_row('grok', 'Grok API Key', grok_key, 'gsk-...')
 
     # Claude API Key
-    row = Gtk.ListBoxRow()
-    _add_listbox_row_margins(row)
-    hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    row.add(hbox)
-    label = Gtk.Label(label="Claude API Key", xalign=0)
-    label.set_hexpand(True)
-    entry_claude = Gtk.Entry()
-    entry_claude.set_hexpand(True)
-    entry_claude.set_visibility(False)
-    entry_claude.set_placeholder_text("sk-ant-...")
-    entry_claude.set_text(claude_key)
-    hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_claude, True, True, 0)
-    list_box.add(row)
-    entries['claude'] = entry_claude
+    _add_key_row('claude', 'Claude API Key', claude_key, 'sk-ant-...')
 
     # Perplexity API Key
-    row = Gtk.ListBoxRow()
-    _add_listbox_row_margins(row)
-    hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    row.add(hbox)
-    label = Gtk.Label(label="Perplexity API Key", xalign=0)
-    label.set_hexpand(True)
-    entry_perplexity = Gtk.Entry()
-    entry_perplexity.set_hexpand(True)
-    entry_perplexity.set_visibility(False)
-    entry_perplexity.set_placeholder_text("pplx-...")
-    entry_perplexity.set_text(perplexity_key)
-    hbox.pack_start(label, True, True, 0)
-    hbox.pack_start(entry_perplexity, True, True, 0)
-    list_box.add(row)
-    entries['perplexity'] = entry_perplexity
+    _add_key_row('perplexity', 'Perplexity API Key', perplexity_key, 'pplx-...')
 
-    return list_box, entries
+    # Custom keys
+    for key_name, key_value in custom_keys.items():
+        row = _add_key_row(key_name, f'{key_name} API Key', key_value, is_custom=True)
+        row.custom_key_name = key_name  # Mark as custom key row
+
+    return list_box, entries, size_groups
 
 
 # ---------------------------------------------------------------------------
@@ -2097,13 +2161,46 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     def _build_api_keys_page(self):
         keys = self.initial_api_keys
-        list_box, self.api_key_entries = build_api_keys_editor(
-            openai_key=keys.get('openai', ''),
-            gemini_key=keys.get('gemini', ''),
-            grok_key=keys.get('grok', ''),
-            claude_key=keys.get('claude', ''),
-            perplexity_key=keys.get('perplexity', ''),
+        # Separate standard keys from custom keys
+        from utils import API_KEY_FIELDS
+        standard_keys = {k: keys.get(k, '') for k in API_KEY_FIELDS}
+        custom_keys = {k: v for k, v in keys.items() if k not in API_KEY_FIELDS}
+        
+        list_box, self.api_key_entries, size_groups = build_api_keys_editor(
+            openai_key=standard_keys.get('openai', ''),
+            gemini_key=standard_keys.get('gemini', ''),
+            grok_key=standard_keys.get('grok', ''),
+            claude_key=standard_keys.get('claude', ''),
+            perplexity_key=standard_keys.get('perplexity', ''),
+            custom_keys=custom_keys,
         )
+        
+        # Store list_box reference and size groups for adding custom keys
+        self.api_keys_list_box = list_box
+        self.label_size_group = size_groups['label']
+        self.entry_size_group = size_groups['entry']
+        
+        # Store custom key rows for deletion and connect delete buttons
+        self.custom_key_rows = []
+        for row in list_box.get_children():
+            if hasattr(row, 'custom_key_name'):
+                self.custom_key_rows.append(row)
+                # Connect delete button if it exists
+                if hasattr(row, 'delete_button'):
+                    row.delete_button.connect("clicked", lambda w, r=row, k=row.custom_key_name: self._on_delete_custom_key(w, r, k))
+        
+        # Add "Add Custom Key" button row
+        add_button_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(add_button_row, top=12, bottom=4)
+        add_button_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        add_button_row.add(add_button_hbox)
+        add_button_hbox.pack_start(Gtk.Box(), True, True, 0)  # spacer
+        self.btn_add_custom_key = Gtk.Button(label="Add Custom Key")
+        self.btn_add_custom_key.set_tooltip_text("Add a custom API key with a name and value")
+        self.btn_add_custom_key.connect("clicked", self._on_add_custom_key_clicked)
+        add_button_hbox.pack_start(self.btn_add_custom_key, False, False, 0)
+        list_box.add(add_button_row)
+        
         # Add a final row in the same ListBox for the Save button
         button_row = Gtk.ListBoxRow()
         _add_listbox_row_margins(button_row, top=12, bottom=4)
@@ -2533,13 +2630,178 @@ class SettingsDialog(Gtk.Dialog):
 
     def get_api_keys(self):
         """Return API keys from the API Keys page."""
-        return {
+        keys = {
             'openai': self.api_key_entries['openai'].get_text().strip(),
             'gemini': self.api_key_entries['gemini'].get_text().strip(),
             'grok': self.api_key_entries['grok'].get_text().strip(),
             'claude': self.api_key_entries['claude'].get_text().strip(),
             'perplexity': self.api_key_entries['perplexity'].get_text().strip(),
         }
+        # Add custom keys
+        from utils import API_KEY_FIELDS
+        for key_name, entry in self.api_key_entries.items():
+            if key_name not in API_KEY_FIELDS:
+                keys[key_name] = entry.get_text().strip()
+        return keys
+
+    def _on_add_custom_key_clicked(self, widget):
+        """Show a dialog to add a custom API key."""
+        dialog = Gtk.Dialog(
+            title="Add Custom API Key",
+            transient_for=self,
+            flags=0,
+        )
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Add", Gtk.ResponseType.OK)
+        
+        content = dialog.get_content_area()
+        content.set_spacing(12)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+        
+        # Name entry
+        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        name_label = Gtk.Label(label="Name:", xalign=0)
+        name_label.set_size_request(180, -1)
+        name_entry = Gtk.Entry()
+        name_entry.set_placeholder_text("e.g., myapi")
+        name_box.pack_start(name_label, False, False, 0)
+        name_box.pack_start(name_entry, True, True, 0)
+        content.pack_start(name_box, False, False, 0)
+        
+        # Value entry
+        value_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        value_label = Gtk.Label(label="Value:", xalign=0)
+        value_label.set_size_request(180, -1)
+        value_entry = Gtk.Entry()
+        value_entry.set_visibility(False)
+        value_entry.set_placeholder_text("API key value")
+        value_box.pack_start(value_label, False, False, 0)
+        value_box.pack_start(value_entry, True, True, 0)
+        content.pack_start(value_box, False, False, 0)
+        
+        dialog.show_all()
+        
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            key_name = name_entry.get_text().strip()
+            key_value = value_entry.get_text().strip()
+            
+            if not key_name:
+                dialog.destroy()
+                msg = Gtk.MessageDialog(
+                    transient_for=self,
+                    flags=0,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="Invalid Name",
+                )
+                msg.format_secondary_text("Please enter a name for the custom API key.")
+                msg.run()
+                msg.destroy()
+                return
+            
+            # Check if key name already exists
+            from utils import API_KEY_FIELDS
+            if key_name in API_KEY_FIELDS or key_name in self.api_key_entries:
+                dialog.destroy()
+                msg = Gtk.MessageDialog(
+                    transient_for=self,
+                    flags=0,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="Duplicate Name",
+                )
+                msg.format_secondary_text(f"A key with the name '{key_name}' already exists.")
+                msg.run()
+                msg.destroy()
+                return
+            
+            # Add the custom key row
+            self._add_custom_key_row(key_name, key_value)
+        
+        dialog.destroy()
+    
+    def _add_custom_key_row(self, key_name, key_value):
+        """Add a custom key row to the list box."""
+        list_box = self.api_keys_list_box
+        if not list_box:
+            return
+        
+        # Find the position to insert (before the "Add Custom Key" button)
+        add_button_row = None
+        for row in list_box.get_children():
+            if hasattr(row, 'get_children') and row.get_children():
+                hbox = row.get_children()[0]
+                if isinstance(hbox, Gtk.Box):
+                    for widget in hbox.get_children():
+                        if isinstance(widget, Gtk.Button) and widget.get_label() == "Add Custom Key":
+                            add_button_row = row
+                            break
+                if add_button_row:
+                    break
+        
+        # Create the custom key row
+        row = Gtk.ListBoxRow()
+        row.custom_key_name = key_name
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        
+        label = Gtk.Label(label=f"{key_name} API Key", xalign=0)
+        label.set_hexpand(False)  # Don't expand, use fixed width via size group
+        # Add label to size group for uniform width
+        self.label_size_group.add_widget(label)
+        
+        entry = Gtk.Entry()
+        entry.set_hexpand(True)  # Entry expands to fill remaining space
+        entry.set_visibility(False)
+        entry.set_text(key_value)
+        # Add to size group for uniform width
+        self.entry_size_group.add_widget(entry)
+        
+        # Delete button
+        delete_btn = Gtk.Button.new_from_icon_name("edit-delete", Gtk.IconSize.BUTTON)
+        delete_btn.set_tooltip_text("Delete this custom key")
+        delete_btn.connect("clicked", lambda w: self._on_delete_custom_key(w, row, key_name))
+        
+        hbox.pack_start(label, False, False, 0)  # Pack label with False for expand
+        hbox.pack_start(entry, True, True, 0)  # Entry expands
+        hbox.pack_start(delete_btn, False, False, 0)
+        
+        # Insert before the "Add Custom Key" button
+        if add_button_row:
+            list_box.insert(row, list_box.get_children().index(add_button_row))
+        else:
+            list_box.add(row)
+        
+        # Store entry in api_key_entries
+        self.api_key_entries[key_name] = entry
+        self.custom_key_rows.append(row)
+        
+        list_box.show_all()
+    
+    def _on_delete_custom_key(self, widget, row, key_name):
+        """Delete a custom key row."""
+        # Remove from entries
+        if key_name in self.api_key_entries:
+            del self.api_key_entries[key_name]
+        
+        # Remove from custom_key_rows
+        if row in self.custom_key_rows:
+            self.custom_key_rows.remove(row)
+        
+        # Find the list box and remove the row
+        list_box = None
+        for child in self.stack.get_children():
+            if isinstance(child, Gtk.ListBox):
+                list_box = child
+                break
+        
+        if list_box:
+            list_box.remove(row)
 
     def _on_save_api_keys_clicked(self, widget):
         """
@@ -2736,7 +2998,7 @@ class APIKeyDialog(Gtk.Dialog):
         box = self.get_content_area()
         box.set_spacing(6)
 
-        list_box, self.entries = build_api_keys_editor(
+        list_box, self.entries, _ = build_api_keys_editor(
             openai_key=openai_key,
             gemini_key=gemini_key,
             grok_key=grok_key,

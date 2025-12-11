@@ -1465,13 +1465,18 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_open_settings(self, widget):
         # Gather current API keys from environment or stored values
-        current_api_keys = {
-            'openai': os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')),
-            'gemini': os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')),
-            'grok': os.environ.get('GROK_API_KEY', self.api_keys.get('grok', '')),
-            'claude': os.environ.get('CLAUDE_API_KEY', self.api_keys.get('claude', '')),
-            'perplexity': os.environ.get('PERPLEXITY_API_KEY', self.api_keys.get('perplexity', '')),
-        }
+        from utils import API_KEY_FIELDS
+        current_api_keys = {}
+        # Standard keys: prefer environment variables, fall back to stored values
+        current_api_keys['openai'] = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', ''))
+        current_api_keys['gemini'] = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', ''))
+        current_api_keys['grok'] = os.environ.get('GROK_API_KEY', self.api_keys.get('grok', ''))
+        current_api_keys['claude'] = os.environ.get('CLAUDE_API_KEY', self.api_keys.get('claude', ''))
+        current_api_keys['perplexity'] = os.environ.get('PERPLEXITY_API_KEY', self.api_keys.get('perplexity', ''))
+        # Include all custom keys (keys that aren't in API_KEY_FIELDS)
+        for key_name, key_value in self.api_keys.items():
+            if key_name not in API_KEY_FIELDS:
+                current_api_keys[key_name] = key_value
 
         # Pass ai_provider, providers dict, and api_keys to the settings dialog
         dialog = SettingsDialog(
@@ -1533,12 +1538,13 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _apply_api_keys(self, new_keys):
         """Apply API key changes: update stored keys, environment, and providers."""
-        # Update stored keys
-        self.api_keys['openai'] = new_keys['openai']
-        self.api_keys['gemini'] = new_keys['gemini']
-        self.api_keys['grok'] = new_keys['grok']
-        self.api_keys['claude'] = new_keys['claude']
-        self.api_keys['perplexity'] = new_keys.get('perplexity', '')
+        from utils import API_KEY_FIELDS
+        # Update stored keys (standard and custom)
+        for key_name, key_value in new_keys.items():
+            self.api_keys[key_name] = key_value
+        
+        # Handle standard keys (set environment variables and initialize providers)
+        # Standard keys are handled below, custom keys are just stored above
 
         # Update environment variables and providers
         if new_keys['openai']:
