@@ -169,6 +169,9 @@ class CustomModelDialog(Gtk.Dialog):
         from utils import API_KEY_FIELDS
         api_keys = load_api_keys()
         
+        # Track items as we add them for initial value matching
+        item_index_map = {}  # Maps key_name -> index
+        
         # Add standard keys
         standard_key_names = {
             'openai': 'OpenAI',
@@ -180,12 +183,22 @@ class CustomModelDialog(Gtk.Dialog):
         for key_name in API_KEY_FIELDS:
             if api_keys.get(key_name):
                 display_name = standard_key_names.get(key_name, key_name.capitalize())
-                self.combo_api_key.append_text(f"{display_name} ({key_name})")
+                item_text = f"{display_name} ({key_name})"
+                self.combo_api_key.append_text(item_text)
+                # Get index after appending (it's the last item)
+                model = self.combo_api_key.get_model()
+                index = model.iter_n_children(None) - 1
+                item_index_map[key_name] = index
         
         # Add custom keys
         for key_name, key_value in api_keys.items():
             if key_name not in API_KEY_FIELDS and key_value:
-                self.combo_api_key.append_text(f"{key_name} (custom)")
+                item_text = f"{key_name} (custom)"
+                self.combo_api_key.append_text(item_text)
+                # Get index after appending (it's the last item)
+                model = self.combo_api_key.get_model()
+                index = model.iter_n_children(None) - 1
+                item_index_map[key_name] = index
         
         # Set initial value if provided
         initial_api_key = str(data.get("api_key", "")).strip()
@@ -194,20 +207,11 @@ class CustomModelDialog(Gtk.Dialog):
             matched = False
             for key_name, key_value in api_keys.items():
                 if key_value == initial_api_key:
-                    # Find matching item in combobox
-                    if key_name in API_KEY_FIELDS:
-                        display_name = standard_key_names.get(key_name, key_name.capitalize())
-                        item_text = f"{display_name} ({key_name})"
-                    else:
-                        item_text = f"{key_name} (custom)"
-                    
-                    # Try to set active item
-                    for i in range(self.combo_api_key.get_model().get_n_items()):
-                        if self.combo_api_key.get_model().get_item_string(i) == item_text:
-                            self.combo_api_key.set_active(i)
-                            matched = True
-                            break
-                    if matched:
+                    # Find matching item in our index map
+                    if key_name in item_index_map:
+                        index = item_index_map[key_name]
+                        self.combo_api_key.set_active(index)
+                        matched = True
                         break
             
             # If no match found, set as custom text
