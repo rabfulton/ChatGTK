@@ -143,7 +143,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         main_hbox.pack_start(self.paned, True, True, 0)
         # Create sidebar
-        self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.sidebar.set_size_request(200, -1)
         self.sidebar.set_margin_top(10)
         self.sidebar.set_margin_bottom(10)
@@ -174,6 +174,7 @@ class OpenAIGTKClient(Gtk.Window):
         # History filter entry at bottom of sidebar
         self.history_filter_text = ""
         self.history_filter_timeout_id = None
+        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         filter_entry = Gtk.Entry()
         filter_entry.set_placeholder_text("Filter history...")
         filter_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
@@ -181,11 +182,15 @@ class OpenAIGTKClient(Gtk.Window):
         filter_entry.connect("icon-press", self.on_history_filter_icon_pressed)
         filter_entry.connect("key-press-event", self.on_history_filter_keypress)
         self.history_filter_entry = filter_entry
-        self.sidebar.pack_start(filter_entry, False, False, 0)
-        self.history_filter_entry.show()
+        filter_box.pack_start(filter_entry, True, True, 0)
+        self.history_filter_box = filter_box
+        self.sidebar.pack_start(filter_box, False, False, 0)
+
+        filter_box.show_all()
 
         # Filter options row (height aligned with typical button height)
-        options_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        options_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.history_options_box = options_box
         self.sidebar.pack_start(options_box, False, False, 0)
 
         # Titles-only toggle for filtering
@@ -237,7 +242,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Add sidebar toggle button to top bar
         self.sidebar_button = Gtk.Button()
         self.sidebar_button.set_relief(Gtk.ReliefStyle.NONE)
-        arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.RIGHT, shadow_type=Gtk.ShadowType.NONE)
+        arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.LEFT, shadow_type=Gtk.ShadowType.NONE)
         self.sidebar_button.add(arrow)
         self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
         hbox_top.pack_start(self.sidebar_button, False, False, 0)
@@ -284,9 +289,9 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Conversation box – we will add each message as a separate widget
         self.conversation_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.conversation_box.set_margin_start(5)
+        self.conversation_box.set_margin_start(0)
         self.conversation_box.set_margin_end(5)
-        self.conversation_box.set_margin_top(5)
+        self.conversation_box.set_margin_top(0)
         self.conversation_box.set_margin_bottom(5)
         scrolled_window.add(self.conversation_box)
 
@@ -310,6 +315,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         btn_send = Gtk.Button(label="Send")
         btn_send.connect("clicked", self.on_submit)
+        self.btn_send = btn_send
 
         hbox_input.pack_start(self.entry_question, True, True, 0)
         hbox_input.pack_start(btn_edit_prompt, False, False, 0)
@@ -334,6 +340,9 @@ class OpenAIGTKClient(Gtk.Window):
         button_box.pack_start(self.btn_attach, True, True, 0)
 
         vbox_main.pack_start(button_box, False, False, 0)
+        # Keep sidebar row heights aligned with button height
+        button_box.connect("size-allocate", lambda w, alloc: self._update_sidebar_row_heights())
+        self._update_sidebar_row_heights()
 
         # Check LaTeX installation
         if not is_latex_installed():
@@ -2670,6 +2679,30 @@ class OpenAIGTKClient(Gtk.Window):
             except re.error:
                 return False
         return filter_text.lower() in text.lower()
+
+    def _get_button_row_height(self):
+        """Return the themed height of a button row for alignment."""
+        try:
+            if hasattr(self, "btn_send"):
+                min_h, nat_h = self.btn_send.get_preferred_height()
+                if nat_h or min_h:
+                    return nat_h or min_h
+        except Exception as e:
+            print(f"Error getting button height: {e}")
+        return 0
+
+    def _update_sidebar_row_heights(self):
+        """Set sidebar row heights to match button height for alignment."""
+        height = self._get_button_row_height()
+        if height <= 0:
+            return
+        try:
+            if hasattr(self, "history_filter_box"):
+                self.history_filter_box.set_size_request(-1, height)
+            if hasattr(self, "history_options_box"):
+                self.history_options_box.set_size_request(-1, height)
+        except Exception as e:
+            print(f"Error updating sidebar row heights: {e}")
 
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""
