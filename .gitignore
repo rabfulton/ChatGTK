@@ -8,7 +8,9 @@ Backups/
 temp/
 history/
 __pycache__/
+test_exports/
 chatgtk-launcher.sh
+test_latex_links.py
 debug_export.tex
 debug_failed.tex
 *.pdf

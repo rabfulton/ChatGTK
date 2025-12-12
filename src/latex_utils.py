@@ -818,7 +818,8 @@ class ProtectedRegions:
                 formatted = f"\\texttt{{{escaped_content}}}"
                 return self._store("INLINECODE", formatted)
             
-            formatted = f"\\lstinline{delim}{content}{delim}"
+            # Apply dedicated inline code style for darker text
+            formatted = f"\\lstinline[style=inlinecode]{delim}{content}{delim}"
             return self._store("INLINECODE", formatted)
         
         return re.sub(r'`([^`]+)`', inline_code_repl, text)
@@ -828,14 +829,95 @@ class ProtectedRegions:
         Extract display math ($$...$$ or \\[...\\]) and replace with tokens.
         Normalizes to $$...$$ format.
         """
-        # First convert \[...\] to $$...$$
-        text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
-        
-        # Now protect all $$...$$ blocks
-        def display_math_repl(match):
-            return self._store("DISPLAYMATH", match.group(0))
-        
-        return re.sub(r'\$\$([^$]+)\$\$', display_math_repl, text)
+        # We only treat display math that is on its own line.
+        # Inline mentions like "use $$ ... $$" are escaped as plain text later.
+        lines = text.split('\n')
+        result_lines = []
+        collecting_dollar = False
+        collecting_bracket = False
+        dollar_buffer: list[str] = []
+        bracket_buffer: list[str] = []
+
+        def flush_dollar_buffer():
+            content = "\n".join(dollar_buffer)
+            token = self._store("DISPLAYMATH", f"$$\n{content}\n$$")
+            result_lines.append(token)
+
+        def flush_bracket_buffer():
+            content = "\n".join(bracket_buffer)
+            token = self._store("DISPLAYMATH", f"\\[\n{content}\n\\]")
+            result_lines.append(token)
+
+        for line in lines:
+            if collecting_dollar:
+                if re.match(r'^\s*\$\$\s*$', line):
+                    flush_dollar_buffer()
+                    dollar_buffer = []
+                    collecting_dollar = False
+                else:
+                    dollar_buffer.append(line)
+                continue
+            if collecting_bracket:
+                if re.match(r'^\s*\\\]\s*$', line):
+                    flush_bracket_buffer()
+                    bracket_buffer = []
+                    collecting_bracket = False
+                else:
+                    bracket_buffer.append(line)
+                continue
+
+            # Single-line \[ ... \] used as a block
+            bracket_match = re.match(r'^\s*\\\[(.*?)\\\]\s*$', line)
+            if bracket_match:
+                result_lines.append(self._store("DISPLAYMATH", f"\\[{bracket_match.group(1)}\\]"))
+                continue
+
+            # Single-line $$ ... $$ with no surrounding text
+            single_line_match = re.match(r'^\s*\$\$(.*?)\$\$\s*$', line)
+            if single_line_match:
+                result_lines.append(self._store("DISPLAYMATH", f"$${single_line_match.group(1)}$$"))
+                continue
+
+            # Start of a $$ block on its own line
+            if re.match(r'^\s*\$\$\s*$', line):
+                collecting_dollar = True
+                dollar_buffer = []
+                continue
+            # Start of a \[ block on its own line
+            if re.match(r'^\s*\\\[\s*$', line):
+                collecting_bracket = True
+                bracket_buffer = []
+                continue
+
+            result_lines.append(line)
+
+        # Unclosed $$ block: treat it literally to avoid generating bad math
+        if collecting_dollar:
+            result_lines.append('$$')
+            result_lines.extend(dollar_buffer)
+        # Unclosed \[ block: treat it literally
+        if collecting_bracket:
+            result_lines.append(r'\[')
+            result_lines.extend(bracket_buffer)
+
+        text = '\n'.join(result_lines)
+
+        # Any remaining inline \[...\] (not on their own line) are treated as inline math
+        # to keep delimiters balanced and avoid accidentally starting display math.
+        def inline_bracket_repl(match):
+            content = match.group(1)
+            return self._store("INLINEMATH", f"${content}$")
+
+        text = re.sub(r'\\\[(.*?)\\\]', inline_bracket_repl, text)
+
+        # Remaining inline $$...$$ (not block-isolated) are also converted to inline math
+        def inline_dollar_repl(match):
+            content = match.group(1)
+            return self._store("INLINEMATH", f"${content}$")
+
+        text = re.sub(r'\$\$(.*?)\$\$', inline_dollar_repl, text)
+
+        return text
     
     def protect_inline_math(self, text: str) -> str:
         """
@@ -1876,9 +1958,6 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
     }
 }
 
-% Define a robust custom macro for inline code using listings' inline code command.
-\DeclareRobustCommand{\inlinecode}[1]{\lstinline!#1!}
-
 % Configure image handling
 \DeclareGraphicsExtensions{.pdf,.png,.jpg,.jpeg}
 \graphicspath{{./}}
@@ -1889,6 +1968,7 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 \definecolor{codebg}{RGB}{40, 44, 52}          % Dark background for code
 \definecolor{codetext}{RGB}{171, 178, 191}     % Light text for code
 \definecolor{codecomment}{RGB}{92, 99, 112}    % Grey for comments
+\definecolor{inlinecodecolor}{RGB}{40, 44, 52} % Darker inline code
 
 % Code listing style
 \lstset{
@@ -1920,6 +2000,14 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
              {\\}{{\textbackslash{}}}1
              {|}{\textbar{}}1
 }
+
+% Inline code style to keep text darker without a background box
+\lstdefinestyle{inlinecode}{
+    basicstyle=\ttfamily\small\color{inlinecodecolor},
+}
+
+% Use a dedicated inline code style for \inlinecode
+\DeclareRobustCommand{\inlinecode}[1]{\lstinline[style=inlinecode]!#1!}
 
 \pagestyle{fancy}
 \fancyhf{}

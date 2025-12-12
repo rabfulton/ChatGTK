@@ -2983,15 +2983,18 @@ class OpenAIGTKClient(Gtk.Window):
                 # Load the chat history
                 history = load_chat_history(history_row.filename, messages_only=True)
                 if history:
-                    # Get a custom title for the exported chat
-                    custom_title = get_chat_title(history_row.filename)
-                    title = f"Chat Export - {custom_title[:50]}"
+                    # Use the sidebar chat title and present it with capitalized words
+                    chat_title = get_chat_title(history_row.filename)
+                    formatted_title = " ".join(
+                        word[:1].upper() + word[1:] if word else ""
+                        for word in chat_title.split()
+                    )
                     
                     # Get the chat ID from the filename
                     chat_id = history_row.filename
                     
                     try:
-                        result = export_chat_to_pdf(history, filename, title, chat_id)
+                        result = export_chat_to_pdf(history, filename, formatted_title, chat_id)
                         # Handle both old (bool) and new (tuple) return formats for compatibility
                         if isinstance(result, tuple):
                             success, engine_name = result
