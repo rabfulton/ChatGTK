@@ -56,6 +56,7 @@ CHAT_PDF_TEMPLATE = r"""
 \usepackage{parskip}
 \usepackage{listings}
 \usepackage{fancyhdr}
+\usepackage[hyphens]{url}
 \usepackage[hidelinks]{hyperref}
 
 \geometry{margin=1in}
@@ -518,6 +519,7 @@ if not is_latex_installed():
 #   - LATEXCMD: Pre-existing LaTeX commands that should pass through
 #   - IMAGE: HTML img tags → \includegraphics
 #   - TABLE: Markdown tables → tabular environments
+#   - LINK: Hyperlinks detected in plain text/markdown
 # =============================================================================
 
 
@@ -644,6 +646,33 @@ def escape_latex_specials_in_code(code: str) -> str:
     # All special characters are handled by the literate option in lstset
     # No escaping needed - literate will handle $, %, &, #, _, \, | correctly
     return code
+
+# ---------------------------------------------------------------------------
+# Link handling helpers for PDF export
+# ---------------------------------------------------------------------------
+
+# Trailing punctuation that should not be part of a detected URL
+LINK_TRAILING_PUNCTUATION = ")]>.,;!?"
+
+# Patterns for the different link shapes we need to detect
+MD_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+# Footnote-style double-bracket labels: [[11]](https://...)
+DBL_BRACKET_MD_PATTERN = re.compile(r'\[\[([^\]]+)\]\]\(([^)]+)\)')
+HREF_PATTERN = re.compile(r'\\href\{([^}]*)\}\{([^}]*)\}')
+URL_PATTERN = re.compile(r'(?<!href=")(?P<url>(?:https?://|mailto:|file://)[^\s<\[]+)')
+ANCHOR_PATTERN = re.compile(r'(?<![\w@])#([A-Za-z][\w\-\.:]*)')
+
+
+def _trim_trailing_punctuation(url: str) -> tuple[str, str]:
+    """
+    Split a URL into (clean_url, trailing_chars) by peeling common trailing
+    punctuation that should stay outside the hyperlink.
+    """
+    trailing = ""
+    while url and url[-1] in LINK_TRAILING_PUNCTUATION:
+        trailing = url[-1] + trailing
+        url = url[:-1]
+    return url, trailing
 
 
 class ProtectedRegions:
@@ -1130,118 +1159,102 @@ class ProtectedRegions:
     
     def protect_lists(self, text: str) -> str:
         """
-        Convert markdown list items to LaTeX itemize environments.
+        Convert markdown list items to LaTeX itemize/enumerate environments.
         
         Handles:
         - Unordered lists: * Item or - Item
-        - Nested lists (indented items)
-        - Mixed content (text between lists)
+        - Ordered lists: 1. Item, 2. Item (numeric with a dot)
+        - Nested lists (indentation-based)
+        - Mixed content between lists
         """
-        def is_list_item(line: str) -> bool:
-            """Check if a line is a list item."""
-            stripped = line.strip()
-            # Match * Item or - Item (with optional leading whitespace)
-            return bool(re.match(r'^\s*[\*\-]\s+', stripped))
-        
-        def get_indent_level(line: str) -> int:
-            """Get the indentation level (number of leading spaces, in groups of 2-4)."""
-            match = re.match(r'^(\s*)', line)
-            if match:
-                spaces = len(match.group(1))
-                # Typically markdown uses 2-4 spaces per level
-                return spaces // 4  # 4 spaces per level
-            return 0
-        
-        def process_list_item(line: str) -> str:
-            """Process a single list item, removing the marker and processing content."""
-            # Remove the list marker (* or -) and leading whitespace
-            content = re.sub(r'^\s*[\*\-]\s+', '', line)
-            
-            # Process bold/italic in the item content
-            content = process_bold_italic(content)
-            
-            # Protect LaTeX commands
+        list_re = re.compile(r'^(\s*)([\*\-]|\d+\.)\s+(.*)$')
+
+        def parse_list_item(line: str):
+            """Return (indent_level, marker, content) or None."""
+            m = list_re.match(line)
+            if not m:
+                return None
+            indent = len(m.group(1)) // 4  # 4 spaces per level
+            marker = m.group(2)
+            content = m.group(3)
+            return indent, marker, content
+
+        def process_item_content(raw_content: str) -> str:
+            """Process markdown/escaping inside a list item's content."""
+            content = process_bold_italic(raw_content)
             content = self.protect_latex_commands(content)
-            
-            # Escape LaTeX special characters in plain text
-            segments = self.split_by_tokens(content)
-            escaped_parts = []
-            for is_token, segment in segments:
+            parts = []
+            for is_token, segment in self.split_by_tokens(content):
                 if is_token:
-                    escaped_parts.append(segment)
+                    parts.append(segment)
                 else:
-                    escaped_parts.append(escape_latex_text_simple(segment))
-            content = ''.join(escaped_parts)
-            
-            return content
-        
-        def process_list_block(start_idx: int, base_indent: int) -> tuple[int, str]:
-            """
-            Process a block of list items starting at start_idx.
-            Returns (next_index, latex_code).
-            Handles nested lists recursively.
-            """
+                    parts.append(escape_latex_text_simple(segment))
+            return ''.join(parts)
+
+        def process_list_block(start_idx: int, base_indent: int, ordered: bool) -> tuple[int, str]:
+            """Process a block of list items of the same type/indent."""
             items = []
             i = start_idx
-            
             while i < n:
-                line = lines[i]
-                
-                if not is_list_item(line):
-                    # Not a list item - end of list (allow one blank line)
-                    if line.strip() == "" and i < n - 1 and is_list_item(lines[i + 1]):
+                parsed = parse_list_item(lines[i])
+                if not parsed:
+                    # Allow one blank line inside a list; skip it and continue
+                    if lines[i].strip() == "" and i + 1 < n and parse_list_item(lines[i + 1]):
                         i += 1
                         continue
                     break
-                
-                item_indent = get_indent_level(line)
-                
-                if item_indent < base_indent:
-                    # Less indented - end of this list
+
+                indent, marker, content = parsed
+                is_ordered = marker.endswith('.')
+
+                if indent < base_indent or is_ordered != ordered:
                     break
-                elif item_indent == base_indent:
-                    # Same level - process item
-                    item_content = process_list_item(line)
-                    i += 1
-                    
-                    # Check for nested list
-                    if i < n and is_list_item(lines[i]) and get_indent_level(lines[i]) > base_indent:
-                        # Process nested list
-                        nested_i, nested_tex = process_list_block(i, get_indent_level(lines[i]))
+                if indent > base_indent:
+                    # Should be handled as nested; stop here
+                    break
+
+                i += 1
+                item_content = process_item_content(content)
+
+                # Nested list?
+                if i < n:
+                    next_parsed = parse_list_item(lines[i])
+                    if next_parsed and next_parsed[0] > base_indent:
+                        nested_indent = next_parsed[0]
+                        nested_ordered = next_parsed[1].endswith('.')
+                        nested_i, nested_tex = process_list_block(i, nested_indent, nested_ordered)
                         item_content += "\n" + nested_tex
                         i = nested_i
-                    
-                    items.append(item_content)
-                else:
-                    # More indented - should have been handled as nested
-                    break
-            
-            if items:
-                items_tex = '\n'.join(f'\\item {item}' for item in items)
-                latex_code = f'\\begin{{itemize}}\n{items_tex}\n\\end{{itemize}}'
-                return (i, latex_code)
-            else:
-                return (start_idx, "")
-        
+
+                items.append(item_content)
+
+            if not items:
+                return start_idx, ""
+
+            items_tex = '\n'.join(f'\\item {item}' for item in items)
+            env = 'enumerate' if ordered else 'itemize'
+            latex_code = f'\\begin{{{env}}}\n{items_tex}\n\\end{{{env}}}'
+            return i, latex_code
+
         lines = text.split('\n')
         result_lines = []
         i = 0
         n = len(lines)
-        
+
         while i < n:
-            line = lines[i]
-            
-            if is_list_item(line):
-                base_indent = get_indent_level(line)
-                next_i, list_tex = process_list_block(i, base_indent)
+            parsed = parse_list_item(lines[i])
+            if parsed:
+                base_indent, marker, _ = parsed
+                ordered = marker.endswith('.')
+                next_i, list_tex = process_list_block(i, base_indent, ordered)
                 if list_tex:
                     token = self._store("LIST", list_tex)
                     result_lines.append(token)
                 i = next_i
             else:
-                result_lines.append(line)
+                result_lines.append(lines[i])
                 i += 1
-        
+
         return '\n'.join(result_lines)
     
     def protect_horizontal_rules(self, text: str) -> str:
@@ -1272,10 +1285,115 @@ class ProtectedRegions:
                 result_lines.append(line)
         
         return '\n'.join(result_lines)
+
+    def _format_link_label(self, label: str) -> str:
+        """
+        Apply inline formatting and escaping to a link label, preserving tokens.
+        """
+        label = label or ""
+        # Allow markdown bold/italic inside link labels
+        label = process_bold_italic(label)
+        # Protect any LaTeX commands created by formatting
+        label = self.protect_latex_commands(label)
+
+        parts = []
+        for is_token, segment in self.split_by_tokens(label):
+            if is_token:
+                parts.append(segment)
+            else:
+                parts.append(escape_latex_text_simple(segment))
+        return ''.join(parts)
+
+    def _build_href(self, url: str, label=None) -> str:
+        """
+        Construct a LaTeX \\href{url}{label} string with proper escaping.
+        If the visible text is the URL itself, wrap it in \\nolinkurl to allow wrapping.
+        """
+        clean_url = escape_latex_text_simple((url or "").strip())
+        raw_url = (url or "").strip()
+
+        # If no label or label equals URL, use a breakable URL presentation
+        if label is None or (isinstance(label, str) and label.strip() == raw_url):
+            formatted_label = r"\nolinkurl{" + escape_latex_text_simple(raw_url) + "}"
+        else:
+            formatted_label = self._format_link_label(label)
+            # If formatting produced empty text, fall back to a breakable URL
+            if not formatted_label:
+                formatted_label = r"\nolinkurl{" + escape_latex_text_simple(raw_url) + "}"
+        return f"\\href{{{clean_url}}}{{{formatted_label}}}"
+
+    def _build_anchor_link(self, anchor: str, label=None) -> str:
+        """
+        Construct a LaTeX \\hyperlink{anchor}{label} for internal anchors.
+        """
+        anchor = (anchor or "").lstrip('#')
+        escaped_anchor = escape_latex_text_simple(anchor)
+        formatted_label = self._format_link_label(label if label is not None else f"#{anchor}")
+        return f"\\hyperlink{{{escaped_anchor}}}{{{formatted_label}}}"
+
+    def protect_links(self, text: str) -> str:
+        """
+        Detect links in plain text segments and replace them with LINK tokens.
+        Supported:
+            - Markdown links: [label](url)
+            - Bare URLs: http/https/mailto/file
+            - Internal anchors: #section
+            - Existing \\href{url}{label} commands (pass-through)
+        """
+        def linkify_segment(segment: str) -> str:
+            # Preserve existing LaTeX href commands as-is
+            segment = HREF_PATTERN.sub(
+                lambda m: self._store("LINK", m.group(0)),
+                segment
+            )
+
+            # Footnote-style [[label]](url)
+            def dbl_bracket_repl(match):
+                label_inner = match.group(1).strip()
+                url = match.group(2).strip()
+                label = f"[[{label_inner}]]"
+                return self._store("LINK", self._build_href(url, label))
+
+            segment = DBL_BRACKET_MD_PATTERN.sub(dbl_bracket_repl, segment)
+
+            # Markdown [label](url)
+            def md_repl(match):
+                label = match.group(1).strip()
+                url = match.group(2).strip()
+                return self._store("LINK", self._build_href(url, label))
+
+            segment = MD_LINK_PATTERN.sub(md_repl, segment)
+
+            # Bare URLs (http/https/mailto/file)
+            def url_repl(match):
+                raw_url = match.group("url")
+                clean_url, trailing = _trim_trailing_punctuation(raw_url)
+                token = self._store("LINK", self._build_href(clean_url, clean_url))
+                return f"{token}{trailing}"
+
+            segment = URL_PATTERN.sub(url_repl, segment)
+
+            # Internal anchors like #section-one
+            def anchor_repl(match):
+                anchor = match.group(1)
+                return self._store("LINK", self._build_anchor_link(anchor, f"#{anchor}"))
+
+            segment = ANCHOR_PATTERN.sub(anchor_repl, segment)
+
+            return segment
+
+        parts = self.split_by_tokens(text)
+        processed = []
+        for is_token, part in parts:
+            if is_token:
+                processed.append(part)
+            else:
+                processed.append(linkify_segment(part))
+        return ''.join(processed)
     
     def get_token_pattern(self) -> str:
         """Return regex pattern matching any token."""
-        return r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE|LIST|HRULE)_\d+@@'
+        return r'@@(?:CODEBLOCK|INLINECODE|DISPLAYMATH|INLINEMATH|HEADER|LATEXCMD|IMAGE|TABLE|LIST|HRULE|LINK)_\d+@@'
     
     def restore_all(self, text: str) -> str:
         """
@@ -1618,10 +1736,13 @@ def format_message_content(content: str, chat_id=None) -> str:
     # Images
     content = regions.protect_images(content, chat_id)
 
-    # Tables (markdown-style) - after math/code/images so cells can contain tokens
+    # Links - detect markdown/bare/anchor links while still in plain text
+    content = regions.protect_links(content)
+
+    # Tables (markdown-style) - after links so table cells can contain link tokens
     content = regions.protect_tables(content)
     
-    # Lists (markdown-style) - after tables so list items can contain tokens
+    # Lists (markdown-style) - after tables so list items can contain link tokens
     content = regions.protect_lists(content)
     
     # Horizontal rules (*** or ---) - after lists
@@ -1731,6 +1852,7 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 \usepackage{amssymb}
 \usepackage{graphicx}
 \usepackage{textcomp}
+\usepackage[hyphens]{url}
 \usepackage[hidelinks]{hyperref}
 
 % Set fonts with Unicode support
