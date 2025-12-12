@@ -184,6 +184,28 @@ class OpenAIGTKClient(Gtk.Window):
         self.sidebar.pack_start(filter_entry, False, False, 0)
         self.history_filter_entry.show()
 
+        # Filter options row (height aligned with typical button height)
+        options_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.sidebar.pack_start(options_box, False, False, 0)
+
+        # Titles-only toggle for filtering
+        self.history_filter_titles_only = True
+        self.history_filter_toggle = Gtk.CheckButton(label="Titles only")
+        self.history_filter_toggle.set_active(True)
+        self.history_filter_toggle.connect("toggled", self.on_history_filter_mode_toggled)
+        options_box.pack_start(self.history_filter_toggle, False, False, 0)
+        self.history_filter_toggle.show()
+
+        # Whole-words toggle
+        self.history_filter_whole_words = False
+        self.history_filter_whole_words_toggle = Gtk.CheckButton(label="Whole Words")
+        self.history_filter_whole_words_toggle.set_active(False)
+        self.history_filter_whole_words_toggle.connect("toggled", self.on_history_filter_whole_words_toggled)
+        options_box.pack_start(self.history_filter_whole_words_toggle, False, False, 0)
+        self.history_filter_whole_words_toggle.show()
+
+        options_box.show_all()
+
         # Pack sidebar into left pane
         self.paned.pack1(self.sidebar, False, False)
 
@@ -2499,6 +2521,12 @@ class OpenAIGTKClient(Gtk.Window):
             current_text = self.history_filter_entry.get_text()
             if current_text != self.history_filter_text:
                 self.history_filter_entry.set_text(self.history_filter_text)
+        if hasattr(self, "history_filter_toggle"):
+            if self.history_filter_toggle.get_active() != self.history_filter_titles_only:
+                self.history_filter_toggle.set_active(self.history_filter_titles_only)
+        if hasattr(self, "history_filter_whole_words_toggle"):
+            if self.history_filter_whole_words_toggle.get_active() != self.history_filter_whole_words:
+                self.history_filter_whole_words_toggle.set_active(self.history_filter_whole_words)
 
         # Preserve current selection if present
         selected_filename = None
@@ -2513,14 +2541,11 @@ class OpenAIGTKClient(Gtk.Window):
         # Get histories from utils
         histories = list_chat_histories()
 
-        filter_text = (self.history_filter_text or "").strip().lower()
+        filter_text = (self.history_filter_text or "").strip()
         if filter_text:
             filtered = []
             for history in histories:
-                title = get_chat_title(history['filename'])
-                filename = history['filename']
-                match_target = f"{title} {filename}".lower()
-                if filter_text in match_target:
+                if self._history_matches_filter(history, filter_text):
                     filtered.append(history)
             histories = filtered
 
@@ -2565,9 +2590,11 @@ class OpenAIGTKClient(Gtk.Window):
     def on_history_filter_changed(self, entry):
         """Debounce and apply history filter as the user types."""
         self.history_filter_text = entry.get_text()
-        if self.history_filter_timeout_id:
-            GLib.source_remove(self.history_filter_timeout_id)
-        self.history_filter_timeout_id = GLib.timeout_add(150, self._apply_history_filter)
+        # Only debounce live filtering when in titles-only mode; full-content search waits for Enter
+        if self.history_filter_titles_only:
+            if self.history_filter_timeout_id:
+                GLib.source_remove(self.history_filter_timeout_id)
+            self.history_filter_timeout_id = GLib.timeout_add(150, self._apply_history_filter)
 
     def on_history_filter_icon_pressed(self, entry, icon_pos, event):
         """Clear filter when the clear icon is pressed."""
@@ -2584,15 +2611,65 @@ class OpenAIGTKClient(Gtk.Window):
             self.refresh_history_list()
             return True
         if event.keyval == Gdk.KEY_Return:
+            # Apply filter immediately when Enter is pressed (used for content search)
+            self._apply_history_filter()
             self.history_list.grab_focus()
             return True
         return False
+
+    def on_history_filter_mode_toggled(self, toggle_button):
+        """Switch between titles-only and full-content filtering."""
+        self.history_filter_titles_only = toggle_button.get_active()
+        # Apply immediately when switching to titles-only; wait for Enter when switching to full search
+        if self.history_filter_titles_only:
+            self._apply_history_filter()
+
+    def on_history_filter_whole_words_toggled(self, toggle_button):
+        """Toggle whole-word matching for history filter."""
+        self.history_filter_whole_words = toggle_button.get_active()
+        # Re-apply current filter to update matches
+        self._apply_history_filter()
 
     def _apply_history_filter(self):
         """Apply the pending history filter."""
         self.refresh_history_list()
         self.history_filter_timeout_id = None
         return False
+
+    def _history_matches_filter(self, history, filter_text):
+        """Check if a history entry matches the current filter."""
+        # Titles/filenames check always applies
+        title = get_chat_title(history['filename'])
+        filename = history['filename']
+        if self._text_matches_filter(f"{title} {filename}", filter_text):
+            return True
+
+        # If in titles-only mode, stop here
+        if self.history_filter_titles_only:
+            return False
+
+        # Full-content search: scan messages for substring match
+        try:
+            messages = load_chat_history(history['filename'], messages_only=True)
+            for msg in messages:
+                content = msg.get("content", "")
+                if isinstance(content, str) and self._text_matches_filter(content, filter_text):
+                    return True
+        except Exception as e:
+            print(f"Error filtering history {filename}: {e}")
+        return False
+
+    def _text_matches_filter(self, text, filter_text):
+        """Match text against filter with optional whole-word and case-insensitive rules."""
+        if not filter_text:
+            return True
+        if self.history_filter_whole_words:
+            try:
+                pattern = r"\b" + re.escape(filter_text) + r"\b"
+                return re.search(pattern, text, flags=re.IGNORECASE) is not None
+            except re.error:
+                return False
+        return filter_text.lower() in text.lower()
 
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""
