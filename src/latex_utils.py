@@ -246,8 +246,17 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         dpi (float): DPI value for formula rendering
     """
     
+    def _sanitize_math_content(math_content: str) -> str:
+        """
+        Remove markdown bold markers that may accidentally appear inside math
+        expressions. Previously this was applied to the entire message, which
+        stripped **bold** markers from plain text. Keep the sanitization scoped
+        to math content only so regular markdown can render correctly.
+        """
+        return math_content.replace("**", "")
+
     def replace_display_math(match):
-        math_content = match.group(1)
+        math_content = _sanitize_math_content(match.group(1))
         png_data = tex_to_png(math_content, is_display_math=True, text_color=text_color, chat_id=chat_id, dpi=dpi)
         if png_data:
             temp_dir = Path(tempfile.gettempdir())
@@ -257,7 +266,7 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         return match.group(0)
 
     def replace_inline_math(match):
-        math_content = match.group(1)
+        math_content = _sanitize_math_content(match.group(1))
         png_data = tex_to_png(math_content, is_display_math=False, text_color=text_color, chat_id=chat_id, dpi=dpi)
         if png_data:
             temp_dir = Path(tempfile.gettempdir())
@@ -274,7 +283,6 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         flags=re.DOTALL
     )
     # 2) Replace inline math of the form \( ... \) 
-    text = text.replace("**", "")  # Remove any occurrences of "**" from inline math : Note this is not a perfect solution
     text = re.sub(
         r'\\\((.*?)\\\)',
         replace_inline_math,

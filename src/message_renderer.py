@@ -516,31 +516,71 @@ class MessageRenderer:
         tag.href = url
 
     def _insert_markup_with_links(self, buffer: Gtk.TextBuffer, markup_text: str, link_rgba=None):
-        """Insert markup with clickable links."""
+        """Insert markup with clickable links.
+
+        Handles cases where links sit inside other markup (e.g., bold) by
+        ensuring each inserted chunk is balanced. We temporarily close any
+        open tags around the link, insert the link label with the same open
+        tags reapplied, and then continue with the remaining content.
+        """
         if link_rgba is None:
             link_rgba = getattr(buffer, "link_rgba", None)
 
-        link_pattern = re.compile(r'<a href="([^"]+)">(.*?)</a>')
+        link_pattern = re.compile(r'<a href="([^"]+)">(.*?)</a>', re.DOTALL)
+        tag_pattern = re.compile(r'<(/?)(\w+)([^>]*)>')
+
+        def _reopen_tags(stack):
+            parts = []
+            for name, attrs in stack:
+                attrs = attrs.strip()
+                parts.append(f"<{name}{(' ' + attrs) if attrs else ''}>")
+            return "".join(parts)
+
+        def _close_tags(stack):
+            return "".join(f"</{name}>" for name, _ in reversed(stack))
+
+        def _update_stack(text, stack):
+            """Return a copy of stack after applying tags found in text."""
+            new_stack = stack.copy()
+            for m in tag_pattern.finditer(text):
+                is_close = m.group(1) == '/'
+                tag_name = m.group(2)
+                attrs = m.group(3)
+                if tag_name == "a":
+                    # Links are handled separately; ignore here to avoid confusion.
+                    continue
+                if is_close:
+                    for i in range(len(new_stack) - 1, -1, -1):
+                        if new_stack[i][0] == tag_name:
+                            new_stack.pop(i)
+                            break
+                else:
+                    new_stack.append((tag_name, attrs))
+            return new_stack
+
+        current_stack = []
         pos = 0
 
         for match in link_pattern.finditer(markup_text):
             before = markup_text[pos:match.start()]
             if before:
+                new_stack = _update_stack(before, current_stack)
+                balanced_before = _reopen_tags(current_stack) + before + _close_tags(new_stack)
                 try:
-                    buffer.insert_markup(buffer.get_end_iter(), before, -1)
+                    buffer.insert_markup(buffer.get_end_iter(), balanced_before, -1)
                 except Exception as e:
-                    # Fallback to plain text if markup is invalid
                     print(f"Markup error (before): {e}")
                     buffer.insert(buffer.get_end_iter(), self._strip_markup(before))
+                current_stack = new_stack
 
             url = match.group(1)
             label_markup = match.group(2)
 
             start_offset = buffer.get_char_count()
+            wrapped_label = _reopen_tags(current_stack) + label_markup + _close_tags(current_stack)
             try:
-                buffer.insert_markup(buffer.get_end_iter(), label_markup, -1)
+                buffer.insert_markup(buffer.get_end_iter(), wrapped_label, -1)
             except Exception as e:
-                # Fallback to plain text for link label
                 print(f"Markup error (link): {e}")
                 buffer.insert(buffer.get_end_iter(), self._strip_markup(label_markup))
             end_offset = buffer.get_char_count()
@@ -560,12 +600,14 @@ class MessageRenderer:
             pos = match.end()
 
         if pos < len(markup_text):
+            tail = markup_text[pos:]
+            new_stack = _update_stack(tail, current_stack)
+            balanced_tail = _reopen_tags(current_stack) + tail + _close_tags(new_stack)
             try:
-                buffer.insert_markup(buffer.get_end_iter(), markup_text[pos:], -1)
+                buffer.insert_markup(buffer.get_end_iter(), balanced_tail, -1)
             except Exception as e:
-                # Fallback to plain text if markup is invalid
                 print(f"Markup error (after): {e}")
-                buffer.insert(buffer.get_end_iter(), self._strip_markup(markup_text[pos:]))
+                buffer.insert(buffer.get_end_iter(), self._strip_markup(tail))
 
     def _strip_markup(self, text: str) -> str:
         """Remove Pango markup tags from text, keeping only the content."""
