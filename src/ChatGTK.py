@@ -2497,6 +2497,11 @@ class OpenAIGTKClient(Gtk.Window):
             arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.RIGHT, shadow_type=Gtk.ShadowType.NONE)
         else:
             self.sidebar.show()
+            # Restore the paned position to the saved sidebar width
+            self.paned.set_position(self.current_sidebar_width)
+            # Reload the current conversation to force reflow with new width
+            # Use idle_add to ensure this happens after the paned has allocated space
+            GLib.idle_add(self._reload_current_conversation)
             arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.LEFT, shadow_type=Gtk.ShadowType.NONE)
         
         # Update button arrow
@@ -2506,6 +2511,50 @@ class OpenAIGTKClient(Gtk.Window):
         button.show_all()
         
         self.sidebar_visible = not self.sidebar_visible
+    
+    def _reload_current_conversation(self):
+        """Reload the current conversation to force widgets to recalculate with new width."""
+        if not self.conversation_history or len(self.conversation_history) <= 1:
+            # No conversation to reload (only system message)
+            return False
+        
+        # Save current scroll position
+        scrolled_window = None
+        widget = self.conversation_box
+        while widget and not isinstance(widget, Gtk.ScrolledWindow):
+            widget = widget.get_parent()
+        if widget:
+            scrolled_window = widget
+            adj = scrolled_window.get_vadjustment()
+            scroll_position = adj.get_value() if adj else 0
+        else:
+            scroll_position = 0
+        
+        # Clear the conversation display
+        for child in self.conversation_box.get_children():
+            child.destroy()
+        self.message_widgets.clear()
+        
+        # Rebuild conversation display with formatting
+        for idx, message in enumerate(self.conversation_history):
+            if message['role'] != 'system':  # Skip system message
+                message_index = idx
+                if message['role'] == 'user':
+                    self.append_message('user', message['content'], message_index)
+                elif message['role'] == 'assistant':
+                    formatted_content = format_response(message['content'])
+                    self.append_message('ai', formatted_content, message_index)
+        
+        # Restore scroll position
+        if scrolled_window and scroll_position > 0:
+            def restore_scroll():
+                adj = scrolled_window.get_vadjustment()
+                if adj:
+                    adj.set_value(scroll_position)
+                return False
+            GLib.idle_add(restore_scroll)
+        
+        return False
 
     def on_new_chat_clicked(self, button):
         """Start a new chat conversation."""
