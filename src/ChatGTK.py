@@ -171,6 +171,19 @@ class OpenAIGTKClient(Gtk.Window):
         
         scrolled.add(self.history_list)
 
+        # History filter entry at bottom of sidebar
+        self.history_filter_text = ""
+        self.history_filter_timeout_id = None
+        filter_entry = Gtk.Entry()
+        filter_entry.set_placeholder_text("Filter history...")
+        filter_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
+        filter_entry.connect("changed", self.on_history_filter_changed)
+        filter_entry.connect("icon-press", self.on_history_filter_icon_pressed)
+        filter_entry.connect("key-press-event", self.on_history_filter_keypress)
+        self.history_filter_entry = filter_entry
+        self.sidebar.pack_start(filter_entry, False, False, 0)
+        self.history_filter_entry.show()
+
         # Pack sidebar into left pane
         self.paned.pack1(self.sidebar, False, False)
 
@@ -2481,12 +2494,35 @@ class OpenAIGTKClient(Gtk.Window):
 
     def refresh_history_list(self):
         """Refresh the list of chat histories in the sidebar."""
+        # Ensure filter entry mirrors current filter text without re-triggering needless updates
+        if hasattr(self, "history_filter_entry"):
+            current_text = self.history_filter_entry.get_text()
+            if current_text != self.history_filter_text:
+                self.history_filter_entry.set_text(self.history_filter_text)
+
+        # Preserve current selection if present
+        selected_filename = None
+        current_row = self.history_list.get_selected_row()
+        if current_row and hasattr(current_row, "filename"):
+            selected_filename = current_row.filename
+
         # Clear existing items
         for child in self.history_list.get_children():
             self.history_list.remove(child)
         
         # Get histories from utils
         histories = list_chat_histories()
+
+        filter_text = (self.history_filter_text or "").strip().lower()
+        if filter_text:
+            filtered = []
+            for history in histories:
+                title = get_chat_title(history['filename'])
+                filename = history['filename']
+                match_target = f"{title} {filename}".lower()
+                if filter_text in match_target:
+                    filtered.append(history)
+            histories = filtered
 
         for history in histories:
             row = Gtk.ListBoxRow()
@@ -2518,6 +2554,45 @@ class OpenAIGTKClient(Gtk.Window):
             self.history_list.add(row)
         
         self.history_list.show_all()
+
+        # Restore selection if possible
+        if selected_filename:
+            for row in self.history_list.get_children():
+                if getattr(row, "filename", None) == selected_filename:
+                    self.history_list.select_row(row)
+                    break
+
+    def on_history_filter_changed(self, entry):
+        """Debounce and apply history filter as the user types."""
+        self.history_filter_text = entry.get_text()
+        if self.history_filter_timeout_id:
+            GLib.source_remove(self.history_filter_timeout_id)
+        self.history_filter_timeout_id = GLib.timeout_add(150, self._apply_history_filter)
+
+    def on_history_filter_icon_pressed(self, entry, icon_pos, event):
+        """Clear filter when the clear icon is pressed."""
+        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
+            entry.set_text("")
+            self.history_filter_text = ""
+            self.refresh_history_list()
+
+    def on_history_filter_keypress(self, entry, event):
+        """Keyboard shortcuts for the history filter."""
+        if event.keyval == Gdk.KEY_Escape:
+            entry.set_text("")
+            self.history_filter_text = ""
+            self.refresh_history_list()
+            return True
+        if event.keyval == Gdk.KEY_Return:
+            self.history_list.grab_focus()
+            return True
+        return False
+
+    def _apply_history_filter(self):
+        """Apply the pending history filter."""
+        self.refresh_history_list()
+        self.history_filter_timeout_id = None
+        return False
 
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""

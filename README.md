@@ -21,13 +21,13 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - Supports custom provider settings allowing use of sevices like Openrouter.
 - Web search grounding for OpenAI and Gemini models to provide up-to-date, cited answers.
 
-### Installation from AUR
+## Installation from AUR
 
 If you are on Arch Linux or a derivative, you can install ChatGTK from the AUR:
 
 AUR package: [chatgtk_client-git](https://aur.archlinux.org/packages/chatgtk_client-git)
 
-### Manual Installation
+## Manual Installation
 
 ```bash
 git clone https://github.com/rabfulton/ChatGTK
@@ -69,7 +69,7 @@ You will need at least one API key for the application to function. Alternativel
 *Image Generation*
 ![Image Generation](screenshots/images.jpg)
 
-### Getting API keys
+## Getting API keys
 
 - **OpenAI API key**  
   - Sign up or log in at [OpenAI's platform](https://platform.openai.com/signup).  
@@ -114,7 +114,7 @@ You will need at least one API key for the application to function. Alternativel
     export PERPLEXITY_API_KEY="your-perplexity-key"
     ```
 
-### Custom Models
+## Custom Models
 
 ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. This allows you to use models from services like OpenRouter, Together AI, or your own self-hosted models.
 
@@ -149,7 +149,7 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - **Self-hosted models**: Use local or remote self-hosted models with OpenAI-compatible APIs
   - **Alternative providers**: Access models from services like Together AI, Anyscale, or other compatible providers
 
-### Tools Support (images, music, web search & read aloud)
+## Tools Support (images, music, web search & read aloud)
 
 - **Image tool (`generate_image`)**
   - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
@@ -189,14 +189,18 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
 
 ## FAQ
 
-**gpt-image-1 is not working**<br>
-OpenAI requires identity verification for some of their models. You can verify your identity [here](https://platform.openai.com/settings/organization/general).<br>
-**Music tool is not working**<br>
-Set your **Music Library Directory** in **Settings → Tool Options**, then click the **Generate Library** button to scan your music files. Verify your **Music Player Executable** path is correct (default: `/usr/bin/audacious -p <playlist>`). Alternatively, if you already have a beets library, you can specify its path in the **Beets Library DB** field.<br>
-**Web search is not working**<br>
-Web search is only supported on certain models. For OpenAI, supported models include: `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, and `gpt-5.x` models. For Gemini, supported models include `gemini-2.x` and `gemini-3.x` models. Older models like `gpt-3.5-turbo` or `gemini-1.5` do not support web search. Newer Grok models should work and can also be asked to search X.<br>
+### gpt-image-1 is not working
+OpenAI requires identity verification for some of their models. You can verify your identity [here](https://platform.openai.com/settings/organization/general).
+### Music tool is not working
+Set your **Music Library Directory** in **Settings → Tool Options**, then click the **Generate Library** button to scan your music files. Verify your **Music Player Executable** path is correct (default: `/usr/bin/audacious -p <playlist>`). Alternatively, if you already have a beets library, you can specify its path in the **Beets Library DB** field.
+### Web search is not working
+Web search is only supported on certain models. For OpenAI, supported models include: `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, and `gpt-5.x` models. For Gemini, supported models include `gemini-2.x` and `gemini-3.x` models. Older models like `gpt-3.5-turbo` or `gemini-1.5` do not support web search. Newer Grok models should work and can also be asked to search X.
+### Fonts look bad in exported PDF
+install `texlive-fontsrecommended` from your package manager.
 
-## Python Packages
+## Requirements
+
+### Python Packages
 - openai>=1.0.0
 - PyGObject>=3.42.0
 - sounddevice>=0.4.6
@@ -205,13 +209,14 @@ Web search is only supported on certain models. For OpenAI, supported models inc
 - pathlib>=1.0.1
 - beets>=1.6.0 (optional, for music control tool)
 
-## System Dependencies
+### System Dependencies
 - python3
 - gtk-3.0
 - gtksourceview4
 - pulseaudio
 - texlive (for LaTeX support)
 - dvipng (for LaTeX rendering)
+- texlive-fontsrecommended (For better looking exported PDF's)
 - Optional, for music control tool:
   - A music player such as `vlc` (configurable in Settings)
   - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
