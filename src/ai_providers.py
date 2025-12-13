@@ -1050,6 +1050,7 @@ class OpenAIProvider(AIProvider):
 
         # REDUNDANT: Legacy fallback heuristics for unknown models.
         # TODO(cleanup): Remove this entire fallback block after Phase 5 refactoring.
+        print(f"[LEGACY] OpenAIProvider._supports_web_search_tool: Using fallback heuristics for '{model}' - consider adding to catalog")
         model_lower = model.lower()
         
         # Exclude models that don't support web search
@@ -1286,6 +1287,7 @@ class OpenAIProvider(AIProvider):
         if not skip_temperature:
             # REDUNDANT: Legacy fallback heuristics for unknown models.
             # TODO(cleanup): Remove after Phase 5 refactoring.
+            print(f"[LEGACY] OpenAIProvider: Using temperature fallback heuristics for '{model}' - consider adding to catalog")
             skip_temperature = "search" in model_lower or model_lower.startswith("gpt-5")
         
         # Build input from messages
@@ -1454,6 +1456,7 @@ class OpenAIProvider(AIProvider):
 
         # REDUNDANT: Legacy fallback string checks for unknown models.
         # TODO(cleanup): Remove this fallback block after Phase 5 refactoring.
+        print(f"[LEGACY] OpenAIProvider._requires_chat_completions: Using fallback heuristics for '{model}' - consider adding to catalog")
         model_lower = (model or "").lower()
         
         # Audio models require chat.completions for audio output modalities
@@ -1679,6 +1682,7 @@ class OpenAIProvider(AIProvider):
         # REDUNDANT: Legacy fallback for models not in catalog
         # TODO(cleanup): Remove after Phase 5 refactoring
         if not card:
+            print(f"[LEGACY] OpenAIProvider.generate_image: Using fallback heuristics for '{model}' - consider adding to catalog")
             supports_edit = model in ("gpt-image-1", "gpt-image-1-mini")
         
         if supports_edit and image_data:
@@ -1812,6 +1816,7 @@ class GrokProvider(AIProvider):
 
         # REDUNDANT: Legacy fallback heuristics for unknown models.
         # TODO(cleanup): Remove this fallback block after Phase 5 refactoring.
+        print(f"[LEGACY] GrokProvider._supports_web_search_tool: Using fallback heuristics for '{model}' - consider adding to catalog")
         model_lower = model.lower()
 
         # Skip obvious non-chat models.
@@ -2770,6 +2775,7 @@ class GeminiProvider(AIProvider):
                 return card.capabilities.web_search
             # REDUNDANT: Legacy fallback heuristics for unknown models.
             # TODO(cleanup): Remove after Phase 5 refactoring.
+            print(f"[LEGACY] GeminiProvider._supports_google_search_tool: Using fallback heuristics for '{model_name}' - consider adding to catalog")
             name = model_name.lower()
             return name.startswith("gemini-2.") or name.startswith("gemini-3.")
 

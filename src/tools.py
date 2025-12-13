@@ -240,6 +240,7 @@ def is_chat_completion_model(model_name: str) -> bool:
             return card.is_chat_model()
     TODO(cleanup): Remove after Phase 5 refactoring - callers should use card.is_chat_model().
     """
+    print(f"[LEGACY] is_chat_completion_model: Using legacy heuristics for '{model_name}' - consider using card.is_chat_model()")
     if not model_name:
         return True
     lower_name = model_name.lower()
@@ -521,6 +522,7 @@ class ToolManager:
         # REDUNDANT: Legacy string-based heuristics - should be removed once all models
         # are in the catalog or have overrides. Kept temporarily for unknown models.
         # TODO(cleanup): Remove this fallback block after Phase 5 refactoring is complete.
+        print(f"[LEGACY] get_provider_name_for_model: Using fallback heuristics for '{model_name}' - consider adding to catalog")
         lower = model_name.lower()
         if lower.startswith("gemini-"):
             return "gemini"
@@ -557,12 +559,14 @@ class ToolManager:
         # REDUNDANT: Legacy fallback for custom models without cards.
         # TODO(cleanup): Remove once custom models always have cards via overrides.
         if provider_name == "custom" and custom_models:
+            print(f"[LEGACY] is_image_model_for_provider: Using custom_models fallback for '{model_name}' - consider adding card override")
             cfg = custom_models.get(model_name, {})
             return (cfg.get("api_type") or "").lower() == "images"
         
         # REDUNDANT: Legacy string-based heuristics - should be removed once all models
         # are in the catalog. Kept temporarily for unknown models.
         # TODO(cleanup): Remove this fallback block after Phase 5 refactoring is complete.
+        print(f"[LEGACY] is_image_model_for_provider: Using fallback heuristics for '{model_name}' - consider adding to catalog")
         lower = model_name.lower()
 
         if provider_name == "openai":
@@ -595,6 +599,7 @@ class ToolManager:
 
         # REDUNDANT: Legacy fallback heuristics for models not in catalog.
         # TODO(cleanup): Remove this entire fallback block after Phase 5 refactoring.
+        print(f"[LEGACY] _model_supports_tool_calling: Using fallback heuristics for '{model_name}' - consider adding to catalog")
         provider = self.get_provider_name_for_model(model_name, model_provider_map, custom_models)
         if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False

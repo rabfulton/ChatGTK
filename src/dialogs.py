@@ -22,7 +22,7 @@ from gi.repository import Gtk, GtkSource, GLib
 import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
-from model_cards import get_card
+from model_cards import get_card, list_cards
 from utils import (
     load_settings,
     apply_settings,
@@ -1336,8 +1336,32 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     # Tool Options page
     # -----------------------------------------------------------------------
+    def _get_all_image_models(self):
+        """
+        Get all image-capable models from the catalog and custom models.
+        
+        Returns a sorted list of model IDs that have image generation capability.
+        """
+        image_models = set()
+        
+        # Get image models from the catalog
+        for model_id, card in list_cards().items():
+            if card.is_image_model() or card.capabilities.image_gen:
+                image_models.add(model_id)
+        
+        # Add custom image models (from custom_models.json)
+        for model_id, cfg in self.custom_models.items():
+            if (cfg.get("api_type") or "").lower() == "images":
+                image_models.add(model_id)
+            # Also check if there's a card override with image_gen capability
+            card = get_card(model_id, self.custom_models)
+            if card and (card.is_image_model() or card.capabilities.image_gen):
+                image_models.add(model_id)
+        
+        return sorted(image_models)
+
     def _refresh_image_model_dropdown(self):
-        """Refresh the image model dropdown to include any new custom image models."""
+        """Refresh the image model dropdown to include all image-capable models."""
         if not hasattr(self, 'combo_image_model') or self.combo_image_model is None:
             return
         
@@ -1347,38 +1371,18 @@ class SettingsDialog(Gtk.Dialog):
         # Clear and rebuild the list
         self.combo_image_model.remove_all()
         
-        known_image_models = [
-            "dall-e-3",
-            "gpt-image-1",
-            "gpt-image-1-mini",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-            "grok-2-image-1212",
-        ]
+        # Get all image models from catalog and custom models
+        all_models = self._get_all_image_models()
         
-        for model_id in known_image_models:
+        for model_id in all_models:
             self.combo_image_model.append_text(model_id)
         
-        # Add custom image models
-        for model_id, cfg in self.custom_models.items():
-            if (cfg.get("api_type") or "").lower() == "images":
-                if model_id not in known_image_models:
-                    self.combo_image_model.append_text(model_id)
-        
         # Restore current value
-        all_models = known_image_models + [
-            model_id for model_id, cfg in self.custom_models.items()
-            if (cfg.get("api_type") or "").lower() == "images" and model_id not in known_image_models
-        ]
         if current_value in all_models:
-            active_index = 0
-            for idx, model_id in enumerate(all_models):
-                if model_id == current_value:
-                    active_index = idx
-                    break
+            active_index = all_models.index(current_value)
             self.combo_image_model.set_active(active_index)
         else:
-            # Set as entry text if not in list
+            # Set as entry text if not in list (allows custom values)
             entry = self.combo_image_model.get_child()
             if entry:
                 entry.set_text(current_value)
@@ -1433,42 +1437,22 @@ class SettingsDialog(Gtk.Dialog):
         label.set_hexpand(True)
         self.combo_image_model = Gtk.ComboBoxText.new_with_entry()
 
-        known_image_models = [
-            "dall-e-3",
-            "gpt-image-1",
-            "gpt-image-1-mini",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-            "grok-2-image-1212",
-        ]
+        # Get all image models from catalog and custom models
+        all_image_models = self._get_all_image_models()
 
-        for model_id in known_image_models:
+        for model_id in all_image_models:
             self.combo_image_model.append_text(model_id)
 
-        # Add custom image models
-        for model_id, cfg in self.custom_models.items():
-            if (cfg.get("api_type") or "").lower() == "images":
-                if model_id not in known_image_models:
-                    self.combo_image_model.append_text(model_id)
-
         current_image_model = getattr(self, "image_model", "dall-e-3")
-        active_index = 0
-        all_models = known_image_models + [
-            model_id for model_id, cfg in self.custom_models.items()
-            if (cfg.get("api_type") or "").lower() == "images" and model_id not in known_image_models
-        ]
-        for idx, model_id in enumerate(all_models):
-            if model_id == current_image_model:
-                active_index = idx
-                break
         
-        # If current model is not in the list, set it as the entry text
-        if current_image_model not in all_models:
+        # If current model is in the list, select it; otherwise set as entry text
+        if current_image_model in all_image_models:
+            active_index = all_image_models.index(current_image_model)
+            self.combo_image_model.set_active(active_index)
+        else:
             entry = self.combo_image_model.get_child()
             if entry:
                 entry.set_text(current_image_model)
-        else:
-            self.combo_image_model.set_active(active_index)
 
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.combo_image_model, False, True, 0)

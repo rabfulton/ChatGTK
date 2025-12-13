@@ -1005,6 +1005,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         # REDUNDANT: Legacy fallback heuristics for well-known models.
         # TODO(cleanup): Remove after Phase 5 refactoring.
+        print(f"[LEGACY] get_provider_name_for_model: Using fallback heuristics for '{model_name}' - consider adding to catalog")
         lower = model_name.lower()
         if lower.startswith("gemini-"):
             return "gemini"
@@ -1115,6 +1116,7 @@ class OpenAIGTKClient(Gtk.Window):
         # REDUNDANT: Legacy fallback for models not in catalog
         # TODO(cleanup): Remove after Phase 5 refactoring
         if not card:
+            print(f"[LEGACY] generate_image_for_model: Using fallback heuristics for '{model}' - consider adding to catalog")
             supports_image_edit = model in ("gpt-image-1", "gpt-image-1-mini", 
                                             "gemini-3-pro-image-preview", "gemini-2.5-flash-image")
 
@@ -1511,6 +1513,7 @@ class OpenAIGTKClient(Gtk.Window):
                     # TODO(cleanup): Remove after Phase 5 refactoring
                     lower = model_id.lower()
                     if any(term in lower for term in ("dall-e", "gpt-image", "image-")):
+                        print(f"[LEGACY] _on_models_fetched: Using fallback heuristics for '{model_id}' - consider adding to catalog")
                         image_like_models.append(model_id)
 
                 # Collect existing entries to avoid duplicates.
@@ -1983,6 +1986,7 @@ class OpenAIGTKClient(Gtk.Window):
                 # REDUNDANT: Legacy fallback for unknown models
                 # TODO(cleanup): Remove after Phase 5 refactoring
                 if not card:
+                    print(f"[LEGACY] on_send_message_request: Using realtime fallback heuristics for '{model}' - consider adding to catalog")
                     is_realtime = "realtime" in model.lower()
                 if is_realtime:
                     # Realtime models are handled elsewhere (WebSocket provider).
@@ -2262,6 +2266,7 @@ class OpenAIGTKClient(Gtk.Window):
             # REDUNDANT: Legacy fallback for unknown models
             # TODO(cleanup): Remove after Phase 5 refactoring
             if not card:
+                print(f"[LEGACY] _generate_thread: Using audio model fallback heuristics for '{model}' - consider adding to catalog")
                 is_audio_model = "audio" in model.lower() and "preview" in model.lower()
             if not is_audio_model:
                 self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
