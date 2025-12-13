@@ -586,7 +586,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o3",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o3-2025-04-16": ModelCard(
@@ -594,7 +594,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o3 (2025-04-16)",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o3-mini": ModelCard(
@@ -602,7 +602,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o3-mini",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o3-mini-2025-01-31": ModelCard(
@@ -610,7 +610,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o3-mini (2025-01-31)",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o3-pro": ModelCard(
@@ -618,7 +618,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o3 Pro",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o3-pro-2025-06-10": ModelCard(
@@ -626,7 +626,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o3 Pro (2025-06-10)",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o3-deep-research": ModelCard(
@@ -650,7 +650,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o4-mini",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o4-mini-2025-04-16": ModelCard(
@@ -658,7 +658,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         provider="openai",
         display_name="o4-mini (2025-04-16)",
         api_family="chat.completions",
-        capabilities=Capabilities(text=True, tool_use=False),
+        capabilities=Capabilities(text=True, tool_use=True),
         quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "o4-mini-deep-research": ModelCard(

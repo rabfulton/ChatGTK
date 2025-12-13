@@ -285,12 +285,15 @@ class TestToolManagerIntegration:
         assert tm.supports_image_tools("gpt-4o-mini") is True
         assert tm.supports_image_tools("gpt-4o") is True
 
-    def test_reasoning_model_does_not_support_tools(self):
-        """Reasoning models (o1, o3) should not support tools."""
+    def test_reasoning_model_tool_support(self):
+        """o1 models don't support tools, but o3/o4 models do."""
         tm = self.ToolManager(image_tool_enabled=True)
-        assert tm.supports_image_tools("o3") is False
-        assert tm.supports_image_tools("o3-mini") is False
+        # o1 series doesn't support tools
         assert tm.supports_image_tools("o1-mini") is False
+        assert tm.supports_image_tools("o1-preview") is False
+        # o3 and o4 series support tools
+        assert tm.supports_image_tools("o3-mini") is True
+        assert tm.supports_image_tools("o4-mini") is True
 
     def test_tool_disabled_globally(self):
         """When image tool is disabled, no models support it."""
@@ -313,28 +316,26 @@ class TestToolManagerIntegration:
         assert tm.is_image_model_for_provider("gpt-4o-mini", "openai") is False
         assert tm.is_image_model_for_provider("grok-2-image-1212", "grok") is True
 
-    def test_unknown_model_falls_back_to_heuristics(self):
-        """Unknown models fall back to string-based heuristics."""
+    def test_unknown_model_defaults_to_openai(self):
+        """Unknown models default to openai provider."""
         tm = self.ToolManager(image_tool_enabled=True)
-        # This model isn't in the catalog, so heuristics kick in
-        assert tm.get_provider_name_for_model("gpt-future-model") == "openai"
-        assert tm.get_provider_name_for_model("gemini-future") == "gemini"
-        assert tm.get_provider_name_for_model("grok-future") == "grok"
-        assert tm.get_provider_name_for_model("claude-future") == "claude"
+        # Unknown models not in the catalog default to openai
+        assert tm.get_provider_name_for_model("some-unknown-model") == "openai"
+        assert tm.get_provider_name_for_model("future-model-xyz") == "openai"
 
     def test_music_tool_uses_card(self):
         """Music tool support also uses card data."""
         tm = self.ToolManager(music_tool_enabled=True)
         assert tm.supports_music_tools("gpt-4o-mini") is True
         assert tm.supports_music_tools("dall-e-3") is False
-        assert tm.supports_music_tools("o3") is False
+        assert tm.supports_music_tools("o1-mini") is False  # o1 doesn't support tools
 
     def test_read_aloud_tool_uses_card(self):
         """Read aloud tool support also uses card data."""
         tm = self.ToolManager(read_aloud_tool_enabled=True)
         assert tm.supports_read_aloud_tools("gpt-4o-mini") is True
         assert tm.supports_read_aloud_tools("dall-e-3") is False
-        assert tm.supports_read_aloud_tools("o3") is False
+        assert tm.supports_read_aloud_tools("o1-mini") is False  # o1 doesn't support tools
 
 
 class TestPhase2ProviderIntegration:

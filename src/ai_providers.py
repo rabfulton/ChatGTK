@@ -1045,40 +1045,12 @@ class OpenAIProvider(AIProvider):
         if not model:
             return False
 
-        # Card-first: check model card for web_search capability
+        # Check model card for web_search capability
         card = get_card(model)
         if card:
             return card.capabilities.web_search
-
-        # REDUNDANT: Legacy fallback heuristics for unknown models.
-        # TODO(cleanup): Remove this entire fallback block after Phase 5 refactoring.
-        print(f"[LEGACY] OpenAIProvider._supports_web_search_tool: Using fallback heuristics for '{model}' - consider adding to catalog")
-        model_lower = model.lower()
         
-        # Exclude models that don't support web search
-        excluded_terms = ("audio", "realtime", "image", "dall-e", "whisper", "tts")
-        if any(term in model_lower for term in excluded_terms):
-            return False
-        
-        # Explicit allow-list of models known to support web search via Responses API
-        web_search_models = {
-            "gpt-4o",
-            "gpt-4o-mini",
-            "chatgpt-4o-latest",
-            "gpt-4-turbo",
-            "gpt-4-turbo-preview",
-            "gpt-5.1",
-            "gpt-5.1-chat-latest",
-            "gpt-5-pro",
-        }
-        
-        if model in web_search_models or model_lower in web_search_models:
-            return True
-        if model_lower.startswith("gpt-5"):
-            return True
-        if model_lower.startswith("gpt-4."):
-            return True
-        
+        # Unknown model - default to no web search
         return False
 
     def _build_responses_input(self, messages) -> tuple:
@@ -1281,17 +1253,9 @@ class OpenAIProvider(AIProvider):
         str
             The assistant's response text, with any tool outputs appended.
         """
-        model_lower = (model or "").lower()
-        # Some models do not support temperature. We check the model card first,
-        # then fall back to string heuristics for unknown models.
+        # Some models do not support temperature - check the model card
         card = get_card(model)
-        if card:
-            skip_temperature = card.quirks.get("no_temperature", False)
-        else:
-            # REDUNDANT: Legacy fallback heuristics for unknown models.
-            # TODO(cleanup): Remove after Phase 5 refactoring.
-            print(f"[LEGACY] OpenAIProvider: Using temperature fallback heuristics for '{model}' - consider adding to catalog")
-            skip_temperature = "search" in model_lower or model_lower.startswith("gpt-5")
+        skip_temperature = card.quirks.get("no_temperature", False) if card else False
         
         # Build input from messages
         input_items, instructions = self._build_responses_input(messages)
@@ -1459,20 +1423,7 @@ class OpenAIProvider(AIProvider):
             # Card exists but doesn't require chat.completions
             return False, ""
 
-        # REDUNDANT: Legacy fallback string checks for unknown models.
-        # TODO(cleanup): Remove this fallback block after Phase 5 refactoring.
-        print(f"[LEGACY] OpenAIProvider._requires_chat_completions: Using fallback heuristics for '{model}' - consider adding to catalog")
-        model_lower = (model or "").lower()
-        
-        # Audio models require chat.completions for audio output modalities
-        if "audio" in model_lower:
-            return True, "audio"
-        
-        # Reasoning models (o1, o3) require special developer message handling
-        reasoning_models = ["o1-mini", "o1-preview", "o3", "o3-mini"]
-        if any(r in model_lower for r in reasoning_models):
-            return True, "reasoning"
-        
+        # Unknown model - default to not requiring chat.completions
         return False, ""
 
     def _generate_with_chat_completions_audio(
@@ -1571,13 +1522,20 @@ class OpenAIProvider(AIProvider):
         messages,
         model: str,
         max_tokens: int,
+        image_tool_handler=None,
+        music_tool_handler=None,
+        read_aloud_tool_handler=None,
     ) -> str:
         """
-        Generate a response using chat.completions for reasoning models (o1, o3).
+        Generate a response using chat.completions for reasoning models (o1, o3, o4).
         
         Reasoning models require special developer message formatting and don't
-        support tools or temperature.
+        support temperature. Tool support depends on the model:
+        - o1 series: no tool support
+        - o3/o4 series: supports function calling
         """
+        from tools import build_tools_for_provider, parse_tool_arguments, run_tool_call
+        
         # Format messages for reasoning models
         formatted_messages = []
         formatting_flag_added = False
@@ -1611,9 +1569,91 @@ class OpenAIProvider(AIProvider):
         if max_tokens and max_tokens > 0:
             params["max_tokens"] = max_tokens
         
-        print(f"[OpenAIProvider] Using chat.completions for reasoning model: {model}")
-        response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content or ""
+        # Check if model supports tools (o3/o4 do, o1 doesn't)
+        card = get_card(model)
+        model_supports_tools = card and card.capabilities.tool_use
+        
+        # Build tools if model supports them and handlers are provided
+        enabled_tools = set()
+        if model_supports_tools:
+            if image_tool_handler is not None:
+                enabled_tools.add("generate_image")
+            if music_tool_handler is not None:
+                enabled_tools.add("control_music")
+            if read_aloud_tool_handler is not None:
+                enabled_tools.add("read_aloud")
+        
+        tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else []
+        if tools:
+            params["tools"] = tools
+            params["tool_choice"] = "auto"
+        
+        # Simple path when no tools are involved
+        if not enabled_tools:
+            print(f"[OpenAIProvider] Using chat.completions for reasoning model: {model}")
+            response = self.client.chat.completions.create(**params)
+            return response.choices[0].message.content or ""
+        
+        # Tool-aware flow for reasoning models with tool support
+        print(f"[OpenAIProvider] Using chat.completions (with tools) for reasoning model: {model}")
+        
+        from tools import ToolContext
+        tool_context = ToolContext(
+            image_handler=image_tool_handler,
+            music_handler=music_tool_handler,
+            read_aloud_handler=read_aloud_tool_handler,
+        )
+        
+        tool_aware_messages = formatted_messages.copy()
+        max_tool_rounds = 5
+        tool_result_snippets = []
+        
+        for round_num in range(max_tool_rounds):
+            response = self.client.chat.completions.create(
+                **{**params, "messages": tool_aware_messages}
+            )
+            
+            msg = response.choices[0].message
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            
+            if not tool_calls:
+                # No tools requested; this is the final assistant answer
+                final_text = msg.content or ""
+                if tool_result_snippets:
+                    return final_text + "\n\n" + "\n\n".join(tool_result_snippets)
+                return final_text
+            
+            # Process tool calls
+            tool_aware_messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in tool_calls
+                ],
+            })
+            
+            for tc in tool_calls:
+                parsed_args = parse_tool_arguments(tc.function.arguments)
+                tool_result = run_tool_call(tc.function.name, parsed_args, tool_context)
+                if tool_result:
+                    tool_result_snippets.append(tool_result)
+                
+                tool_aware_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": tool_result or "",
+                })
+        
+        # If we exhausted tool rounds, return what we have
+        final_text = msg.content if msg else ""
+        if tool_result_snippets:
+            return final_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return final_text
 
     def generate_chat_completion(
         self,
@@ -1658,6 +1698,9 @@ class OpenAIProvider(AIProvider):
                     messages=messages,
                     model=model,
                     max_tokens=max_tokens,
+                    image_tool_handler=image_tool_handler,
+                    music_tool_handler=music_tool_handler,
+                    read_aloud_tool_handler=read_aloud_tool_handler,
                 )
         
         # Default path: use Responses API for everything else
@@ -1683,12 +1726,6 @@ class OpenAIProvider(AIProvider):
         # Check if model supports image editing via card
         card = get_card(model)
         supports_edit = card.capabilities.image_edit if card else False
-        
-        # REDUNDANT: Legacy fallback for models not in catalog
-        # TODO(cleanup): Remove after Phase 5 refactoring
-        if not card:
-            print(f"[LEGACY] OpenAIProvider.generate_image: Using fallback heuristics for '{model}' - consider adding to catalog")
-            supports_edit = model in ("gpt-image-1", "gpt-image-1-mini")
         
         if supports_edit and image_data:
             # Image edit: decode the attached image and send it to the images.edit endpoint
@@ -1814,21 +1851,13 @@ class GrokProvider(AIProvider):
         if not model:
             return False
 
-        # Card-first: check model card for web_search capability
+        # Check model card for web_search capability
         card = get_card(model)
         if card:
             return card.capabilities.web_search
 
-        # REDUNDANT: Legacy fallback heuristics for unknown models.
-        # TODO(cleanup): Remove this fallback block after Phase 5 refactoring.
-        print(f"[LEGACY] GrokProvider._supports_web_search_tool: Using fallback heuristics for '{model}' - consider adding to catalog")
-        model_lower = model.lower()
-
-        # Skip obvious non-chat models.
-        if "image" in model_lower:
-            return False
-
-        return model_lower.startswith("grok-")
+        # Unknown model - default to no web search
+        return False
 
     def _build_responses_input(self, messages):
         """
@@ -2782,15 +2811,12 @@ class GeminiProvider(AIProvider):
         def _supports_google_search_tool(model_name: str) -> bool:
             if not model_name:
                 return False
-            # Card-first: check model card for web_search capability
+            # Check model card for web_search capability
             card = get_card(model_name)
             if card:
                 return card.capabilities.web_search
-            # REDUNDANT: Legacy fallback heuristics for unknown models.
-            # TODO(cleanup): Remove after Phase 5 refactoring.
-            print(f"[LEGACY] GeminiProvider._supports_google_search_tool: Using fallback heuristics for '{model_name}' - consider adding to catalog")
-            name = model_name.lower()
-            return name.startswith("gemini-2.") or name.startswith("gemini-3.")
+            # Unknown model - default to no web search
+            return False
 
         if web_search_enabled and _supports_google_search_tool(model):
             payload.setdefault("tools", []).append({"google_search": {}})

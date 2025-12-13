@@ -62,7 +62,6 @@ from tools import (
     ToolManager,
     is_chat_completion_model,
     append_tool_guidance,
-    CHAT_COMPLETION_EXCLUDE_TERMS,
     SYSTEM_PROMPT_APPENDIX,
     IMAGE_TOOL_PROMPT_APPENDIX,
     MUSIC_TOOL_PROMPT_APPENDIX,
@@ -1003,17 +1002,7 @@ class OpenAIGTKClient(Gtk.Window):
         if model_name in getattr(self, "custom_models", {}):
             return "custom"
 
-        # REDUNDANT: Legacy fallback heuristics for well-known models.
-        # TODO(cleanup): Remove after Phase 5 refactoring.
-        print(f"[LEGACY] get_provider_name_for_model: Using fallback heuristics for '{model_name}' - consider adding to catalog")
-        lower = model_name.lower()
-        if lower.startswith("gemini-"):
-            return "gemini"
-        if lower.startswith("grok-"):
-            return "grok"
-        if lower.startswith("claude-"):
-            return "claude"
-
+        # Unknown model - default to openai
         return 'openai'
 
     def _is_image_model_for_provider(self, model_name, provider_name):
@@ -1112,13 +1101,6 @@ class OpenAIGTKClient(Gtk.Window):
         # Check if model supports image editing via card
         card = get_card(model, self.custom_models)
         supports_image_edit = card.capabilities.image_edit if card else False
-        
-        # REDUNDANT: Legacy fallback for models not in catalog
-        # TODO(cleanup): Remove after Phase 5 refactoring
-        if not card:
-            print(f"[LEGACY] generate_image_for_model: Using fallback heuristics for '{model}' - consider adding to catalog")
-            supports_image_edit = model in ("gpt-image-1", "gpt-image-1-mini", 
-                                            "gemini-3-pro-image-preview", "gemini-2.5-flash-image")
 
         # OpenAI image models.
         if provider_name == 'openai':
@@ -1505,17 +1487,9 @@ class OpenAIGTKClient(Gtk.Window):
             if hasattr(self, 'combo_image_model') and self.combo_image_model is not None:
                 image_like_models = []
                 for model_id in models or []:
-                    # Card-first: check if model is an image model via card
+                    # Check if model is an image model via card
                     card = get_card(model_id, self.custom_models)
                     if card and card.is_image_model():
-                        image_like_models.append(model_id)
-                        continue
-                    
-                    # REDUNDANT: Legacy fallback heuristics for unknown models
-                    # TODO(cleanup): Remove after Phase 5 refactoring
-                    lower = model_id.lower()
-                    if any(term in lower for term in ("dall-e", "gpt-image", "image-")):
-                        print(f"[LEGACY] _on_models_fetched: Using fallback heuristics for '{model_id}' - consider adding to catalog")
                         image_like_models.append(model_id)
 
                 # Collect existing entries to avoid duplicates.
@@ -1985,11 +1959,6 @@ class OpenAIGTKClient(Gtk.Window):
                 # Check if this is a realtime model via card
                 card = get_card(model, self.custom_models)
                 is_realtime = card.api_family == "realtime" if card else False
-                # REDUNDANT: Legacy fallback for unknown models
-                # TODO(cleanup): Remove after Phase 5 refactoring
-                if not card:
-                    print(f"[LEGACY] on_send_message_request: Using realtime fallback heuristics for '{model}' - consider adding to catalog")
-                    is_realtime = "realtime" in model.lower()
                 if is_realtime:
                     # Realtime models are handled elsewhere (WebSocket provider).
                     return
@@ -2265,11 +2234,6 @@ class OpenAIGTKClient(Gtk.Window):
             # Skip for audio models since they already play audio directly
             card = get_card(model, self.custom_models)
             is_audio_model = card.capabilities.audio_out if card else False
-            # REDUNDANT: Legacy fallback for unknown models
-            # TODO(cleanup): Remove after Phase 5 refactoring
-            if not card:
-                print(f"[LEGACY] _generate_thread: Using audio model fallback heuristics for '{model}' - consider adding to catalog")
-                is_audio_model = "audio" in model.lower() and "preview" in model.lower()
             if not is_audio_model:
                 self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
             
