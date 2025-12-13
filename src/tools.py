@@ -557,10 +557,12 @@ class ToolManager:
         if not model_name:
             return False
 
-        # Card-first: check model card
+        # Card-first: check model card for image_gen capability
+        # Note: We check image_gen directly, not is_image_model(), because multimodal
+        # models (like Gemini image models) have both text=True and image_gen=True
         card = get_card(model_name, custom_models)
         if card:
-            return card.is_image_model()
+            return card.capabilities.image_gen
 
         # REDUNDANT: Legacy fallback for custom models without cards.
         # TODO(cleanup): Remove once custom models always have cards via overrides.
