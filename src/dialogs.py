@@ -240,6 +240,20 @@ class CustomModelDialog(Gtk.Dialog):
         row.pack_start(self.combo_api_type, False, False, 0)
         box.pack_start(row, False, False, 0)
 
+        # Store initial data for editing existing models
+        self._initial_model_id = str(data.get("model_id", data.get("model_name", "")))
+
+        # Advanced button for model card editing
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        spacer = Gtk.Label(label="", xalign=0)
+        spacer.set_size_request(120, -1)
+        self.btn_advanced = Gtk.Button(label="Advanced...")
+        self.btn_advanced.set_tooltip_text("Edit model capabilities and quirks")
+        self.btn_advanced.connect("clicked", self._on_advanced_clicked)
+        row.pack_start(spacer, False, False, 0)
+        row.pack_start(self.btn_advanced, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
         # Test connection button
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         spacer = Gtk.Label(label="", xalign=0)
@@ -313,6 +327,26 @@ class CustomModelDialog(Gtk.Dialog):
             "api_type": api_type,
         }
 
+    def _on_advanced_clicked(self, button):
+        """Open the Model Card Editor dialog for this custom model."""
+        model_id = self.entry_model_id.get_text().strip()
+        if not model_id:
+            self.lbl_test_result.set_markup('<span color="red">Enter a Model ID first</span>')
+            return
+        
+        # Load custom models to pass context
+        custom_models = load_custom_models()
+        
+        dialog = ModelCardEditorDialog(self, model_id, custom_models)
+        response = dialog.run()
+        
+        if response == Gtk.ResponseType.OK:
+            from model_cards import set_override
+            override_data = dialog.get_override_data()
+            set_override(model_id, override_data)
+        
+        dialog.destroy()
+
     def _on_test_connection(self, button):
         """Test the custom model connection."""
         try:
@@ -348,6 +382,303 @@ class CustomModelDialog(Gtk.Dialog):
             short_msg = message[:80] + "..." if len(message) > 80 else message
             self.lbl_test_result.set_markup(f'<span color="red">✗ {short_msg}</span>')
         return False  # Don't repeat
+
+
+# ---------------------------------------------------------------------------
+# Model Card Editor dialog
+# ---------------------------------------------------------------------------
+
+class ModelCardEditorDialog(Gtk.Dialog):
+    """
+    Dialog for viewing and editing model card capabilities, API settings, and quirks.
+    
+    Can be used to:
+    - View capabilities of builtin models
+    - Override settings for any model
+    - Configure capabilities for custom models
+    """
+
+    PROVIDERS = ["openai", "gemini", "grok", "claude", "perplexity", "custom"]
+    API_FAMILIES = ["chat.completions", "responses", "images", "tts", "realtime"]
+
+    def __init__(self, parent, model_id: str, custom_models: dict = None):
+        super().__init__(title=f"Edit Model: {model_id}", transient_for=parent, flags=0)
+        self.set_modal(True)
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("Save", Gtk.ResponseType.OK)
+        self.set_default_size(500, 550)
+
+        self.model_id = model_id
+        self.custom_models = custom_models or {}
+        
+        # Load the current card (may be None for unknown models)
+        self.original_card = get_card(model_id, self.custom_models)
+        
+        # Check if there's an existing override
+        from model_cards import get_override
+        self.existing_override = get_override(model_id)
+        
+        box = self.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        # Model ID (read-only display)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Model ID", xalign=0)
+        label.set_size_request(120, -1)
+        id_label = Gtk.Label(label=model_id, xalign=0)
+        id_label.set_selectable(True)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(id_label, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Display Name
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Display Name", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_display_name = Gtk.Entry()
+        self.entry_display_name.set_placeholder_text("Optional display name")
+        if self.original_card and self.original_card.display_name:
+            self.entry_display_name.set_text(self.original_card.display_name)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_display_name, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Provider
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Provider", xalign=0)
+        label.set_size_request(120, -1)
+        self.combo_provider = Gtk.ComboBoxText()
+        for p in self.PROVIDERS:
+            self.combo_provider.append_text(p)
+        provider_idx = 0
+        if self.original_card:
+            try:
+                provider_idx = self.PROVIDERS.index(self.original_card.provider)
+            except ValueError:
+                pass
+        self.combo_provider.set_active(provider_idx)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.combo_provider, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Base URL
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Base URL", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_base_url = Gtk.Entry()
+        self.entry_base_url.set_placeholder_text("Optional endpoint override")
+        if self.original_card and self.original_card.base_url:
+            self.entry_base_url.set_text(self.original_card.base_url)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_base_url, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # API Family
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="API Family", xalign=0)
+        label.set_size_request(120, -1)
+        self.combo_api_family = Gtk.ComboBoxText()
+        for af in self.API_FAMILIES:
+            self.combo_api_family.append_text(af)
+        api_idx = 0
+        if self.original_card:
+            try:
+                api_idx = self.API_FAMILIES.index(self.original_card.api_family)
+            except ValueError:
+                pass
+        self.combo_api_family.set_active(api_idx)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.combo_api_family, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        # --- Capabilities Section ---
+        frame = Gtk.Frame(label=" Capabilities ")
+        frame.set_margin_top(8)
+        caps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        caps_box.set_margin_top(8)
+        caps_box.set_margin_bottom(8)
+        caps_box.set_margin_start(8)
+        caps_box.set_margin_end(8)
+        frame.add(caps_box)
+
+        # Capability checkboxes in rows
+        caps = self.original_card.capabilities if self.original_card else None
+        
+        row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_text = Gtk.CheckButton(label="Text")
+        self.chk_text.set_active(caps.text if caps else True)
+        self.chk_vision = Gtk.CheckButton(label="Vision")
+        self.chk_vision.set_active(caps.vision if caps else False)
+        self.chk_audio_in = Gtk.CheckButton(label="Audio Input")
+        self.chk_audio_in.set_active(caps.audio_in if caps else False)
+        row1.pack_start(self.chk_text, False, False, 0)
+        row1.pack_start(self.chk_vision, False, False, 0)
+        row1.pack_start(self.chk_audio_in, False, False, 0)
+        caps_box.pack_start(row1, False, False, 0)
+
+        row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_tool_use = Gtk.CheckButton(label="Tool Use")
+        self.chk_tool_use.set_active(caps.tool_use if caps else False)
+        self.chk_audio_out = Gtk.CheckButton(label="Audio Output")
+        self.chk_audio_out.set_active(caps.audio_out if caps else False)
+        self.chk_files = Gtk.CheckButton(label="File Uploads")
+        self.chk_files.set_active(caps.files if caps else False)
+        row2.pack_start(self.chk_tool_use, False, False, 0)
+        row2.pack_start(self.chk_audio_out, False, False, 0)
+        row2.pack_start(self.chk_files, False, False, 0)
+        caps_box.pack_start(row2, False, False, 0)
+
+        row3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_web_search = Gtk.CheckButton(label="Web Search")
+        self.chk_web_search.set_active(caps.web_search if caps else False)
+        self.chk_image_gen = Gtk.CheckButton(label="Image Gen")
+        self.chk_image_gen.set_active(caps.image_gen if caps else False)
+        self.chk_image_edit = Gtk.CheckButton(label="Image Edit")
+        self.chk_image_edit.set_active(caps.image_edit if caps else False)
+        row3.pack_start(self.chk_web_search, False, False, 0)
+        row3.pack_start(self.chk_image_gen, False, False, 0)
+        row3.pack_start(self.chk_image_edit, False, False, 0)
+        caps_box.pack_start(row3, False, False, 0)
+
+        box.pack_start(frame, False, False, 0)
+
+        # --- Quirks Section ---
+        frame = Gtk.Frame(label=" Quirks ")
+        frame.set_margin_top(8)
+        quirks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        quirks_box.set_margin_top(8)
+        quirks_box.set_margin_bottom(8)
+        quirks_box.set_margin_start(8)
+        quirks_box.set_margin_end(8)
+        frame.add(quirks_box)
+
+        quirks = self.original_card.quirks if self.original_card else {}
+
+        row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_no_temp = Gtk.CheckButton(label="No Temperature")
+        self.chk_no_temp.set_active(quirks.get("no_temperature", False))
+        self.chk_no_temp.set_tooltip_text("Model does not accept temperature parameter")
+        self.chk_dev_role = Gtk.CheckButton(label="Needs Developer Role")
+        self.chk_dev_role.set_active(quirks.get("needs_developer_role", False))
+        self.chk_dev_role.set_tooltip_text("Model requires 'developer' role instead of 'system'")
+        row1.pack_start(self.chk_no_temp, False, False, 0)
+        row1.pack_start(self.chk_dev_role, False, False, 0)
+        quirks_box.pack_start(row1, False, False, 0)
+
+        row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_audio_modality = Gtk.CheckButton(label="Requires Audio Modality")
+        self.chk_audio_modality.set_active(quirks.get("requires_audio_modality", False))
+        self.chk_audio_modality.set_tooltip_text("Model requires audio modality in request")
+        row2.pack_start(self.chk_audio_modality, False, False, 0)
+        quirks_box.pack_start(row2, False, False, 0)
+
+        box.pack_start(frame, False, False, 0)
+
+        # --- Constraints Section ---
+        frame = Gtk.Frame(label=" Constraints (optional) ")
+        frame.set_margin_top(8)
+        const_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        const_box.set_margin_top(8)
+        const_box.set_margin_bottom(8)
+        const_box.set_margin_start(8)
+        const_box.set_margin_end(8)
+        frame.add(const_box)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Max Tokens", xalign=0)
+        label.set_size_request(100, -1)
+        self.entry_max_tokens = Gtk.Entry()
+        self.entry_max_tokens.set_placeholder_text("e.g., 4096")
+        self.entry_max_tokens.set_width_chars(10)
+        if self.original_card and self.original_card.max_tokens:
+            self.entry_max_tokens.set_text(str(self.original_card.max_tokens))
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_max_tokens, False, False, 0)
+        const_box.pack_start(row, False, False, 0)
+
+        box.pack_start(frame, False, False, 0)
+
+        # --- Reset Button ---
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_margin_top(12)
+        self.btn_reset = Gtk.Button(label="Reset to Default")
+        self.btn_reset.connect("clicked", self._on_reset_clicked)
+        self.btn_reset.set_tooltip_text("Remove all overrides and revert to builtin defaults")
+        # Only enable if there's an existing override
+        self.btn_reset.set_sensitive(self.existing_override is not None)
+        btn_box.pack_end(self.btn_reset, False, False, 0)
+        box.pack_start(btn_box, False, False, 0)
+
+        self.show_all()
+
+    def _on_reset_clicked(self, button):
+        """Reset to default by deleting the override."""
+        from model_cards import delete_override
+        delete_override(self.model_id)
+        self.response(Gtk.ResponseType.REJECT)  # Special response to indicate reset
+
+    def get_override_data(self) -> dict:
+        """
+        Build override data dict from current dialog state.
+        
+        Returns a dict suitable for saving to model_card_overrides.json.
+        """
+        override = {}
+        
+        # Basic fields
+        display_name = self.entry_display_name.get_text().strip()
+        if display_name:
+            override["display_name"] = display_name
+        
+        provider = self.combo_provider.get_active_text()
+        if provider:
+            override["provider"] = provider
+        
+        base_url = self.entry_base_url.get_text().strip()
+        if base_url:
+            override["base_url"] = base_url
+        
+        api_family = self.combo_api_family.get_active_text()
+        if api_family:
+            override["api_family"] = api_family
+        
+        # Capabilities
+        override["capabilities"] = {
+            "text": self.chk_text.get_active(),
+            "vision": self.chk_vision.get_active(),
+            "files": self.chk_files.get_active(),
+            "tool_use": self.chk_tool_use.get_active(),
+            "web_search": self.chk_web_search.get_active(),
+            "audio_in": self.chk_audio_in.get_active(),
+            "audio_out": self.chk_audio_out.get_active(),
+            "image_gen": self.chk_image_gen.get_active(),
+            "image_edit": self.chk_image_edit.get_active(),
+        }
+        
+        # Quirks
+        quirks = {}
+        if self.chk_no_temp.get_active():
+            quirks["no_temperature"] = True
+        if self.chk_dev_role.get_active():
+            quirks["needs_developer_role"] = True
+        if self.chk_audio_modality.get_active():
+            quirks["requires_audio_modality"] = True
+        if quirks:
+            override["quirks"] = quirks
+        
+        # Constraints
+        max_tokens = self.entry_max_tokens.get_text().strip()
+        if max_tokens:
+            try:
+                override["max_tokens"] = int(max_tokens)
+            except ValueError:
+                pass
+        
+        return override
 
 
 # ---------------------------------------------------------------------------
@@ -2047,6 +2378,12 @@ class SettingsDialog(Gtk.Dialog):
                 # Spacer to push entry box to the right
                 hbox.pack_start(Gtk.Box(), True, True, 0)
                 
+                # Edit button for model card
+                edit_btn = Gtk.Button.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
+                edit_btn.set_tooltip_text("Edit model capabilities")
+                edit_btn.connect("clicked", self._on_edit_model_card, model_id)
+                hbox.pack_end(edit_btn, False, False, 0)
+                
                 # Display name entry (positioned on the right side)
                 display_name_entry = Gtk.Entry()
                 display_name_entry.set_placeholder_text("Display name (optional)")
@@ -2227,6 +2564,24 @@ class SettingsDialog(Gtk.Dialog):
         # Refresh custom models list if this model is a custom model
         if model_id in self.custom_models:
             self._refresh_custom_models_list()
+
+    def _on_edit_model_card(self, button, model_id):
+        """Open the Model Card Editor dialog for the given model."""
+        dialog = ModelCardEditorDialog(self, model_id, self.custom_models)
+        response = dialog.run()
+        
+        if response == Gtk.ResponseType.OK:
+            # Save the override
+            from model_cards import set_override
+            override_data = dialog.get_override_data()
+            set_override(model_id, override_data)
+            # Refresh the whitelist to update capability badges
+            self._populate_model_whitelist_sections(preserve_selections=True)
+        elif response == Gtk.ResponseType.REJECT:
+            # Reset was clicked - override already deleted, just refresh
+            self._populate_model_whitelist_sections(preserve_selections=True)
+        
+        dialog.destroy()
 
     def _get_available_models_for_provider(self, provider_key, force_refresh=False):
         """

@@ -2,8 +2,8 @@
 loader.py – Model card loading and lookup.
 
 This module provides functions to look up ModelCard instances by model ID,
-with support for built-in cards, user-defined custom cards, and automatic
-synthesis from legacy custom_models.json entries.
+with support for built-in cards, user-defined custom cards, user overrides,
+and automatic synthesis from legacy custom_models.json entries.
 """
 
 from typing import Optional, Dict
@@ -21,10 +21,11 @@ def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[Mo
     Look up a ModelCard by ID.
 
     Priority order:
-    1. User-defined custom cards (registered via register_card())
-    2. Built-in catalog (from catalog.py)
-    3. Synthesized card from custom_models dict (legacy format)
-    4. None (caller should use heuristics fallback)
+    1. User card overrides (from model_card_overrides.json) applied to base card
+    2. Registered custom cards (runtime via register_card())
+    3. Built-in catalog (from catalog.py)
+    4. Synthesized card from custom_models dict (legacy format)
+    5. None (caller should use heuristics fallback)
 
     Parameters
     ----------
@@ -39,20 +40,68 @@ def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[Mo
     ModelCard or None
         The model card if found, or None if the model is unknown.
     """
-    # 1. Check custom cards cache (user-registered)
+    # Import here to avoid circular imports
+    from .overrides import load_overrides, apply_override_to_card
+    
+    # Get base card from various sources
+    base_card = None
+    
+    # Check registered custom cards first
     if model_id in _custom_cards:
-        return _custom_cards[model_id]
-
-    # 2. Check builtin catalog
-    if model_id in BUILTIN_CARDS:
-        return BUILTIN_CARDS[model_id]
-
-    # 3. Synthesize from custom_models.json
-    if custom_models and model_id in custom_models:
+        base_card = _custom_cards[model_id]
+    # Then check builtin catalog
+    elif model_id in BUILTIN_CARDS:
+        base_card = BUILTIN_CARDS[model_id]
+    # Finally try to synthesize from custom_models.json
+    elif custom_models and model_id in custom_models:
         cfg = custom_models[model_id]
-        return _synthesize_card_from_custom(model_id, cfg)
+        base_card = _synthesize_card_from_custom(model_id, cfg)
+    
+    # Check for user overrides and apply them
+    overrides = load_overrides()
+    if model_id in overrides:
+        override_data = overrides[model_id]
+        if base_card:
+            # Apply override to existing card
+            return apply_override_to_card(base_card, override_data)
+        else:
+            # Create new card from override (for completely custom models)
+            return _create_card_from_override(model_id, override_data)
+    
+    return base_card
 
-    return None
+
+def _create_card_from_override(model_id: str, override: dict) -> ModelCard:
+    """
+    Create a new ModelCard entirely from override data.
+    
+    Used when a user creates a card for a model that doesn't exist in
+    the builtin catalog or custom_models.json.
+    """
+    caps_data = override.get("capabilities", {})
+    caps = Capabilities(
+        text=caps_data.get("text", True),
+        vision=caps_data.get("vision", False),
+        files=caps_data.get("files", False),
+        tool_use=caps_data.get("tool_use", False),
+        web_search=caps_data.get("web_search", False),
+        audio_in=caps_data.get("audio_in", False),
+        audio_out=caps_data.get("audio_out", False),
+        image_gen=caps_data.get("image_gen", False),
+        image_edit=caps_data.get("image_edit", False),
+    )
+    
+    return ModelCard(
+        id=model_id,
+        provider=override.get("provider", "custom"),
+        display_name=override.get("display_name"),
+        api_family=override.get("api_family", "chat.completions"),
+        base_url=override.get("base_url"),
+        capabilities=caps,
+        max_tokens=override.get("max_tokens"),
+        quirks=override.get("quirks", {}),
+        key_name=override.get("key_name"),
+    )
 
 
 def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
