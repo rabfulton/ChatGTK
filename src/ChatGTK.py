@@ -47,6 +47,7 @@ from utils import (
     get_model_display_name,
 )
 from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
+from model_cards import get_card
 from markup_utils import (
     format_response,
     process_inline_markup,
@@ -987,6 +988,12 @@ class OpenAIGTKClient(Gtk.Window):
     def get_provider_name_for_model(self, model_name):
         if not model_name:
             return 'openai'
+        
+        # Card-first: check model card for provider
+        card = get_card(model_name, self.custom_models)
+        if card:
+            return card.provider
+        
         # If we have an explicit mapping from model fetch, use it.
         provider = self.model_provider_map.get(model_name)
         if provider:
@@ -996,9 +1003,8 @@ class OpenAIGTKClient(Gtk.Window):
         if model_name in getattr(self, "custom_models", {}):
             return "custom"
 
-        # Fall back to simple heuristics for well-known image and chat models,
-        # so image-only models can be routed correctly even if they are not
-        # present in the main model list.
+        # REDUNDANT: Legacy fallback heuristics for well-known models.
+        # TODO(cleanup): Remove after Phase 5 refactoring.
         lower = model_name.lower()
         if lower.startswith("gemini-"):
             return "gemini"
@@ -1102,10 +1108,20 @@ class OpenAIGTKClient(Gtk.Window):
                 if not provider:
                     raise ValueError(f"{provider_name.title()} provider is not initialized")
 
+        # Check if model supports image editing via card
+        card = get_card(model, self.custom_models)
+        supports_image_edit = card.capabilities.image_edit if card else False
+        
+        # REDUNDANT: Legacy fallback for models not in catalog
+        # TODO(cleanup): Remove after Phase 5 refactoring
+        if not card:
+            supports_image_edit = model in ("gpt-image-1", "gpt-image-1-mini", 
+                                            "gemini-3-pro-image-preview", "gemini-2.5-flash-image")
+
         # OpenAI image models.
         if provider_name == 'openai':
             image_data = None
-            if model in ("gpt-image-1", "gpt-image-1-mini") and has_attached_images:
+            if supports_image_edit and has_attached_images:
                 image_data = last_msg["images"][0]["data"]
             return provider.generate_image(prompt, chat_id, model, image_data)
 
@@ -1114,7 +1130,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Gemini image models support both text→image and image→image.
         if provider_name == 'gemini':
-            if model in ["gemini-3-pro-image-preview", "gemini-2.5-flash-image"] and has_attached_images:
+            if supports_image_edit and has_attached_images:
                 img = last_msg["images"][0]
                 return provider.generate_image(
                     prompt,
@@ -1485,6 +1501,14 @@ class OpenAIGTKClient(Gtk.Window):
             if hasattr(self, 'combo_image_model') and self.combo_image_model is not None:
                 image_like_models = []
                 for model_id in models or []:
+                    # Card-first: check if model is an image model via card
+                    card = get_card(model_id, self.custom_models)
+                    if card and card.is_image_model():
+                        image_like_models.append(model_id)
+                        continue
+                    
+                    # REDUNDANT: Legacy fallback heuristics for unknown models
+                    # TODO(cleanup): Remove after Phase 5 refactoring
                     lower = model_id.lower()
                     if any(term in lower for term in ("dall-e", "gpt-image", "image-")):
                         image_like_models.append(model_id)
@@ -1952,10 +1976,18 @@ class OpenAIGTKClient(Gtk.Window):
                     provider_name=provider_name,
                     has_attached_images=has_attached_images,
                 )
-            elif provider_name == 'openai' and "realtime" in model.lower():
-                # Realtime models are handled elsewhere (WebSocket provider).
-                return
             elif provider_name == 'openai':
+                # Check if this is a realtime model via card
+                card = get_card(model, self.custom_models)
+                is_realtime = card.api_family == "realtime" if card else False
+                # REDUNDANT: Legacy fallback for unknown models
+                # TODO(cleanup): Remove after Phase 5 refactoring
+                if not card:
+                    is_realtime = "realtime" in model.lower()
+                if is_realtime:
+                    # Realtime models are handled elsewhere (WebSocket provider).
+                    return
+                
                 messages_to_send = self._messages_for_model(model)
 
                 # Provide handlers so OpenAI models can call tools (image/music/read_aloud)
@@ -2225,7 +2257,12 @@ class OpenAIGTKClient(Gtk.Window):
             
             # Read aloud the response if enabled (runs in background thread)
             # Skip for audio models since they already play audio directly
-            is_audio_model = "audio" in model.lower() and "preview" in model.lower()
+            card = get_card(model, self.custom_models)
+            is_audio_model = card.capabilities.audio_out if card else False
+            # REDUNDANT: Legacy fallback for unknown models
+            # TODO(cleanup): Remove after Phase 5 refactoring
+            if not card:
+                is_audio_model = "audio" in model.lower() and "preview" in model.lower()
             if not is_audio_model:
                 self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
             
