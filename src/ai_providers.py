@@ -23,6 +23,7 @@ from tools import (
     parse_tool_arguments,
 )
 from config import HISTORY_DIR
+from model_cards import get_card
 
 class AIProvider(ABC):
     """Abstract base class for AI providers."""
@@ -1041,7 +1042,13 @@ class OpenAIProvider(AIProvider):
         """
         if not model:
             return False
-        
+
+        # Card-first: check model card for web_search capability
+        card = get_card(model)
+        if card:
+            return card.capabilities.web_search
+
+        # Fallback to existing heuristics for unknown models
         model_lower = model.lower()
         
         # Exclude models that don't support web search
@@ -1280,11 +1287,13 @@ class OpenAIProvider(AIProvider):
             The assistant's response text, with any tool outputs appended.
         """
         model_lower = (model or "").lower()
-        # Some Responses-only models (e.g. gpt-4o-mini-search-preview) do not
-        # support temperature. We gate the parameter below based on the model
-        # name to avoid "Model incompatible request argument supplied" errors.
-        is_search_model = "search" in model_lower
-        is_gpt5_model = model_lower.startswith("gpt-5")
+        # Some models do not support temperature. We check the model card first,
+        # then fall back to string heuristics for unknown models.
+        card = get_card(model)
+        skip_temperature = card.quirks.get("no_temperature") if card else False
+        if not skip_temperature:
+            # Fallback heuristics for unknown models
+            skip_temperature = "search" in model_lower or model_lower.startswith("gpt-5")
         
         # Build input from messages
         input_items, instructions = self._build_responses_input(messages)
@@ -1311,7 +1320,7 @@ class OpenAIProvider(AIProvider):
             params["instructions"] = instructions
         
         # Temperature handling - some models don't support it
-        if temperature is not None and not is_search_model and not is_gpt5_model:
+        if temperature is not None and not skip_temperature:
             params["temperature"] = temperature
         
         if max_tokens and max_tokens > 0:
@@ -1439,6 +1448,18 @@ class OpenAIProvider(AIProvider):
             (requires_chat_completions: bool, reason: str)
             reason is one of: "audio", "reasoning", or ""
         """
+        # Card-first: check model card for API routing hints
+        card = get_card(model)
+        if card:
+            if card.quirks.get("requires_audio_modality"):
+                return True, "audio"
+            if card.quirks.get("needs_developer_role"):
+                return True, "reasoning"
+            # If card explicitly specifies chat.completions, use it
+            if card.api_family == "chat.completions":
+                return True, ""
+
+        # Fallback to existing string checks for unknown models
         model_lower = (model or "").lower()
         
         # Audio models require chat.completions for audio output modalities
@@ -1782,6 +1803,12 @@ class GrokProvider(AIProvider):
         if not model:
             return False
 
+        # Card-first: check model card for web_search capability
+        card = get_card(model)
+        if card:
+            return card.capabilities.web_search
+
+        # Fallback heuristics for unknown models
         model_lower = model.lower()
 
         # Skip obvious non-chat models.
@@ -2734,6 +2761,11 @@ class GeminiProvider(AIProvider):
         def _supports_google_search_tool(model_name: str) -> bool:
             if not model_name:
                 return False
+            # Card-first: check model card for web_search capability
+            card = get_card(model_name)
+            if card:
+                return card.capabilities.web_search
+            # Fallback heuristics for unknown models
             name = model_name.lower()
             # Google Search grounding is available for Gemini 2.x+ models; we avoid
             # attaching it to legacy 1.5 models that rely on google_search_retrieval.

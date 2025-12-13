@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 import subprocess
 
+from model_cards import get_card
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -467,7 +469,12 @@ class ToolManager:
         self.music_tool_enabled = music_tool_enabled
         self.read_aloud_tool_enabled = read_aloud_tool_enabled
 
-    def get_provider_name_for_model(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None) -> str:
+    def get_provider_name_for_model(
+        self,
+        model_name: str,
+        model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> str:
         """
         Determine the provider name for a given model.
 
@@ -477,19 +484,29 @@ class ToolManager:
             The model name.
         model_provider_map : Optional[Dict[str, str]]
             Optional mapping of model names to provider names.
+        custom_models : Optional[Dict[str, Dict[str, Any]]]
+            Optional dict of custom model configurations.
 
         Returns
         -------
         str
-            The provider name ('openai', 'gemini', 'grok', 'claude', 'custom').
+            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom').
         """
         if not model_name:
             return "openai"
+
+        # Card-first: check model card for provider
+        card = get_card(model_name, custom_models)
+        if card:
+            return card.provider
+
+        # Fallback: check model_provider_map
         if model_provider_map:
             provider = model_provider_map.get(model_name)
             if provider:
                 return provider
 
+        # Fallback: string-based heuristics
         lower = model_name.lower()
         if lower.startswith("gemini-"):
             return "gemini"
@@ -497,6 +514,8 @@ class ToolManager:
             return "grok"
         if lower.startswith("claude-"):
             return "claude"
+        if lower.startswith("sonar"):
+            return "perplexity"
         return "openai"
 
     def is_image_model_for_provider(self, model_name: str, provider_name: str, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
@@ -515,12 +534,18 @@ class ToolManager:
         """
         if not model_name:
             return False
-        
-        # Check custom models first if provided
+
+        # Card-first: check model card
+        card = get_card(model_name, custom_models)
+        if card:
+            return card.is_image_model()
+
+        # Fallback: check custom models config
         if provider_name == "custom" and custom_models:
             cfg = custom_models.get(model_name, {})
             return (cfg.get("api_type") or "").lower() == "images"
         
+        # Fallback: string-based heuristics
         lower = model_name.lower()
 
         if provider_name == "openai":
@@ -540,7 +565,14 @@ class ToolManager:
         if not self.image_tool_enabled:
             return False
 
-        provider = self.get_provider_name_for_model(model_name, model_provider_map)
+        # Card-first: check model card for tool support
+        card = get_card(model_name, custom_models)
+        if card:
+            # Model must support tools AND be a chat model (not an image-only model)
+            return card.supports_tools() and card.is_chat_model()
+
+        # Fallback: existing heuristics
+        provider = self.get_provider_name_for_model(model_name, model_provider_map, custom_models)
         if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False
 
@@ -587,7 +619,14 @@ class ToolManager:
         if not self.music_tool_enabled:
             return False
 
-        provider = self.get_provider_name_for_model(model_name, model_provider_map)
+        # Card-first: check model card for tool support
+        card = get_card(model_name, custom_models)
+        if card:
+            # Model must support tools AND be a chat model (not an image-only model)
+            return card.supports_tools() and card.is_chat_model()
+
+        # Fallback: existing heuristics
+        provider = self.get_provider_name_for_model(model_name, model_provider_map, custom_models)
         if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False
 
@@ -633,7 +672,14 @@ class ToolManager:
         if not self.read_aloud_tool_enabled:
             return False
 
-        provider = self.get_provider_name_for_model(model_name, model_provider_map)
+        # Card-first: check model card for tool support
+        card = get_card(model_name, custom_models)
+        if card:
+            # Model must support tools AND be a chat model (not an image-only model)
+            return card.supports_tools() and card.is_chat_model()
+
+        # Fallback: existing heuristics
+        provider = self.get_provider_name_for_model(model_name, model_provider_map, custom_models)
         if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False
 
