@@ -1172,6 +1172,7 @@ class OpenAIGTKClient(Gtk.Window):
             preferred_model = "dall-e-3"
             provider_name = "openai"
 
+        print(f"[Image Tool] Using model: {preferred_model} (provider: {provider_name})")
         try:
             return self.generate_image_for_model(
                 model=preferred_model,
@@ -1184,8 +1185,9 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             # If the preferred provider/model fails (e.g., missing key), fall
             # back to OpenAI dall-e-3 as a last resort.
-            print(f"Preferred image model failed ({preferred_model} via {provider_name}): {e}")
+            print(f"[Image Tool] Preferred model failed ({preferred_model} via {provider_name}): {e}")
             fallback_model = "dall-e-3"
+            print(f"[Image Tool] Falling back to: {fallback_model} (provider: openai)")
             try:
                 return self.generate_image_for_model(
                     model=fallback_model,

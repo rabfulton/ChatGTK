@@ -240,6 +240,12 @@ def is_chat_completion_model(model_name: str) -> bool:
             return card.is_chat_model()
     TODO(cleanup): Remove after Phase 5 refactoring - callers should use card.is_chat_model().
     """
+    # Card-first: use model card if available
+    card = get_card(model_name)
+    if card:
+        return card.is_chat_model()
+    
+    # Legacy fallback for unknown models
     print(f"[LEGACY] is_chat_completion_model: Using legacy heuristics for '{model_name}' - consider using card.is_chat_model()")
     if not model_name:
         return True

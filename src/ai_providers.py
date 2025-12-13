@@ -1283,8 +1283,9 @@ class OpenAIProvider(AIProvider):
         # Some models do not support temperature. We check the model card first,
         # then fall back to string heuristics for unknown models.
         card = get_card(model)
-        skip_temperature = card.quirks.get("no_temperature") if card else False
-        if not skip_temperature:
+        if card:
+            skip_temperature = card.quirks.get("no_temperature", False)
+        else:
             # REDUNDANT: Legacy fallback heuristics for unknown models.
             # TODO(cleanup): Remove after Phase 5 refactoring.
             print(f"[LEGACY] OpenAIProvider: Using temperature fallback heuristics for '{model}' - consider adding to catalog")
@@ -1453,6 +1454,8 @@ class OpenAIProvider(AIProvider):
             # If card explicitly specifies chat.completions, use it
             if card.api_family == "chat.completions":
                 return True, ""
+            # Card exists but doesn't require chat.completions
+            return False, ""
 
         # REDUNDANT: Legacy fallback string checks for unknown models.
         # TODO(cleanup): Remove this fallback block after Phase 5 refactoring.
