@@ -1048,7 +1048,8 @@ class OpenAIProvider(AIProvider):
         if card:
             return card.capabilities.web_search
 
-        # Fallback to existing heuristics for unknown models
+        # REDUNDANT: Legacy fallback heuristics for unknown models.
+        # TODO(cleanup): Remove this entire fallback block after Phase 5 refactoring.
         model_lower = model.lower()
         
         # Exclude models that don't support web search
@@ -1057,30 +1058,21 @@ class OpenAIProvider(AIProvider):
             return False
         
         # Explicit allow-list of models known to support web search via Responses API
-        # This is conservative to avoid sending unsupported tools to older models
         web_search_models = {
-            # GPT-4o family
             "gpt-4o",
             "gpt-4o-mini",
             "chatgpt-4o-latest",
-            # GPT-4 Turbo
             "gpt-4-turbo",
             "gpt-4-turbo-preview",
-            # GPT-5 family
             "gpt-5.1",
             "gpt-5.1-chat-latest",
             "gpt-5-pro",
         }
         
-        # Check explicit list first
         if model in web_search_models or model_lower in web_search_models:
             return True
-        
-        # Allow any gpt-5.x model
         if model_lower.startswith("gpt-5"):
             return True
-        
-        # Allow any gpt-4.x model (4.1, 4.5, etc.) but not older gpt-4
         if model_lower.startswith("gpt-4."):
             return True
         
@@ -1292,7 +1284,8 @@ class OpenAIProvider(AIProvider):
         card = get_card(model)
         skip_temperature = card.quirks.get("no_temperature") if card else False
         if not skip_temperature:
-            # Fallback heuristics for unknown models
+            # REDUNDANT: Legacy fallback heuristics for unknown models.
+            # TODO(cleanup): Remove after Phase 5 refactoring.
             skip_temperature = "search" in model_lower or model_lower.startswith("gpt-5")
         
         # Build input from messages
@@ -1459,7 +1452,8 @@ class OpenAIProvider(AIProvider):
             if card.api_family == "chat.completions":
                 return True, ""
 
-        # Fallback to existing string checks for unknown models
+        # REDUNDANT: Legacy fallback string checks for unknown models.
+        # TODO(cleanup): Remove this fallback block after Phase 5 refactoring.
         model_lower = (model or "").lower()
         
         # Audio models require chat.completions for audio output modalities
@@ -1467,7 +1461,6 @@ class OpenAIProvider(AIProvider):
             return True, "audio"
         
         # Reasoning models (o1, o3) require special developer message handling
-        # that we've only tested with chat.completions
         reasoning_models = ["o1-mini", "o1-preview", "o3", "o3-mini"]
         if any(r in model_lower for r in reasoning_models):
             return True, "reasoning"
@@ -1677,9 +1670,18 @@ class OpenAIProvider(AIProvider):
         """
         Generate or edit an image using OpenAI image models.
         - For models like `dall-e-3` this performs text → image generation.
-        - For `gpt-image-1`/`gpt-image-1-mini` with `image_data` this performs image → image editing.
+        - For models with image_edit capability (gpt-image-1) with `image_data` this performs image editing.
         """
-        if model in ("gpt-image-1", "gpt-image-1-mini") and image_data:
+        # Check if model supports image editing via card
+        card = get_card(model)
+        supports_edit = card.capabilities.image_edit if card else False
+        
+        # REDUNDANT: Legacy fallback for models not in catalog
+        # TODO(cleanup): Remove after Phase 5 refactoring
+        if not card:
+            supports_edit = model in ("gpt-image-1", "gpt-image-1-mini")
+        
+        if supports_edit and image_data:
             # Image edit: decode the attached image and send it to the images.edit endpoint
             raw_bytes = base64.b64decode(image_data)
             
@@ -1808,7 +1810,8 @@ class GrokProvider(AIProvider):
         if card:
             return card.capabilities.web_search
 
-        # Fallback heuristics for unknown models
+        # REDUNDANT: Legacy fallback heuristics for unknown models.
+        # TODO(cleanup): Remove this fallback block after Phase 5 refactoring.
         model_lower = model.lower()
 
         # Skip obvious non-chat models.
@@ -2765,10 +2768,9 @@ class GeminiProvider(AIProvider):
             card = get_card(model_name)
             if card:
                 return card.capabilities.web_search
-            # Fallback heuristics for unknown models
+            # REDUNDANT: Legacy fallback heuristics for unknown models.
+            # TODO(cleanup): Remove after Phase 5 refactoring.
             name = model_name.lower()
-            # Google Search grounding is available for Gemini 2.x+ models; we avoid
-            # attaching it to legacy 1.5 models that rely on google_search_retrieval.
             return name.startswith("gemini-2.") or name.startswith("gemini-3.")
 
         if web_search_enabled and _supports_google_search_tool(model):

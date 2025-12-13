@@ -23,7 +23,9 @@ from model_cards import get_card
 # Constants
 # ---------------------------------------------------------------------------
 
-# Terms that indicate a model is NOT a standard chat completion model.
+# REDUNDANT: Terms that indicate a model is NOT a standard chat completion model.
+# This is now handled by card.is_chat_model() which checks capabilities.text and not is_image_model().
+# TODO(cleanup): Remove after Phase 5 refactoring - used in legacy fallback heuristics only.
 CHAT_COMPLETION_EXCLUDE_TERMS = ("dall", "image", "realtime", "audio", "tts", "whisper")
 
 # Guidance appended to system prompts for math formatting.
@@ -229,7 +231,15 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
 # ---------------------------------------------------------------------------
 
 def is_chat_completion_model(model_name: str) -> bool:
-    """Return True if the model behaves like a standard text chat completion model."""
+    """
+    Return True if the model behaves like a standard text chat completion model.
+    
+    REDUNDANT: This function uses legacy string heuristics. Prefer using:
+        card = get_card(model_name)
+        if card:
+            return card.is_chat_model()
+    TODO(cleanup): Remove after Phase 5 refactoring - callers should use card.is_chat_model().
+    """
     if not model_name:
         return True
     lower_name = model_name.lower()
@@ -438,7 +448,9 @@ class ToolManager:
     and for building the appropriate handlers to pass to providers.
     """
 
-    # Models that are explicitly image-generation models (not chat models).
+    # REDUNDANT: Models that are explicitly image-generation models (not chat models).
+    # This is now handled by card.is_image_model() in the catalog.
+    # TODO(cleanup): Remove this set after Phase 5 refactoring is complete.
     IMAGE_ONLY_MODELS = {
         "dall-e-3",
         "gpt-image-1",
@@ -506,7 +518,9 @@ class ToolManager:
             if provider:
                 return provider
 
-        # Fallback: string-based heuristics
+        # REDUNDANT: Legacy string-based heuristics - should be removed once all models
+        # are in the catalog or have overrides. Kept temporarily for unknown models.
+        # TODO(cleanup): Remove this fallback block after Phase 5 refactoring is complete.
         lower = model_name.lower()
         if lower.startswith("gemini-"):
             return "gemini"
@@ -540,12 +554,15 @@ class ToolManager:
         if card:
             return card.is_image_model()
 
-        # Fallback: check custom models config
+        # REDUNDANT: Legacy fallback for custom models without cards.
+        # TODO(cleanup): Remove once custom models always have cards via overrides.
         if provider_name == "custom" and custom_models:
             cfg = custom_models.get(model_name, {})
             return (cfg.get("api_type") or "").lower() == "images"
         
-        # Fallback: string-based heuristics
+        # REDUNDANT: Legacy string-based heuristics - should be removed once all models
+        # are in the catalog. Kept temporarily for unknown models.
+        # TODO(cleanup): Remove this fallback block after Phase 5 refactoring is complete.
         lower = model_name.lower()
 
         if provider_name == "openai":
@@ -556,13 +573,18 @@ class ToolManager:
             return lower.startswith("grok-2-image")
         return False
 
-    def supports_image_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+    def _model_supports_tool_calling(
+        self,
+        model_name: str,
+        model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> bool:
         """
-        Return True if the given model should be offered the image-generation tool.
+        Internal helper: Return True if the model supports tool/function calling.
+        
+        This is the card-based check used by all tool support methods.
         """
         if not model_name:
-            return False
-        if not self.image_tool_enabled:
             return False
 
         # Card-first: check model card for tool support
@@ -571,7 +593,8 @@ class ToolManager:
             # Model must support tools AND be a chat model (not an image-only model)
             return card.supports_tools() and card.is_chat_model()
 
-        # Fallback: existing heuristics
+        # REDUNDANT: Legacy fallback heuristics for models not in catalog.
+        # TODO(cleanup): Remove this entire fallback block after Phase 5 refactoring.
         provider = self.get_provider_name_for_model(model_name, model_provider_map, custom_models)
         if provider not in ("openai", "gemini", "grok", "claude", "custom"):
             return False
@@ -583,7 +606,6 @@ class ToolManager:
             return False
 
         # Custom models: assume they support tools if they use chat.completions API
-        # (exclude image-only models which are already filtered above)
         if provider == "custom":
             return True
 
@@ -609,112 +631,30 @@ class ToolManager:
             return lower.startswith("claude-")
 
         return False
+
+    def supports_image_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+        """
+        Return True if the given model should be offered the image-generation tool.
+        """
+        if not self.image_tool_enabled:
+            return False
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
     def supports_music_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the music-control tool.
         """
-        if not model_name:
-            return False
         if not self.music_tool_enabled:
             return False
-
-        # Card-first: check model card for tool support
-        card = get_card(model_name, custom_models)
-        if card:
-            # Model must support tools AND be a chat model (not an image-only model)
-            return card.supports_tools() and card.is_chat_model()
-
-        # Fallback: existing heuristics
-        provider = self.get_provider_name_for_model(model_name, model_provider_map, custom_models)
-        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
-            return False
-
-        lower = model_name.lower()
-        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
-            return False
-        if self.is_image_model_for_provider(model_name, provider, custom_models):
-            return False
-
-        # Custom models: assume they support tools if they use chat.completions API
-        if provider == "custom":
-            return True
-
-        # OpenAI GPT chat models.
-        if provider == "openai":
-            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
-
-        # Gemini chat models that support function calling.
-        if provider == "gemini":
-            return (
-                lower.startswith("gemini-2.5")
-                or lower.startswith("gemini-3-pro")
-                or lower.startswith("gemini-pro")
-                or lower.startswith("gemini-flash")
-            )
-
-        # Grok chat models.
-        if provider == "grok":
-            return lower.startswith("grok-")
-
-        # Claude chat models via the OpenAI SDK compatibility layer.
-        if provider == "claude":
-            return lower.startswith("claude-")
-
-        return False
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
     def supports_read_aloud_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the read-aloud tool.
         """
-        if not model_name:
-            return False
         if not self.read_aloud_tool_enabled:
             return False
-
-        # Card-first: check model card for tool support
-        card = get_card(model_name, custom_models)
-        if card:
-            # Model must support tools AND be a chat model (not an image-only model)
-            return card.supports_tools() and card.is_chat_model()
-
-        # Fallback: existing heuristics
-        provider = self.get_provider_name_for_model(model_name, model_provider_map, custom_models)
-        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
-            return False
-
-        lower = model_name.lower()
-        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
-            return False
-        if self.is_image_model_for_provider(model_name, provider, custom_models):
-            return False
-
-        # Custom models: assume they support tools if they use chat.completions API
-        if provider == "custom":
-            return True
-
-        # OpenAI GPT chat models.
-        if provider == "openai":
-            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
-
-        # Gemini chat models that support function calling.
-        if provider == "gemini":
-            return (
-                lower.startswith("gemini-2.5")
-                or lower.startswith("gemini-3-pro")
-                or lower.startswith("gemini-pro")
-                or lower.startswith("gemini-flash")
-            )
-
-        # Grok chat models.
-        if provider == "grok":
-            return lower.startswith("grok-")
-
-        # Claude chat models via the OpenAI SDK compatibility layer.
-        if provider == "claude":
-            return lower.startswith("claude-")
-
-        return False
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
     def get_enabled_tools_for_model(
         self,
