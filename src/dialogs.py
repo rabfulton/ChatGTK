@@ -18,10 +18,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GtkSource
+from gi.repository import Gtk, GtkSource, GLib
 import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
+from model_cards import get_card
 from utils import (
     load_settings,
     apply_settings,
@@ -239,6 +240,19 @@ class CustomModelDialog(Gtk.Dialog):
         row.pack_start(self.combo_api_type, False, False, 0)
         box.pack_start(row, False, False, 0)
 
+        # Test connection button
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        spacer = Gtk.Label(label="", xalign=0)
+        spacer.set_size_request(120, -1)
+        self.btn_test = Gtk.Button(label="Test Connection")
+        self.btn_test.connect("clicked", self._on_test_connection)
+        self.lbl_test_result = Gtk.Label(label="", xalign=0)
+        self.lbl_test_result.set_line_wrap(True)
+        row.pack_start(spacer, False, False, 0)
+        row.pack_start(self.btn_test, False, False, 0)
+        row.pack_start(self.lbl_test_result, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
         self.show_all()
 
     def get_data(self) -> dict:
@@ -298,6 +312,42 @@ class CustomModelDialog(Gtk.Dialog):
             "api_key": api_key,
             "api_type": api_type,
         }
+
+    def _on_test_connection(self, button):
+        """Test the custom model connection."""
+        try:
+            data = self.get_data()
+        except ValueError as e:
+            self.lbl_test_result.set_markup(f'<span color="red">{e}</span>')
+            return
+        
+        provider = CustomProvider()
+        provider.initialize(
+            api_key=data["api_key"],
+            endpoint=data["endpoint"],
+            model_name=data["model_id"],
+            api_type=data["api_type"],
+        )
+        
+        self.btn_test.set_sensitive(False)
+        self.lbl_test_result.set_text("Testing...")
+        
+        def do_test():
+            ok, message = provider.test_connection()
+            GLib.idle_add(self._show_test_result, ok, message)
+        
+        threading.Thread(target=do_test, daemon=True).start()
+
+    def _show_test_result(self, ok, message):
+        """Show the test connection result."""
+        self.btn_test.set_sensitive(True)
+        if ok:
+            self.lbl_test_result.set_markup('<span color="green">✓ Connected</span>')
+        else:
+            # Truncate long error messages
+            short_msg = message[:80] + "..." if len(message) > 80 else message
+            self.lbl_test_result.set_markup(f'<span color="red">✗ {short_msg}</span>')
+        return False  # Don't repeat
 
 
 # ---------------------------------------------------------------------------
@@ -1983,10 +2033,15 @@ class SettingsDialog(Gtk.Dialog):
                 hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 row.add(hbox)
                 
-                # Checkbox
-                cb = Gtk.CheckButton(label=model_id)
+                # Checkbox with capability badges
+                cb = Gtk.CheckButton()
+                cb_label = Gtk.Label()
+                cb_label.set_markup(self._format_model_label_with_badges(model_id))
+                cb_label.set_xalign(0)
+                cb.add(cb_label)
                 cb.set_active(model_id in whitelist_set)
-                cb.set_size_request(200, -1)
+                cb.set_size_request(250, -1)
+                cb.set_tooltip_text(self._get_capability_tooltip(model_id))
                 hbox.pack_start(cb, False, False, 0)
                 
                 # Spacer to push entry box to the right
@@ -2073,7 +2128,7 @@ class SettingsDialog(Gtk.Dialog):
         threading.Thread(target=do_refresh, daemon=True).start()
 
     def _get_display_name_for_model(self, model_id):
-        """Get display name for a model, checking custom models first, then display names setting."""
+        """Get display name for a model, checking: custom models -> settings -> card -> empty."""
         # Check custom models first
         if model_id in self.custom_models:
             custom_model = self.custom_models[model_id]
@@ -2082,7 +2137,65 @@ class SettingsDialog(Gtk.Dialog):
         
         # Check display names setting
         display_names = load_model_display_names()
-        return display_names.get(model_id, '')
+        if model_id in display_names:
+            return display_names[model_id]
+        
+        # Check model card for display name
+        card = get_card(model_id)
+        if card and card.display_name:
+            return card.display_name
+        
+        return ''
+
+    def _format_model_label_with_badges(self, model_id):
+        """Format model label with capability badges from model card."""
+        card = get_card(model_id)
+        
+        badges = []
+        if card:
+            if card.capabilities.vision:
+                badges.append("V")
+            if card.capabilities.tool_use:
+                badges.append("T")
+            if card.capabilities.web_search:
+                badges.append("W")
+            if card.capabilities.image_gen:
+                badges.append("I")
+            if card.capabilities.audio_out:
+                badges.append("A")
+        
+        if badges:
+            return f"{model_id}  <small><tt>[{' '.join(badges)}]</tt></small>"
+        return model_id
+
+    def _get_capability_tooltip(self, model_id):
+        """Get a tooltip describing model capabilities."""
+        card = get_card(model_id)
+        if not card:
+            return model_id
+        
+        lines = [model_id]
+        caps = []
+        if card.capabilities.vision:
+            caps.append("Vision")
+        if card.capabilities.tool_use:
+            caps.append("Tools")
+        if card.capabilities.web_search:
+            caps.append("Web Search")
+        if card.capabilities.image_gen:
+            caps.append("Image Generation")
+        if card.capabilities.audio_out:
+            caps.append("Audio Output")
+        if card.capabilities.files:
+            caps.append("File Uploads")
+        
+        if caps:
+            lines.append(f"Capabilities: {', '.join(caps)}")
+        
+        if card.api_family != "chat.completions":
+            lines.append(f"API: {card.api_family}")
+        
+        return "\n".join(lines)
     
     def _on_display_name_changed(self, entry, model_id):
         """Handler for when display name entry is changed."""
