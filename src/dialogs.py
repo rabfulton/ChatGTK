@@ -505,44 +505,45 @@ class ModelCardEditorDialog(Gtk.Dialog):
         caps_box.set_margin_end(8)
         frame.add(caps_box)
 
-        # Capability checkboxes in rows
+        # Capability checkboxes in a grid for vertical alignment
         caps = self.original_card.capabilities if self.original_card else None
         
-        row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        caps_grid = Gtk.Grid()
+        caps_grid.set_column_spacing(16)
+        caps_grid.set_row_spacing(4)
+        caps_grid.set_column_homogeneous(True)
+        
         self.chk_text = Gtk.CheckButton(label="Text")
         self.chk_text.set_active(caps.text if caps else True)
         self.chk_vision = Gtk.CheckButton(label="Vision")
         self.chk_vision.set_active(caps.vision if caps else False)
         self.chk_audio_in = Gtk.CheckButton(label="Audio Input")
         self.chk_audio_in.set_active(caps.audio_in if caps else False)
-        row1.pack_start(self.chk_text, False, False, 0)
-        row1.pack_start(self.chk_vision, False, False, 0)
-        row1.pack_start(self.chk_audio_in, False, False, 0)
-        caps_box.pack_start(row1, False, False, 0)
+        caps_grid.attach(self.chk_text, 0, 0, 1, 1)
+        caps_grid.attach(self.chk_vision, 1, 0, 1, 1)
+        caps_grid.attach(self.chk_audio_in, 2, 0, 1, 1)
 
-        row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         self.chk_tool_use = Gtk.CheckButton(label="Tool Use")
         self.chk_tool_use.set_active(caps.tool_use if caps else False)
         self.chk_audio_out = Gtk.CheckButton(label="Audio Output")
         self.chk_audio_out.set_active(caps.audio_out if caps else False)
         self.chk_files = Gtk.CheckButton(label="File Uploads")
         self.chk_files.set_active(caps.files if caps else False)
-        row2.pack_start(self.chk_tool_use, False, False, 0)
-        row2.pack_start(self.chk_audio_out, False, False, 0)
-        row2.pack_start(self.chk_files, False, False, 0)
-        caps_box.pack_start(row2, False, False, 0)
+        caps_grid.attach(self.chk_tool_use, 0, 1, 1, 1)
+        caps_grid.attach(self.chk_audio_out, 1, 1, 1, 1)
+        caps_grid.attach(self.chk_files, 2, 1, 1, 1)
 
-        row3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         self.chk_web_search = Gtk.CheckButton(label="Web Search")
         self.chk_web_search.set_active(caps.web_search if caps else False)
         self.chk_image_gen = Gtk.CheckButton(label="Image Gen")
         self.chk_image_gen.set_active(caps.image_gen if caps else False)
         self.chk_image_edit = Gtk.CheckButton(label="Image Edit")
         self.chk_image_edit.set_active(caps.image_edit if caps else False)
-        row3.pack_start(self.chk_web_search, False, False, 0)
-        row3.pack_start(self.chk_image_gen, False, False, 0)
-        row3.pack_start(self.chk_image_edit, False, False, 0)
-        caps_box.pack_start(row3, False, False, 0)
+        caps_grid.attach(self.chk_web_search, 0, 2, 1, 1)
+        caps_grid.attach(self.chk_image_gen, 1, 2, 1, 1)
+        caps_grid.attach(self.chk_image_edit, 2, 2, 1, 1)
+        
+        caps_box.pack_start(caps_grid, False, False, 0)
 
         box.pack_start(frame, False, False, 0)
 
