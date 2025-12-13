@@ -230,18 +230,18 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
 # Prompt helpers
 # ---------------------------------------------------------------------------
 
-def is_chat_completion_model(model_name: str) -> bool:
+def is_chat_completion_model(model_name: str, custom_models: dict = None) -> bool:
     """
     Return True if the model behaves like a standard text chat completion model.
     
     REDUNDANT: This function uses legacy string heuristics. Prefer using:
-        card = get_card(model_name)
+        card = get_card(model_name, custom_models)
         if card:
             return card.is_chat_model()
     TODO(cleanup): Remove after Phase 5 refactoring - callers should use card.is_chat_model().
     """
     # Card-first: use model card if available
-    card = get_card(model_name)
+    card = get_card(model_name, custom_models)
     if card:
         return card.is_chat_model()
     

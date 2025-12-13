@@ -228,6 +228,7 @@ class CustomProvider(AIProvider):
     ):
         api_type = (self.api_type or "chat.completions").lower()
         if api_type == "responses":
+            print(f"[CustomProvider] Using Responses API for model: {model or self.model_name}")
             return self._call_responses(
                 messages,
                 temperature,
@@ -239,6 +240,7 @@ class CustomProvider(AIProvider):
             )
         
         # Default to chat.completions
+        print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_name}")
         url = self._url("/chat/completions")
         
         # Determine which tools are enabled
@@ -1905,12 +1907,15 @@ class GrokProvider(AIProvider):
         if hasattr(response, "output") and response.output:
             for item in response.output:
                 item_type = getattr(item, "type", None)
+                print(f"[GrokProvider] Response item type: {item_type}")
 
                 # Handle message output (contains text).
                 if item_type == "message" and hasattr(item, "content"):
                     for content_item in item.content:
                         if hasattr(content_item, "text"):
                             text_content += content_item.text
+                            # Debug: show first 500 chars of text
+                            # print(f"[GrokProvider] Text content (first 500 chars): {content_item.text[:500]}")
 
         return text_content
 
@@ -2106,12 +2111,14 @@ class GrokProvider(AIProvider):
 
         # Simple one-shot path when no tools are involved.
         if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
+            print(f"[GrokProvider] Using chat.completions API for model: {model}")
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
 
         # Tool-aware flow for Grok: let the model call generate_image, route that
         # through the handler, and then append the resulting <img> tags so the
         # UI can render images even if the model does not echo them back.
+        print(f"[GrokProvider] Using chat.completions API (with tools) for model: {model}")
         tool_aware_messages = params["messages"]
         max_tool_rounds = 3
         last_response = None
@@ -2365,12 +2372,14 @@ class ClaudeProvider(AIProvider):
 
         # Simple one-shot path when no tools are involved.
         if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
+            print(f"[ClaudeProvider] Using chat.completions API for model: {model}")
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
 
         # Tool-aware flow for Claude: let the model call tools, route them
         # through handlers, and append results (e.g. <img> tags) so the UI can
         # render them even if the model does not echo them back explicitly.
+        print(f"[ClaudeProvider] Using chat.completions API (with tools) for model: {model}")
         tool_aware_messages = params["messages"]
         max_tool_rounds = 3
         last_response = None
@@ -2540,6 +2549,7 @@ class PerplexityProvider(AIProvider):
 
         # Perplexity doesn't support function calling tools in the same way as OpenAI,
         # so we use a simple one-shot path.
+        print(f"[PerplexityProvider] Using chat.completions API for model: {model}")
         response = self.client.chat.completions.create(**params)
         content = response.choices[0].message.content or ""
 
@@ -2803,6 +2813,7 @@ class GeminiProvider(AIProvider):
             )
         
         try:
+            print(f"[GeminiProvider] Using generateContent API for model: {model}")
             resp = requests.post(
                 f"{self.BASE_URL}/models/{model}:generateContent",
                 headers=self._headers(),
