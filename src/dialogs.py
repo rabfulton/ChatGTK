@@ -167,11 +167,22 @@ class CustomModelDialog(Gtk.Dialog):
         entry_widget.set_placeholder_text("Optional - select from known keys or enter custom")
         
         # Load known API keys and populate dropdown
-        from utils import API_KEY_FIELDS
+        from utils import API_KEY_FIELDS, get_api_key_env_vars
         api_keys = load_api_keys()
         
         # Track items as we add them for initial value matching
         item_index_map = {}  # Maps key_name -> index
+        self._env_var_items = {}  # Maps index -> env_var_name for env var entries
+        
+        # Add environment variable API keys first
+        env_vars = get_api_key_env_vars()
+        for env_name in sorted(env_vars.keys()):
+            item_text = f"ENV: ${env_name}"
+            self.combo_api_key.append_text(item_text)
+            model = self.combo_api_key.get_model()
+            index = model.iter_n_children(None) - 1
+            item_index_map[f"${env_name}"] = index
+            self._env_var_items[index] = env_name
         
         # Add standard keys
         standard_key_names = {
@@ -204,20 +215,27 @@ class CustomModelDialog(Gtk.Dialog):
         # Set initial value if provided
         initial_api_key = str(data.get("api_key", "")).strip()
         if initial_api_key:
-            # Try to match with a known key name
-            matched = False
-            for key_name, key_value in api_keys.items():
-                if key_value == initial_api_key:
-                    # Find matching item in our index map
-                    if key_name in item_index_map:
-                        index = item_index_map[key_name]
-                        self.combo_api_key.set_active(index)
-                        matched = True
-                        break
-            
-            # If no match found, set as custom text
-            if not matched:
-                entry_widget.set_text(initial_api_key)
+            # Check if it's an env var reference (starts with $)
+            if initial_api_key.startswith('$'):
+                if initial_api_key in item_index_map:
+                    self.combo_api_key.set_active(item_index_map[initial_api_key])
+                else:
+                    entry_widget.set_text(initial_api_key)
+            else:
+                # Try to match with a known key name
+                matched = False
+                for key_name, key_value in api_keys.items():
+                    if key_value == initial_api_key:
+                        # Find matching item in our index map
+                        if key_name in item_index_map:
+                            index = item_index_map[key_name]
+                            self.combo_api_key.set_active(index)
+                            matched = True
+                            break
+                
+                # If no match found, set as custom text
+                if not matched:
+                    entry_widget.set_text(initial_api_key)
         
         row.pack_start(label, False, False, 0)
         row.pack_start(self.combo_api_key, True, True, 0)
@@ -297,31 +315,37 @@ class CustomModelDialog(Gtk.Dialog):
         api_key = api_key_text  # Default to entry text
         
         if active_id >= 0:
-            # User selected from dropdown, extract key name and get actual value
-            from utils import load_api_keys, API_KEY_FIELDS
-            import re
-            api_keys = load_api_keys()
-            active_text = self.combo_api_key.get_active_text()
-            
-            # Extract key name from dropdown text
-            # Format for standard keys: "Display Name (key_name)" -> extract "key_name" from parentheses
-            # Format for custom keys: "key_name (custom)" -> extract "key_name" before "(custom)"
-            key_name = None
-            
-            # First try to match custom key format: "key_name (custom)"
-            custom_match = re.match(r'^(.+?)\s+\(custom\)$', active_text)
-            if custom_match:
-                key_name = custom_match.group(1).strip()
+            # Check if it's an environment variable selection
+            if active_id in self._env_var_items:
+                # Store env var reference instead of actual key
+                env_var_name = self._env_var_items[active_id]
+                api_key = f"${env_var_name}"
             else:
-                # Try standard key format: "Display Name (key_name)"
-                standard_match = re.search(r'\(([^)]+)\)', active_text)
-                if standard_match:
-                    key_name = standard_match.group(1).strip()
-            
-            # Look up the actual key value
-            if key_name and key_name in api_keys and api_keys[key_name]:
-                api_key = api_keys[key_name]
-            # If key not found or empty, fall through to use entry text (user may have edited it)
+                # User selected from dropdown, extract key name and get actual value
+                from utils import load_api_keys, API_KEY_FIELDS
+                import re
+                api_keys = load_api_keys()
+                active_text = self.combo_api_key.get_active_text()
+                
+                # Extract key name from dropdown text
+                # Format for standard keys: "Display Name (key_name)" -> extract "key_name" from parentheses
+                # Format for custom keys: "key_name (custom)" -> extract "key_name" before "(custom)"
+                key_name = None
+                
+                # First try to match custom key format: "key_name (custom)"
+                custom_match = re.match(r'^(.+?)\s+\(custom\)$', active_text)
+                if custom_match:
+                    key_name = custom_match.group(1).strip()
+                else:
+                    # Try standard key format: "Display Name (key_name)"
+                    standard_match = re.search(r'\(([^)]+)\)', active_text)
+                    if standard_match:
+                        key_name = standard_match.group(1).strip()
+                
+                # Look up the actual key value
+                if key_name and key_name in api_keys and api_keys[key_name]:
+                    api_key = api_keys[key_name]
+                # If key not found or empty, fall through to use entry text (user may have edited it)
         
         # If no dropdown item selected or lookup failed, api_key is already set to entry_text
         # This handles both custom typed values and edited dropdown selections
@@ -386,9 +410,13 @@ class CustomModelDialog(Gtk.Dialog):
             self.lbl_test_result.set_markup(f'<span color="red">{e}</span>')
             return
         
+        # Resolve env var reference for testing
+        from utils import resolve_api_key
+        resolved_key = resolve_api_key(data["api_key"])
+        
         provider = CustomProvider()
         provider.initialize(
-            api_key=data["api_key"],
+            api_key=resolved_key,
             endpoint=data["endpoint"],
             model_name=data["model_id"],
             api_type=data["api_type"],
@@ -2188,9 +2216,10 @@ class SettingsDialog(Gtk.Dialog):
 
     def _test_custom_model(self, cfg: dict):
         try:
+            from utils import resolve_api_key
             provider = CustomProvider()
             provider.initialize(
-                api_key=cfg.get("api_key", ""),
+                api_key=resolve_api_key(cfg.get("api_key", "")),
                 endpoint=cfg.get("endpoint"),
                 model_name=cfg.get("model_name") or cfg.get("model_id"),
                 api_type=cfg.get("api_type") or "chat.completions",

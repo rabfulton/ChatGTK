@@ -16,6 +16,35 @@ DEFAULT_SETTINGS = {key: config['default'] for key, config in SETTINGS_CONFIG.it
 # Known API key fields we persist in a separate JSON file under PARENT_DIR.
 API_KEY_FIELDS = ['openai', 'gemini', 'grok', 'claude', 'perplexity']
 
+import os
+
+def get_api_key_env_vars():
+    """
+    Scan environment variables and return those matching *API_KEY or *API_SECRET pattern.
+    Returns a dict of {var_name: value} for non-empty values.
+    """
+    result = {}
+    for key, value in os.environ.items():
+        if (key.endswith('_API_KEY') or key.endswith('_API_SECRET') or 
+            key.endswith('_KEY') and 'API' in key):
+            if value and value.strip():
+                result[key] = value.strip()
+    return result
+
+
+def resolve_api_key(value):
+    """
+    Resolve an API key value. If it starts with '$', treat it as an env var reference.
+    Returns the resolved value or empty string if env var not found.
+    """
+    if not value:
+        return ''
+    value = str(value).strip()
+    if value.startswith('$'):
+        env_var = value[1:]
+        return os.environ.get(env_var, '')
+    return value
+
 def apply_settings(obj, settings):
     """Apply settings to object attributes (converting to lowercase)"""
     for key, value in settings.items():

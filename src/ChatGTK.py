@@ -1083,8 +1083,9 @@ class OpenAIGTKClient(Gtk.Window):
                 if not cfg:
                     raise ValueError(f"Custom model '{model}' is not configured")
                 provider = get_ai_provider("custom")
+                from utils import resolve_api_key
                 provider.initialize(
-                    api_key=cfg.get("api_key", "").strip(),
+                    api_key=resolve_api_key(cfg.get("api_key", "")).strip(),
                     endpoint=cfg.get("endpoint"),
                     model_name=cfg.get("model_name") or model,
                     api_type=cfg.get("api_type") or "images",
@@ -1923,8 +1924,9 @@ class OpenAIGTKClient(Gtk.Window):
                     if not config:
                         raise ValueError(f"Custom model '{model}' is not configured")
                     provider = get_ai_provider("custom")
+                    from utils import resolve_api_key
                     provider.initialize(
-                        api_key=config.get("api_key", "").strip(),
+                        api_key=resolve_api_key(config.get("api_key", "")).strip(),
                         endpoint=config.get("endpoint"),
                         model_name=config.get("model_name") or model,
                         api_type=config.get("api_type") or "chat.completions",
@@ -3881,9 +3883,10 @@ class OpenAIGTKClient(Gtk.Window):
             voice = cfg.get('voice') or 'default'
             
             # Create and initialize the custom provider
+            from utils import resolve_api_key
             provider = CustomProvider()
             provider.initialize(
-                api_key=cfg.get('api_key', ''),
+                api_key=resolve_api_key(cfg.get('api_key', '')),
                 endpoint=cfg.get('endpoint', ''),
                 model_name=cfg.get('model_name') or cfg.get('model_id') or model_id,
                 api_type='tts',
