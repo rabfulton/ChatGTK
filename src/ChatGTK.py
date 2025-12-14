@@ -3879,8 +3879,13 @@ class OpenAIGTKClient(Gtk.Window):
             if not clean_text:
                 return True  # Nothing to say
             
-            # Get voice from model configuration
-            voice = cfg.get('voice') or 'default'
+            # Determine which voice to use: user selection -> model voice -> first in list -> default
+            selected_voice = getattr(self, 'tts_voice', None) or ''
+            cfg_voice = (cfg.get('voice') or '').strip()
+            cfg_voices = []
+            if isinstance(cfg.get('voices'), list):
+                cfg_voices = [v.strip() for v in cfg.get('voices') if isinstance(v, str) and v.strip()]
+            voice = selected_voice.strip() or cfg_voice or (cfg_voices[0] if cfg_voices else "default")
             
             # Create and initialize the custom provider
             from utils import resolve_api_key

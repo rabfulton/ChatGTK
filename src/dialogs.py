@@ -262,11 +262,37 @@ class CustomModelDialog(Gtk.Dialog):
         self.voice_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         label = Gtk.Label(label="Voice", xalign=0)
         label.set_size_request(120, -1)
-        self.entry_voice = Gtk.Entry()
-        self.entry_voice.set_placeholder_text("Voice name (e.g., alloy, nova)")
-        self.entry_voice.set_text(str(data.get("voice", "")))
+        voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.combo_voice = Gtk.ComboBoxText.new_with_entry()
+        self.combo_voice.set_entry_text_column(0)
+        self.combo_voice.set_hexpand(True)
+        self.voice_entry = self.combo_voice.get_child()
+        self.voice_entry.set_placeholder_text("Select or type a voice (e.g., alloy, nova)")
+
+        # Populate voices (support legacy single voice or list of voices)
+        initial_voices = []
+        data_voices = data.get("voices")
+        if isinstance(data_voices, list):
+            initial_voices.extend([v for v in data_voices if isinstance(v, str) and v.strip()])
+        legacy_voice = str(data.get("voice", "")).strip()
+        if legacy_voice and legacy_voice not in initial_voices:
+            initial_voices.insert(0, legacy_voice)
+        for voice in initial_voices:
+            self._add_voice_option(voice)
+
+        if legacy_voice and legacy_voice in initial_voices:
+            self.combo_voice.set_active(initial_voices.index(legacy_voice))
+        elif initial_voices:
+            self.combo_voice.set_active(0)
+
+        self.btn_add_voice = Gtk.Button.new_from_icon_name("list-add", Gtk.IconSize.BUTTON)
+        self.btn_add_voice.set_tooltip_text("Edit voice list")
+        self.btn_add_voice.connect("clicked", self._on_manage_voices_clicked)
+
+        voice_box.pack_start(self.combo_voice, True, True, 0)
+        voice_box.pack_start(self.btn_add_voice, False, False, 0)
         self.voice_row.pack_start(label, False, False, 0)
-        self.voice_row.pack_start(self.entry_voice, True, True, 0)
+        self.voice_row.pack_start(voice_box, True, True, 0)
         box.pack_start(self.voice_row, False, False, 0)
         
         # Show/hide voice row based on api_type
@@ -368,11 +394,112 @@ class CustomModelDialog(Gtk.Dialog):
         
         # Include voice for TTS models
         if api_type == "tts":
-            voice = self.entry_voice.get_text().strip()
+            voice_entry = self.combo_voice.get_child()
+            voice = self.combo_voice.get_active_text() or (voice_entry.get_text().strip() if voice_entry else "")
+            voices = self._get_voice_options()
+            if voice and voice not in voices:
+                voices.append(voice)
             if voice:
                 result["voice"] = voice
+            if voices:
+                result["voices"] = voices
         
         return result
+
+    def _get_voice_options(self):
+        """Return the list of voice options currently in the combo box."""
+        voices = []
+        model = self.combo_voice.get_model()
+        if model is None:
+            return voices
+        itr = model.get_iter_first()
+        while itr:
+            value = model[itr][0]
+            if value:
+                voices.append(value)
+            itr = model.iter_next(itr)
+        return voices
+
+    def _add_voice_option(self, voice: str):
+        """Add a voice to the combo if it is non-empty and not already present."""
+        voice_clean = (voice or "").strip()
+        if not voice_clean:
+            return
+        existing = self._get_voice_options()
+        if voice_clean in existing:
+            return
+        self.combo_voice.append_text(voice_clean)
+
+    def _set_voice_options(self, voices):
+        """Replace combo options with provided voices, keeping active selection when possible."""
+        voices_clean = []
+        for v in voices or []:
+            v_clean = (v or "").strip()
+            if v_clean and v_clean not in voices_clean:
+                voices_clean.append(v_clean)
+
+        current_voice = self.combo_voice.get_active_text()
+        self.combo_voice.remove_all()
+        for voice in voices_clean:
+            self.combo_voice.append_text(voice)
+
+        if current_voice and current_voice in voices_clean:
+            self.combo_voice.set_active(voices_clean.index(current_voice))
+        elif voices_clean:
+            self.combo_voice.set_active(0)
+        else:
+            entry = self.combo_voice.get_child()
+            if entry:
+                entry.set_text("")
+
+    def _on_manage_voices_clicked(self, button):
+        """Open a dialog to edit the list of voices."""
+        dialog = Gtk.Dialog(title="Edit Voices", transient_for=self, flags=0)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Save", Gtk.ResponseType.OK)
+        dialog.set_default_size(350, 260)
+
+        box = dialog.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+
+        instructions = Gtk.Label(
+            label="Enter one voice per line. Remove a line to delete a voice.",
+            xalign=0
+        )
+        instructions.set_line_wrap(True)
+        box.pack_start(instructions, False, False, 0)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_hexpand(True)
+        scrolled.set_vexpand(True)
+        box.pack_start(scrolled, True, True, 0)
+
+        textview = Gtk.TextView()
+        textview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        buffer = textview.get_buffer()
+        existing = "\n".join(self._get_voice_options())
+        buffer.set_text(existing)
+        scrolled.add(textview)
+
+        dialog.show_all()
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            start_iter = buffer.get_start_iter()
+            end_iter = buffer.get_end_iter()
+            text = buffer.get_text(start_iter, end_iter, include_hidden_chars=True)
+            voices = []
+            for line in text.splitlines():
+                line_clean = line.strip()
+                if line_clean and line_clean not in voices:
+                    voices.append(line_clean)
+            self._set_voice_options(voices)
+
+        dialog.destroy()
 
     def _on_api_type_changed(self, combo):
         """Show/hide voice field based on API type selection."""
@@ -518,6 +645,12 @@ class ModelCardEditorDialog(Gtk.Dialog):
         if self.original_card:
             try:
                 provider_idx = self.PROVIDERS.index(self.original_card.provider)
+            except ValueError:
+                pass
+        elif isinstance(parent, CustomModelDialog):
+            # When opened from CustomModelDialog, default to "custom" for new models
+            try:
+                provider_idx = self.PROVIDERS.index("custom")
             except ValueError:
                 pass
         self.combo_provider.set_active(provider_idx)
@@ -2247,12 +2380,17 @@ class SettingsDialog(Gtk.Dialog):
         try:
             from utils import resolve_api_key
             provider = CustomProvider()
+            voice = cfg.get("voice")
+            if not voice:
+                cfg_voices = cfg.get("voices")
+                if isinstance(cfg_voices, list) and cfg_voices:
+                    voice = cfg_voices[0]
             provider.initialize(
                 api_key=resolve_api_key(cfg.get("api_key", "")),
                 endpoint=cfg.get("endpoint"),
                 model_name=cfg.get("model_name") or cfg.get("model_id"),
                 api_type=cfg.get("api_type") or "chat.completions",
-                voice=cfg.get("voice"),
+                voice=voice,
             )
             return provider.test_connection()
         except Exception as exc:
@@ -2780,6 +2918,50 @@ class SettingsDialog(Gtk.Dialog):
         selected_voice = self.combo_tts.get_active_text()
         voice_name_lower = selected_voice.lower() if selected_voice else ""
 
+        # Check for custom TTS providers
+        custom_model_cfg = self.custom_models.get(selected_provider) if hasattr(self, 'custom_models') else None
+        is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
+
+        if is_custom_tts:
+            # Use a cached preview if available
+            safe_provider = "".join(c if c.isalnum() else "_" for c in selected_provider)
+            preview_dir = Path(BASE_DIR) / "preview_custom"
+            preview_file = preview_dir / f"{safe_provider}_{voice_name_lower or 'default'}.wav"
+
+            if preview_file.exists():
+                try:
+                    subprocess.Popen(['paplay', str(preview_file)])
+                except Exception as e:
+                    self._show_preview_error(str(e))
+                return
+
+            # Generate a new preview clip
+            from ai_providers import CustomProvider
+            from utils import resolve_api_key
+
+            provider = CustomProvider()
+            voice_to_use = selected_voice or custom_model_cfg.get("voice") or "default"
+            try:
+                provider.initialize(
+                    api_key=resolve_api_key(custom_model_cfg.get("api_key", "")),
+                    endpoint=custom_model_cfg.get("endpoint", ""),
+                    model_name=custom_model_cfg.get("model_name") or custom_model_cfg.get("model_id") or selected_provider,
+                    api_type="tts",
+                    voice=voice_to_use,
+                )
+
+                preview_text = "Hey there!"
+                preview_dir.mkdir(parents=True, exist_ok=True)
+                audio_bytes = provider.generate_speech(preview_text, voice_to_use)
+
+                with open(preview_file, 'wb') as f:
+                    f.write(audio_bytes)
+
+                subprocess.Popen(['paplay', str(preview_file)])
+            except Exception as e:
+                self._show_preview_error(str(e))
+            return
+
         if selected_provider == "gemini":
             # Gemini TTS preview
             preview_dir = Path(BASE_DIR) / "gemini_preview"
@@ -2923,9 +3105,16 @@ class SettingsDialog(Gtk.Dialog):
         is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
 
         if is_custom_tts:
-            # Custom TTS model - use only the voice from model card
-            custom_voice = custom_model_cfg.get("voice") or "default"
-            voices = [custom_voice]
+            # Custom TTS model - use the provided voice list or fallback voice
+            cfg_voices = custom_model_cfg.get("voices")
+            voices = []
+            if isinstance(cfg_voices, list):
+                voices.extend([v for v in cfg_voices if isinstance(v, str) and v.strip()])
+            custom_voice = (custom_model_cfg.get("voice") or "").strip()
+            if custom_voice and custom_voice not in voices:
+                voices.insert(0, custom_voice)
+            if not voices:
+                voices = ["default"]
         elif provider_id == "gemini":
             voices = self.GEMINI_TTS_VOICES
         else:

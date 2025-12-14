@@ -137,13 +137,20 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
         # Default chat.completions: assume text + tools
         caps = Capabilities(text=True, tool_use=True)
 
+    voice = cfg.get("voice")
+    if not voice:
+        cfg_voices = cfg.get("voices")
+        if isinstance(cfg_voices, list) and cfg_voices:
+            # Use the first listed voice as the default for synthesized cards
+            voice = cfg_voices[0]
+
     return ModelCard(
         id=model_id,
         provider="custom",
         display_name=cfg.get("display_name") or model_id,
         api_family=api_type,
         base_url=cfg.get("endpoint"),
-        voice=cfg.get("voice"),  # Voice for TTS models
+        voice=voice,  # Voice for TTS models
         capabilities=caps,
         key_name=model_id,  # Custom models use their own key
     )
