@@ -23,6 +23,7 @@ from tools import (
     parse_tool_arguments,
 )
 from config import HISTORY_DIR
+from model_cards import get_card
 
 class AIProvider(ABC):
     """Abstract base class for AI providers."""
@@ -68,9 +69,10 @@ class CustomProvider(AIProvider):
         self.endpoint = None
         self.model_name = None
         self.api_type = "chat.completions"
+        self.voice = None
         self.session = requests.Session()
 
-    def initialize(self, api_key: str, endpoint: str = None, model_name: str = None, api_type: str = None):
+    def initialize(self, api_key: str, endpoint: str = None, model_name: str = None, api_type: str = None, voice: str = None):
         self.api_key = api_key
         if endpoint:
             self.endpoint = endpoint.rstrip("/")
@@ -78,10 +80,17 @@ class CustomProvider(AIProvider):
             self.model_name = model_name
         if api_type:
             self.api_type = api_type
+        if voice:
+            self.voice = voice
 
     # -----------------------------
     # Helpers
     # -----------------------------
+    def _debug(self, label: str, data: any):
+        """Print debug info if DEBUG_CHATGTK env var is set."""
+        if os.environ.get("DEBUG_CHATGTK"):
+            print(f"[DEBUG CustomProvider] {label}: {json.dumps(data, indent=2, default=str)}")
+
     def _headers(self):
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -227,6 +236,7 @@ class CustomProvider(AIProvider):
     ):
         api_type = (self.api_type or "chat.completions").lower()
         if api_type == "responses":
+            print(f"[CustomProvider] Using Responses API for model: {model or self.model_name}")
             return self._call_responses(
                 messages,
                 temperature,
@@ -237,7 +247,61 @@ class CustomProvider(AIProvider):
                 read_aloud_tool_handler=read_aloud_tool_handler,
             )
         
+        if api_type == "tts":
+            print(f"[CustomProvider] Using TTS API for model: {model or self.model_name}")
+            self._debug("API Type", api_type)
+            self._debug("Endpoint", self.endpoint)
+            # Extract text from the last user message
+            text = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                text = item.get("text", "")
+                                break
+                            elif isinstance(item, str):
+                                text = item
+                                break
+                    break
+            
+            self._debug("TTS Text Input", text[:200] if text else "(empty)")
+            self._debug("TTS Voice", self.voice)
+            if not text:
+                return "No text provided for TTS generation."
+            
+            try:
+                audio_bytes = self.generate_speech(text, voice=self.voice)
+                # Save audio to chat history
+                audio_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'audio'
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or "tts"))
+                audio_path = audio_dir / f"{safe_model}_{timestamp}.mp3"
+                audio_path.write_bytes(audio_bytes)
+                
+                # Auto-play the audio using paplay (PulseAudio)
+                def play_audio(file_path):
+                    try:
+                        subprocess.run(['paplay', str(file_path)], check=True)
+                    except (subprocess.CalledProcessError, FileNotFoundError):
+                        try:
+                            subprocess.run(['aplay', str(file_path)], check=True)
+                        except Exception as e:
+                            print(f"Error playing audio: {e}")
+                
+                threading.Thread(target=play_audio, args=(audio_path,), daemon=True).start()
+                
+                # Return with audio_file tag for replay button support
+                return f"<audio_file>{audio_path}</audio_file>"
+            except Exception as e:
+                return f"TTS Error: {e}"
+        
         # Default to chat.completions
+        print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_name}")
         url = self._url("/chat/completions")
         
         # Determine which tools are enabled
@@ -252,17 +316,30 @@ class CustomProvider(AIProvider):
         # Build tool declarations for custom provider (uses OpenAI-compatible format)
         tools = build_tools_for_provider(enabled_tools, "custom")
         
+        # Check reasoning effort from model card
+        model_name = model or self.model_name
+        card = get_card(model_name)
+        reasoning_effort = None
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            reasoning_effort = card.quirks.get("reasoning_effort_level", "low")
+        
         # Simple one-shot path when no tools are involved
         if not enabled_tools:
-            payload = {"model": model or self.model_name, "messages": messages}
+            payload = {"model": model_name, "messages": messages}
             if temperature is not None:
                 payload["temperature"] = temperature
             if max_tokens and max_tokens > 0:
                 payload["max_tokens"] = int(max_tokens)
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
             
+            self._debug("Chat URL", url)
+            self._debug("Chat Payload", payload)
             resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+            self._debug("Chat Response Status", resp.status_code)
             resp.raise_for_status()
             data = resp.json()
+            self._debug("Chat Response Data", data)
             return self._extract_text(data, chat_id=chat_id)
         
         # Tool-aware flow: allow the model to call tools, route those through
@@ -274,13 +351,15 @@ class CustomProvider(AIProvider):
         
         for round_num in range(max_tool_rounds):
             payload = {
-                "model": model or self.model_name,
+                "model": model_name,
                 "messages": tool_aware_messages,
             }
             if temperature is not None:
                 payload["temperature"] = temperature
             if max_tokens and max_tokens > 0:
                 payload["max_tokens"] = int(max_tokens)
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
             if tools:
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
@@ -700,6 +779,12 @@ class CustomProvider(AIProvider):
         if tools:
             params["tools"] = tools
         
+        # Add reasoning effort if enabled in model card
+        card = get_card(self.model_name)
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            effort_level = card.quirks.get("reasoning_effort_level", "low")
+            params["reasoning"] = {"effort": effort_level}
+        
         # If no function tools are enabled, we can do a simple one-shot call
         if not enabled_tools:
             try:
@@ -905,11 +990,15 @@ class CustomProvider(AIProvider):
         raise NotImplementedError("Transcription not implemented for custom provider")
 
     def generate_speech(self, text, voice):
-        url = self._url("/audio/speech")
+        base = self._get_base_endpoint()
+        url = base + "/audio/speech" if base else "/audio/speech"
         payload = {"model": self.model_name, "input": text}
         if voice:
             payload["voice"] = voice
+        self._debug("TTS URL", url)
+        self._debug("TTS Payload", payload)
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+        self._debug("TTS Response Status", resp.status_code)
         resp.raise_for_status()
         return resp.content
 
@@ -1041,42 +1130,13 @@ class OpenAIProvider(AIProvider):
         """
         if not model:
             return False
+
+        # Check model card for web_search capability
+        card = get_card(model)
+        if card:
+            return card.capabilities.web_search
         
-        model_lower = model.lower()
-        
-        # Exclude models that don't support web search
-        excluded_terms = ("audio", "realtime", "image", "dall-e", "whisper", "tts")
-        if any(term in model_lower for term in excluded_terms):
-            return False
-        
-        # Explicit allow-list of models known to support web search via Responses API
-        # This is conservative to avoid sending unsupported tools to older models
-        web_search_models = {
-            # GPT-4o family
-            "gpt-4o",
-            "gpt-4o-mini",
-            "chatgpt-4o-latest",
-            # GPT-4 Turbo
-            "gpt-4-turbo",
-            "gpt-4-turbo-preview",
-            # GPT-5 family
-            "gpt-5.1",
-            "gpt-5.1-chat-latest",
-            "gpt-5-pro",
-        }
-        
-        # Check explicit list first
-        if model in web_search_models or model_lower in web_search_models:
-            return True
-        
-        # Allow any gpt-5.x model
-        if model_lower.startswith("gpt-5"):
-            return True
-        
-        # Allow any gpt-4.x model (4.1, 4.5, etc.) but not older gpt-4
-        if model_lower.startswith("gpt-4."):
-            return True
-        
+        # Unknown model - default to no web search
         return False
 
     def _build_responses_input(self, messages) -> tuple:
@@ -1279,12 +1339,14 @@ class OpenAIProvider(AIProvider):
         str
             The assistant's response text, with any tool outputs appended.
         """
-        model_lower = (model or "").lower()
-        # Some Responses-only models (e.g. gpt-4o-mini-search-preview) do not
-        # support temperature. We gate the parameter below based on the model
-        # name to avoid "Model incompatible request argument supplied" errors.
-        is_search_model = "search" in model_lower
-        is_gpt5_model = model_lower.startswith("gpt-5")
+        # Some models do not support temperature - check the model card
+        card = get_card(model)
+        skip_temperature = card.quirks.get("no_temperature", False) if card else False
+        
+        # Check for reasoning effort
+        reasoning_effort = None
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            reasoning_effort = card.quirks.get("reasoning_effort_level", "low")
         
         # Build input from messages
         input_items, instructions = self._build_responses_input(messages)
@@ -1311,7 +1373,7 @@ class OpenAIProvider(AIProvider):
             params["instructions"] = instructions
         
         # Temperature handling - some models don't support it
-        if temperature is not None and not is_search_model and not is_gpt5_model:
+        if temperature is not None and not skip_temperature:
             params["temperature"] = temperature
         
         if max_tokens and max_tokens > 0:
@@ -1319,6 +1381,9 @@ class OpenAIProvider(AIProvider):
         
         if tools:
             params["tools"] = tools
+        
+        if reasoning_effort:
+            params["reasoning"] = {"effort": reasoning_effort}
         
         print(f"[OpenAIProvider] Calling Responses API with {len(input_items)} input items, {len(tools)} tools")
         
@@ -1439,18 +1504,20 @@ class OpenAIProvider(AIProvider):
             (requires_chat_completions: bool, reason: str)
             reason is one of: "audio", "reasoning", or ""
         """
-        model_lower = (model or "").lower()
-        
-        # Audio models require chat.completions for audio output modalities
-        if "audio" in model_lower:
-            return True, "audio"
-        
-        # Reasoning models (o1, o3) require special developer message handling
-        # that we've only tested with chat.completions
-        reasoning_models = ["o1-mini", "o1-preview", "o3", "o3-mini"]
-        if any(r in model_lower for r in reasoning_models):
-            return True, "reasoning"
-        
+        # Card-first: check model card for API routing hints
+        card = get_card(model)
+        if card:
+            if card.quirks.get("requires_audio_modality"):
+                return True, "audio"
+            if card.quirks.get("needs_developer_role"):
+                return True, "reasoning"
+            # If card explicitly specifies chat.completions, use it
+            if card.api_family == "chat.completions":
+                return True, ""
+            # Card exists but doesn't require chat.completions
+            return False, ""
+
+        # Unknown model - default to not requiring chat.completions
         return False, ""
 
     def _generate_with_chat_completions_audio(
@@ -1549,13 +1616,20 @@ class OpenAIProvider(AIProvider):
         messages,
         model: str,
         max_tokens: int,
+        image_tool_handler=None,
+        music_tool_handler=None,
+        read_aloud_tool_handler=None,
     ) -> str:
         """
-        Generate a response using chat.completions for reasoning models (o1, o3).
+        Generate a response using chat.completions for reasoning models (o1, o3, o4).
         
         Reasoning models require special developer message formatting and don't
-        support tools or temperature.
+        support temperature. Tool support depends on the model:
+        - o1 series: no tool support
+        - o3/o4 series: supports function calling
         """
+        from tools import build_tools_for_provider, parse_tool_arguments, run_tool_call
+        
         # Format messages for reasoning models
         formatted_messages = []
         formatting_flag_added = False
@@ -1589,9 +1663,96 @@ class OpenAIProvider(AIProvider):
         if max_tokens and max_tokens > 0:
             params["max_tokens"] = max_tokens
         
-        print(f"[OpenAIProvider] Using chat.completions for reasoning model: {model}")
-        response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content or ""
+        # Check if model supports tools (o3/o4 do, o1 doesn't)
+        card = get_card(model)
+        model_supports_tools = card and card.capabilities.tool_use
+        
+        # Add reasoning effort if enabled in model card
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            reasoning_effort = card.quirks.get("reasoning_effort_level", "low")
+            params["reasoning_effort"] = reasoning_effort
+        
+        # Build tools if model supports them and handlers are provided
+        enabled_tools = set()
+        if model_supports_tools:
+            if image_tool_handler is not None:
+                enabled_tools.add("generate_image")
+            if music_tool_handler is not None:
+                enabled_tools.add("control_music")
+            if read_aloud_tool_handler is not None:
+                enabled_tools.add("read_aloud")
+        
+        tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else []
+        if tools:
+            params["tools"] = tools
+            params["tool_choice"] = "auto"
+        
+        # Simple path when no tools are involved
+        if not enabled_tools:
+            print(f"[OpenAIProvider] Using chat.completions for reasoning model: {model}")
+            response = self.client.chat.completions.create(**params)
+            return response.choices[0].message.content or ""
+        
+        # Tool-aware flow for reasoning models with tool support
+        print(f"[OpenAIProvider] Using chat.completions (with tools) for reasoning model: {model}")
+        
+        from tools import ToolContext
+        tool_context = ToolContext(
+            image_handler=image_tool_handler,
+            music_handler=music_tool_handler,
+            read_aloud_handler=read_aloud_tool_handler,
+        )
+        
+        tool_aware_messages = formatted_messages.copy()
+        max_tool_rounds = 5
+        tool_result_snippets = []
+        
+        for round_num in range(max_tool_rounds):
+            response = self.client.chat.completions.create(
+                **{**params, "messages": tool_aware_messages}
+            )
+            
+            msg = response.choices[0].message
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            
+            if not tool_calls:
+                # No tools requested; this is the final assistant answer
+                final_text = msg.content or ""
+                if tool_result_snippets:
+                    return final_text + "\n\n" + "\n\n".join(tool_result_snippets)
+                return final_text
+            
+            # Process tool calls
+            tool_aware_messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in tool_calls
+                ],
+            })
+            
+            for tc in tool_calls:
+                parsed_args = parse_tool_arguments(tc.function.arguments)
+                tool_result = run_tool_call(tc.function.name, parsed_args, tool_context)
+                if tool_result:
+                    tool_result_snippets.append(tool_result)
+                
+                tool_aware_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": tool_result or "",
+                })
+        
+        # If we exhausted tool rounds, return what we have
+        final_text = msg.content if msg else ""
+        if tool_result_snippets:
+            return final_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return final_text
 
     def generate_chat_completion(
         self,
@@ -1636,6 +1797,9 @@ class OpenAIProvider(AIProvider):
                     messages=messages,
                     model=model,
                     max_tokens=max_tokens,
+                    image_tool_handler=image_tool_handler,
+                    music_tool_handler=music_tool_handler,
+                    read_aloud_tool_handler=read_aloud_tool_handler,
                 )
         
         # Default path: use Responses API for everything else
@@ -1656,9 +1820,13 @@ class OpenAIProvider(AIProvider):
         """
         Generate or edit an image using OpenAI image models.
         - For models like `dall-e-3` this performs text → image generation.
-        - For `gpt-image-1`/`gpt-image-1-mini` with `image_data` this performs image → image editing.
+        - For models with image_edit capability (gpt-image-1) with `image_data` this performs image editing.
         """
-        if model in ("gpt-image-1", "gpt-image-1-mini") and image_data:
+        # Check if model supports image editing via card
+        card = get_card(model)
+        supports_edit = card.capabilities.image_edit if card else False
+        
+        if supports_edit and image_data:
             # Image edit: decode the attached image and send it to the images.edit endpoint
             raw_bytes = base64.b64decode(image_data)
             
@@ -1782,13 +1950,13 @@ class GrokProvider(AIProvider):
         if not model:
             return False
 
-        model_lower = model.lower()
+        # Check model card for web_search capability
+        card = get_card(model)
+        if card:
+            return card.capabilities.web_search
 
-        # Skip obvious non-chat models.
-        if "image" in model_lower:
-            return False
-
-        return model_lower.startswith("grok-")
+        # Unknown model - default to no web search
+        return False
 
     def _build_responses_input(self, messages):
         """
@@ -1867,12 +2035,15 @@ class GrokProvider(AIProvider):
         if hasattr(response, "output") and response.output:
             for item in response.output:
                 item_type = getattr(item, "type", None)
+                print(f"[GrokProvider] Response item type: {item_type}")
 
                 # Handle message output (contains text).
                 if item_type == "message" and hasattr(item, "content"):
                     for content_item in item.content:
                         if hasattr(content_item, "text"):
                             text_content += content_item.text
+                            # Debug: show first 500 chars of text
+                            # print(f"[GrokProvider] Text content (first 500 chars): {content_item.text[:500]}")
 
         return text_content
 
@@ -2068,12 +2239,14 @@ class GrokProvider(AIProvider):
 
         # Simple one-shot path when no tools are involved.
         if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
+            print(f"[GrokProvider] Using chat.completions API for model: {model}")
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
 
         # Tool-aware flow for Grok: let the model call generate_image, route that
         # through the handler, and then append the resulting <img> tags so the
         # UI can render images even if the model does not echo them back.
+        print(f"[GrokProvider] Using chat.completions API (with tools) for model: {model}")
         tool_aware_messages = params["messages"]
         max_tool_rounds = 3
         last_response = None
@@ -2327,12 +2500,14 @@ class ClaudeProvider(AIProvider):
 
         # Simple one-shot path when no tools are involved.
         if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
+            print(f"[ClaudeProvider] Using chat.completions API for model: {model}")
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
 
         # Tool-aware flow for Claude: let the model call tools, route them
         # through handlers, and append results (e.g. <img> tags) so the UI can
         # render them even if the model does not echo them back explicitly.
+        print(f"[ClaudeProvider] Using chat.completions API (with tools) for model: {model}")
         tool_aware_messages = params["messages"]
         max_tool_rounds = 3
         last_response = None
@@ -2502,6 +2677,7 @@ class PerplexityProvider(AIProvider):
 
         # Perplexity doesn't support function calling tools in the same way as OpenAI,
         # so we use a simple one-shot path.
+        print(f"[PerplexityProvider] Using chat.completions API for model: {model}")
         response = self.client.chat.completions.create(**params)
         content = response.choices[0].message.content or ""
 
@@ -2734,10 +2910,12 @@ class GeminiProvider(AIProvider):
         def _supports_google_search_tool(model_name: str) -> bool:
             if not model_name:
                 return False
-            name = model_name.lower()
-            # Google Search grounding is available for Gemini 2.x+ models; we avoid
-            # attaching it to legacy 1.5 models that rely on google_search_retrieval.
-            return name.startswith("gemini-2.") or name.startswith("gemini-3.")
+            # Check model card for web_search capability
+            card = get_card(model_name)
+            if card:
+                return card.capabilities.web_search
+            # Unknown model - default to no web search
+            return False
 
         if web_search_enabled and _supports_google_search_tool(model):
             payload.setdefault("tools", []).append({"google_search": {}})
@@ -2760,6 +2938,7 @@ class GeminiProvider(AIProvider):
             )
         
         try:
+            print(f"[GeminiProvider] Using generateContent API for model: {model}")
             resp = requests.post(
                 f"{self.BASE_URL}/models/{model}:generateContent",
                 headers=self._headers(),

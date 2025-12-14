@@ -722,6 +722,16 @@ class ProtectedRegions:
         Extract triple-backtick code blocks and replace with tokens.
         Converts to lstlisting environments.
         """
+        # Languages that are safe to pass to listings; everything else falls back
+        # to an untyped lstlisting so LaTeX won't error on unknown languages
+        supported_languages = {
+            'bash', 'c', 'cpp', 'c++', 'cmake', 'css', 'dockerfile', 'go', 'html',
+            'ini', 'java', 'javascript', 'json', 'kotlin', 'latex', '{[latex]tex}',
+            'lua', 'make', 'markdown', 'php', 'plain', 'powershell', 'ps1', 'python',
+            'r', 'ruby', 'rust', 'scala', 'shell', 'sql', 'swift', 'text', 'toml',
+            'ts', 'typescript', 'xml', 'yaml'
+        }
+
         def codeblock_repl(match):
             language = match.group(1) or ""
             code = match.group(2)
@@ -735,6 +745,7 @@ class ProtectedRegions:
                 'javascript': 'java',
                 'pango': '',  # Not supported, use default
                 'css': '',    # Not supported, use default
+                'mermaid': '',  # Diagrams - listings cannot load this language
             }
             
             # Normalize language for lstlisting
@@ -743,6 +754,10 @@ class ProtectedRegions:
             elif language.lower() in language_map:
                 mapped = language_map[language.lower()]
                 language = mapped if mapped else ""
+            
+            # Drop languages that listings cannot handle to avoid compilation errors
+            if language and language.lower() not in supported_languages:
+                language = ""
             
             # Escape HTML/XML tags in code to prevent LaTeX UTF-8 errors
             # Replace < and > with LaTeX equivalents

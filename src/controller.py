@@ -357,7 +357,7 @@ class ChatController:
             return []
 
         # For non-chat-completion models, skip extra system guidance
-        if not is_chat_completion_model(model_name):
+        if not is_chat_completion_model(model_name, self.custom_models):
             return self.apply_conversation_buffer_limit(self.conversation_history)
 
         first_message = self.conversation_history[0]

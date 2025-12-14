@@ -16,13 +16,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 import subprocess
 
+from model_cards import get_card
+
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-# Terms that indicate a model is NOT a standard chat completion model.
-CHAT_COMPLETION_EXCLUDE_TERMS = ("dall", "image", "realtime", "audio", "tts", "whisper")
 
 # Guidance appended to system prompts for math formatting.
 SYSTEM_PROMPT_APPENDIX = (
@@ -226,12 +225,19 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
 # Prompt helpers
 # ---------------------------------------------------------------------------
 
-def is_chat_completion_model(model_name: str) -> bool:
-    """Return True if the model behaves like a standard text chat completion model."""
-    if not model_name:
-        return True
-    lower_name = model_name.lower()
-    return not any(term in lower_name for term in CHAT_COMPLETION_EXCLUDE_TERMS)
+def is_chat_completion_model(model_name: str, custom_models: dict = None) -> bool:
+    """
+    Return True if the model behaves like a standard text chat completion model.
+    
+    Uses the model card system to determine if a model is a chat model.
+    For unknown models (not in catalog), defaults to True.
+    """
+    card = get_card(model_name, custom_models)
+    if card:
+        return card.is_chat_model()
+    
+    # Unknown model - default to assuming it's a chat model
+    return True
 
 
 def append_tool_guidance(
@@ -436,15 +442,6 @@ class ToolManager:
     and for building the appropriate handlers to pass to providers.
     """
 
-    # Models that are explicitly image-generation models (not chat models).
-    IMAGE_ONLY_MODELS = {
-        "dall-e-3",
-        "gpt-image-1",
-        "gpt-image-1-mini",
-        "gemini-3-pro-image-preview",
-        "gemini-2.5-flash-image",
-    }
-
     def __init__(
         self,
         image_tool_enabled: bool = True,
@@ -467,7 +464,12 @@ class ToolManager:
         self.music_tool_enabled = music_tool_enabled
         self.read_aloud_tool_enabled = read_aloud_tool_enabled
 
-    def get_provider_name_for_model(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None) -> str:
+    def get_provider_name_for_model(
+        self,
+        model_name: str,
+        model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> str:
         """
         Determine the provider name for a given model.
 
@@ -477,26 +479,29 @@ class ToolManager:
             The model name.
         model_provider_map : Optional[Dict[str, str]]
             Optional mapping of model names to provider names.
+        custom_models : Optional[Dict[str, Dict[str, Any]]]
+            Optional dict of custom model configurations.
 
         Returns
         -------
         str
-            The provider name ('openai', 'gemini', 'grok', 'claude', 'custom').
+            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom').
         """
         if not model_name:
             return "openai"
+
+        # Card-first: check model card for provider
+        card = get_card(model_name, custom_models)
+        if card:
+            return card.provider
+
+        # Fallback: check model_provider_map
         if model_provider_map:
             provider = model_provider_map.get(model_name)
             if provider:
                 return provider
 
-        lower = model_name.lower()
-        if lower.startswith("gemini-"):
-            return "gemini"
-        if lower.startswith("grok-"):
-            return "grok"
-        if lower.startswith("claude-"):
-            return "claude"
+        # Unknown model - default to openai
         return "openai"
 
     def is_image_model_for_provider(self, model_name: str, provider_name: str, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
@@ -515,160 +520,63 @@ class ToolManager:
         """
         if not model_name:
             return False
-        
-        # Check custom models first if provided
-        if provider_name == "custom" and custom_models:
-            cfg = custom_models.get(model_name, {})
-            return (cfg.get("api_type") or "").lower() == "images"
-        
-        lower = model_name.lower()
 
-        if provider_name == "openai":
-            return lower in ("dall-e-3", "gpt-image-1", "gpt-image-1-mini")
-        if provider_name == "gemini":
-            return lower in ("gemini-3-pro-image-preview", "gemini-2.5-flash-image")
-        if provider_name == "grok":
-            return lower.startswith("grok-2-image")
+        # Check model card for image_gen capability
+        # Note: We check image_gen directly, not is_image_model(), because multimodal
+        # models (like Gemini image models) have both text=True and image_gen=True
+        card = get_card(model_name, custom_models)
+        if card:
+            return card.capabilities.image_gen
+
+        # Unknown model - default to not an image model
+        return False
+
+    def _model_supports_tool_calling(
+        self,
+        model_name: str,
+        model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> bool:
+        """
+        Internal helper: Return True if the model supports tool/function calling.
+        
+        This is the card-based check used by all tool support methods.
+        """
+        if not model_name:
+            return False
+
+        # Check model card for tool support
+        card = get_card(model_name, custom_models)
+        if card:
+            # Model must support tools AND be a chat model (not an image-only model)
+            return card.supports_tools() and card.is_chat_model()
+
+        # Unknown model - default to no tool support
         return False
 
     def supports_image_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the image-generation tool.
         """
-        if not model_name:
-            return False
         if not self.image_tool_enabled:
             return False
-
-        provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
-            return False
-
-        lower = model_name.lower()
-        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
-            return False
-        if self.is_image_model_for_provider(model_name, provider, custom_models):
-            return False
-
-        # Custom models: assume they support tools if they use chat.completions API
-        # (exclude image-only models which are already filtered above)
-        if provider == "custom":
-            return True
-
-        # OpenAI GPT chat models.
-        if provider == "openai":
-            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
-
-        # Gemini chat models that support function calling.
-        if provider == "gemini":
-            return (
-                lower.startswith("gemini-2.5")
-                or lower.startswith("gemini-3-pro")
-                or lower.startswith("gemini-pro")
-                or lower.startswith("gemini-flash")
-            )
-
-        # Grok chat models.
-        if provider == "grok":
-            return lower.startswith("grok-")
-
-        # Claude chat models via the OpenAI SDK compatibility layer.
-        if provider == "claude":
-            return lower.startswith("claude-")
-
-        return False
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
     def supports_music_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the music-control tool.
         """
-        if not model_name:
-            return False
         if not self.music_tool_enabled:
             return False
-
-        provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
-            return False
-
-        lower = model_name.lower()
-        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
-            return False
-        if self.is_image_model_for_provider(model_name, provider, custom_models):
-            return False
-
-        # Custom models: assume they support tools if they use chat.completions API
-        if provider == "custom":
-            return True
-
-        # OpenAI GPT chat models.
-        if provider == "openai":
-            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
-
-        # Gemini chat models that support function calling.
-        if provider == "gemini":
-            return (
-                lower.startswith("gemini-2.5")
-                or lower.startswith("gemini-3-pro")
-                or lower.startswith("gemini-pro")
-                or lower.startswith("gemini-flash")
-            )
-
-        # Grok chat models.
-        if provider == "grok":
-            return lower.startswith("grok-")
-
-        # Claude chat models via the OpenAI SDK compatibility layer.
-        if provider == "claude":
-            return lower.startswith("claude-")
-
-        return False
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
     def supports_read_aloud_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Return True if the given model should be offered the read-aloud tool.
         """
-        if not model_name:
-            return False
         if not self.read_aloud_tool_enabled:
             return False
-
-        provider = self.get_provider_name_for_model(model_name, model_provider_map)
-        if provider not in ("openai", "gemini", "grok", "claude", "custom"):
-            return False
-
-        lower = model_name.lower()
-        if any(term in lower for term in CHAT_COMPLETION_EXCLUDE_TERMS):
-            return False
-        if self.is_image_model_for_provider(model_name, provider, custom_models):
-            return False
-
-        # Custom models: assume they support tools if they use chat.completions API
-        if provider == "custom":
-            return True
-
-        # OpenAI GPT chat models.
-        if provider == "openai":
-            return lower.startswith("gpt-") or lower.startswith("chatgpt-")
-
-        # Gemini chat models that support function calling.
-        if provider == "gemini":
-            return (
-                lower.startswith("gemini-2.5")
-                or lower.startswith("gemini-3-pro")
-                or lower.startswith("gemini-pro")
-                or lower.startswith("gemini-flash")
-            )
-
-        # Grok chat models.
-        if provider == "grok":
-            return lower.startswith("grok-")
-
-        # Claude chat models via the OpenAI SDK compatibility layer.
-        if provider == "claude":
-            return lower.startswith("claude-")
-
-        return False
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
     def get_enabled_tools_for_model(
         self,

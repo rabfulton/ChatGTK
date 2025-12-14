@@ -255,6 +255,7 @@ class ConversationHistory:
         model_name: str,
         enabled_tools: Optional[Set[str]] = None,
         model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Convert to a list of message dicts suitable for sending to a provider.
@@ -269,6 +270,8 @@ class ConversationHistory:
             Set of enabled tool names.
         model_provider_map : Optional[Dict[str, str]]
             Optional mapping of model names to provider names.
+        custom_models : Optional[Dict[str, Any]]
+            Optional dict of custom model configurations.
         
         Returns
         -------
@@ -279,7 +282,7 @@ class ConversationHistory:
             return []
         
         # For non-chat-completion models, return as-is
-        if not is_chat_completion_model(model_name):
+        if not is_chat_completion_model(model_name, custom_models):
             return self.to_list()
         
         # Get the base messages
@@ -376,6 +379,7 @@ def prepare_messages_for_model(
     history: List[Dict[str, Any]],
     model_name: str,
     enabled_tools: Optional[Set[str]] = None,
+    custom_models: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Prepare a conversation history for sending to a model.
@@ -390,6 +394,8 @@ def prepare_messages_for_model(
         The model name.
     enabled_tools : Optional[Set[str]]
         Set of enabled tool names.
+    custom_models : Optional[Dict[str, Any]]
+        Optional dict of custom model configurations.
     
     Returns
     -------
@@ -399,7 +405,7 @@ def prepare_messages_for_model(
     if not history:
         return []
     
-    if not is_chat_completion_model(model_name):
+    if not is_chat_completion_model(model_name, custom_models):
         return history
     
     first_message = history[0]

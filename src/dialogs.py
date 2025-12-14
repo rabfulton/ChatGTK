@@ -18,10 +18,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GtkSource
+from gi.repository import Gtk, GtkSource, GLib
 import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
+from model_cards import get_card, list_cards
 from utils import (
     load_settings,
     apply_settings,
@@ -166,11 +167,22 @@ class CustomModelDialog(Gtk.Dialog):
         entry_widget.set_placeholder_text("Optional - select from known keys or enter custom")
         
         # Load known API keys and populate dropdown
-        from utils import API_KEY_FIELDS
+        from utils import API_KEY_FIELDS, get_api_key_env_vars
         api_keys = load_api_keys()
         
         # Track items as we add them for initial value matching
         item_index_map = {}  # Maps key_name -> index
+        self._env_var_items = {}  # Maps index -> env_var_name for env var entries
+        
+        # Add environment variable API keys first
+        env_vars = get_api_key_env_vars()
+        for env_name in sorted(env_vars.keys()):
+            item_text = f"ENV: ${env_name}"
+            self.combo_api_key.append_text(item_text)
+            model = self.combo_api_key.get_model()
+            index = model.iter_n_children(None) - 1
+            item_index_map[f"${env_name}"] = index
+            self._env_var_items[index] = env_name
         
         # Add standard keys
         standard_key_names = {
@@ -203,20 +215,27 @@ class CustomModelDialog(Gtk.Dialog):
         # Set initial value if provided
         initial_api_key = str(data.get("api_key", "")).strip()
         if initial_api_key:
-            # Try to match with a known key name
-            matched = False
-            for key_name, key_value in api_keys.items():
-                if key_value == initial_api_key:
-                    # Find matching item in our index map
-                    if key_name in item_index_map:
-                        index = item_index_map[key_name]
-                        self.combo_api_key.set_active(index)
-                        matched = True
-                        break
-            
-            # If no match found, set as custom text
-            if not matched:
-                entry_widget.set_text(initial_api_key)
+            # Check if it's an env var reference (starts with $)
+            if initial_api_key.startswith('$'):
+                if initial_api_key in item_index_map:
+                    self.combo_api_key.set_active(item_index_map[initial_api_key])
+                else:
+                    entry_widget.set_text(initial_api_key)
+            else:
+                # Try to match with a known key name
+                matched = False
+                for key_name, key_value in api_keys.items():
+                    if key_value == initial_api_key:
+                        # Find matching item in our index map
+                        if key_name in item_index_map:
+                            index = item_index_map[key_name]
+                            self.combo_api_key.set_active(index)
+                            matched = True
+                            break
+                
+                # If no match found, set as custom text
+                if not matched:
+                    entry_widget.set_text(initial_api_key)
         
         row.pack_start(label, False, False, 0)
         row.pack_start(self.combo_api_key, True, True, 0)
@@ -239,6 +258,74 @@ class CustomModelDialog(Gtk.Dialog):
         row.pack_start(self.combo_api_type, False, False, 0)
         box.pack_start(row, False, False, 0)
 
+        # Voice (for TTS models only)
+        self.voice_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Voice", xalign=0)
+        label.set_size_request(120, -1)
+        voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.combo_voice = Gtk.ComboBoxText.new_with_entry()
+        self.combo_voice.set_entry_text_column(0)
+        self.combo_voice.set_hexpand(True)
+        self.voice_entry = self.combo_voice.get_child()
+        self.voice_entry.set_placeholder_text("Select or type a voice (e.g., alloy, nova)")
+
+        # Populate voices (support legacy single voice or list of voices)
+        initial_voices = []
+        data_voices = data.get("voices")
+        if isinstance(data_voices, list):
+            initial_voices.extend([v for v in data_voices if isinstance(v, str) and v.strip()])
+        legacy_voice = str(data.get("voice", "")).strip()
+        if legacy_voice and legacy_voice not in initial_voices:
+            initial_voices.insert(0, legacy_voice)
+        for voice in initial_voices:
+            self._add_voice_option(voice)
+
+        if legacy_voice and legacy_voice in initial_voices:
+            self.combo_voice.set_active(initial_voices.index(legacy_voice))
+        elif initial_voices:
+            self.combo_voice.set_active(0)
+
+        self.btn_add_voice = Gtk.Button.new_from_icon_name("list-add", Gtk.IconSize.BUTTON)
+        self.btn_add_voice.set_tooltip_text("Edit voice list")
+        self.btn_add_voice.connect("clicked", self._on_manage_voices_clicked)
+
+        voice_box.pack_start(self.combo_voice, True, True, 0)
+        voice_box.pack_start(self.btn_add_voice, False, False, 0)
+        self.voice_row.pack_start(label, False, False, 0)
+        self.voice_row.pack_start(voice_box, True, True, 0)
+        box.pack_start(self.voice_row, False, False, 0)
+        
+        # Show/hide voice row based on api_type
+        self.combo_api_type.connect("changed", self._on_api_type_changed)
+        self._on_api_type_changed(self.combo_api_type)  # Set initial visibility
+
+        # Store initial data for editing existing models
+        self._initial_model_id = str(data.get("model_id", data.get("model_name", "")))
+
+        # Advanced button for model card editing
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        spacer = Gtk.Label(label="", xalign=0)
+        spacer.set_size_request(120, -1)
+        self.btn_advanced = Gtk.Button(label="Advanced...")
+        self.btn_advanced.set_tooltip_text("Edit model capabilities and quirks")
+        self.btn_advanced.connect("clicked", self._on_advanced_clicked)
+        row.pack_start(spacer, False, False, 0)
+        row.pack_start(self.btn_advanced, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Test connection button
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        spacer = Gtk.Label(label="", xalign=0)
+        spacer.set_size_request(120, -1)
+        self.btn_test = Gtk.Button(label="Test Connection")
+        self.btn_test.connect("clicked", self._on_test_connection)
+        self.lbl_test_result = Gtk.Label(label="", xalign=0)
+        self.lbl_test_result.set_line_wrap(True)
+        row.pack_start(spacer, False, False, 0)
+        row.pack_start(self.btn_test, False, False, 0)
+        row.pack_start(self.lbl_test_result, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
         self.show_all()
 
     def get_data(self) -> dict:
@@ -254,31 +341,37 @@ class CustomModelDialog(Gtk.Dialog):
         api_key = api_key_text  # Default to entry text
         
         if active_id >= 0:
-            # User selected from dropdown, extract key name and get actual value
-            from utils import load_api_keys, API_KEY_FIELDS
-            import re
-            api_keys = load_api_keys()
-            active_text = self.combo_api_key.get_active_text()
-            
-            # Extract key name from dropdown text
-            # Format for standard keys: "Display Name (key_name)" -> extract "key_name" from parentheses
-            # Format for custom keys: "key_name (custom)" -> extract "key_name" before "(custom)"
-            key_name = None
-            
-            # First try to match custom key format: "key_name (custom)"
-            custom_match = re.match(r'^(.+?)\s+\(custom\)$', active_text)
-            if custom_match:
-                key_name = custom_match.group(1).strip()
+            # Check if it's an environment variable selection
+            if active_id in self._env_var_items:
+                # Store env var reference instead of actual key
+                env_var_name = self._env_var_items[active_id]
+                api_key = f"${env_var_name}"
             else:
-                # Try standard key format: "Display Name (key_name)"
-                standard_match = re.search(r'\(([^)]+)\)', active_text)
-                if standard_match:
-                    key_name = standard_match.group(1).strip()
-            
-            # Look up the actual key value
-            if key_name and key_name in api_keys and api_keys[key_name]:
-                api_key = api_keys[key_name]
-            # If key not found or empty, fall through to use entry text (user may have edited it)
+                # User selected from dropdown, extract key name and get actual value
+                from utils import load_api_keys, API_KEY_FIELDS
+                import re
+                api_keys = load_api_keys()
+                active_text = self.combo_api_key.get_active_text()
+                
+                # Extract key name from dropdown text
+                # Format for standard keys: "Display Name (key_name)" -> extract "key_name" from parentheses
+                # Format for custom keys: "key_name (custom)" -> extract "key_name" before "(custom)"
+                key_name = None
+                
+                # First try to match custom key format: "key_name (custom)"
+                custom_match = re.match(r'^(.+?)\s+\(custom\)$', active_text)
+                if custom_match:
+                    key_name = custom_match.group(1).strip()
+                else:
+                    # Try standard key format: "Display Name (key_name)"
+                    standard_match = re.search(r'\(([^)]+)\)', active_text)
+                    if standard_match:
+                        key_name = standard_match.group(1).strip()
+                
+                # Look up the actual key value
+                if key_name and key_name in api_keys and api_keys[key_name]:
+                    api_key = api_keys[key_name]
+                # If key not found or empty, fall through to use entry text (user may have edited it)
         
         # If no dropdown item selected or lookup failed, api_key is already set to entry_text
         # This handles both custom typed values and edited dropdown selections
@@ -290,7 +383,7 @@ class CustomModelDialog(Gtk.Dialog):
         if not endpoint:
             raise ValueError("Endpoint URL is required")
 
-        return {
+        result = {
             "model_id": model_id,
             "model_name": model_id,
             "display_name": display_name or model_id,
@@ -298,6 +391,517 @@ class CustomModelDialog(Gtk.Dialog):
             "api_key": api_key,
             "api_type": api_type,
         }
+        
+        # Include voice for TTS models
+        if api_type == "tts":
+            voice_entry = self.combo_voice.get_child()
+            voice = self.combo_voice.get_active_text() or (voice_entry.get_text().strip() if voice_entry else "")
+            voices = self._get_voice_options()
+            if voice and voice not in voices:
+                voices.append(voice)
+            if voice:
+                result["voice"] = voice
+            if voices:
+                result["voices"] = voices
+        
+        return result
+
+    def _get_voice_options(self):
+        """Return the list of voice options currently in the combo box."""
+        voices = []
+        model = self.combo_voice.get_model()
+        if model is None:
+            return voices
+        itr = model.get_iter_first()
+        while itr:
+            value = model[itr][0]
+            if value:
+                voices.append(value)
+            itr = model.iter_next(itr)
+        return voices
+
+    def _add_voice_option(self, voice: str):
+        """Add a voice to the combo if it is non-empty and not already present."""
+        voice_clean = (voice or "").strip()
+        if not voice_clean:
+            return
+        existing = self._get_voice_options()
+        if voice_clean in existing:
+            return
+        self.combo_voice.append_text(voice_clean)
+
+    def _set_voice_options(self, voices):
+        """Replace combo options with provided voices, keeping active selection when possible."""
+        voices_clean = []
+        for v in voices or []:
+            v_clean = (v or "").strip()
+            if v_clean and v_clean not in voices_clean:
+                voices_clean.append(v_clean)
+
+        current_voice = self.combo_voice.get_active_text()
+        self.combo_voice.remove_all()
+        for voice in voices_clean:
+            self.combo_voice.append_text(voice)
+
+        if current_voice and current_voice in voices_clean:
+            self.combo_voice.set_active(voices_clean.index(current_voice))
+        elif voices_clean:
+            self.combo_voice.set_active(0)
+        else:
+            entry = self.combo_voice.get_child()
+            if entry:
+                entry.set_text("")
+
+    def _on_manage_voices_clicked(self, button):
+        """Open a dialog to edit the list of voices."""
+        dialog = Gtk.Dialog(title="Edit Voices", transient_for=self, flags=0)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Save", Gtk.ResponseType.OK)
+        dialog.set_default_size(350, 260)
+
+        box = dialog.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+
+        instructions = Gtk.Label(
+            label="Enter one voice per line. Remove a line to delete a voice.",
+            xalign=0
+        )
+        instructions.set_line_wrap(True)
+        box.pack_start(instructions, False, False, 0)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_hexpand(True)
+        scrolled.set_vexpand(True)
+        box.pack_start(scrolled, True, True, 0)
+
+        textview = Gtk.TextView()
+        textview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        buffer = textview.get_buffer()
+        existing = "\n".join(self._get_voice_options())
+        buffer.set_text(existing)
+        scrolled.add(textview)
+
+        dialog.show_all()
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            start_iter = buffer.get_start_iter()
+            end_iter = buffer.get_end_iter()
+            text = buffer.get_text(start_iter, end_iter, include_hidden_chars=True)
+            voices = []
+            for line in text.splitlines():
+                line_clean = line.strip()
+                if line_clean and line_clean not in voices:
+                    voices.append(line_clean)
+            self._set_voice_options(voices)
+
+        dialog.destroy()
+
+    def _on_api_type_changed(self, combo):
+        """Show/hide voice field based on API type selection."""
+        api_type = combo.get_active_text() or "chat.completions"
+        if api_type == "tts":
+            self.voice_row.show_all()
+        else:
+            self.voice_row.hide()
+
+    def _on_advanced_clicked(self, button):
+        """Open the Model Card Editor dialog for this custom model."""
+        model_id = self.entry_model_id.get_text().strip()
+        if not model_id:
+            self.lbl_test_result.set_markup('<span color="red">Enter a Model ID first</span>')
+            return
+        
+        # Load custom models to pass context
+        custom_models = load_custom_models()
+        
+        dialog = ModelCardEditorDialog(self, model_id, custom_models)
+        response = dialog.run()
+        
+        if response == Gtk.ResponseType.OK:
+            from model_cards import set_override
+            override_data = dialog.get_override_data()
+            set_override(model_id, override_data)
+        
+        dialog.destroy()
+
+    def _on_test_connection(self, button):
+        """Test the custom model connection."""
+        try:
+            data = self.get_data()
+        except ValueError as e:
+            self.lbl_test_result.set_markup(f'<span color="red">{e}</span>')
+            return
+        
+        # Resolve env var reference for testing
+        from utils import resolve_api_key
+        resolved_key = resolve_api_key(data["api_key"])
+        
+        provider = CustomProvider()
+        provider.initialize(
+            api_key=resolved_key,
+            endpoint=data["endpoint"],
+            model_name=data["model_id"],
+            api_type=data["api_type"],
+            voice=data.get("voice"),
+        )
+        
+        self.btn_test.set_sensitive(False)
+        self.lbl_test_result.set_text("Testing...")
+        
+        def do_test():
+            ok, message = provider.test_connection()
+            GLib.idle_add(self._show_test_result, ok, message)
+        
+        threading.Thread(target=do_test, daemon=True).start()
+
+    def _show_test_result(self, ok, message):
+        """Show the test connection result."""
+        self.btn_test.set_sensitive(True)
+        if ok:
+            self.lbl_test_result.set_markup('<span color="green">✓ Connected</span>')
+        else:
+            # Truncate long error messages
+            short_msg = message[:80] + "..." if len(message) > 80 else message
+            self.lbl_test_result.set_markup(f'<span color="red">✗ {short_msg}</span>')
+        return False  # Don't repeat
+
+
+# ---------------------------------------------------------------------------
+# Model Card Editor dialog
+# ---------------------------------------------------------------------------
+
+class ModelCardEditorDialog(Gtk.Dialog):
+    """
+    Dialog for viewing and editing model card capabilities, API settings, and quirks.
+    
+    Can be used to:
+    - View capabilities of builtin models
+    - Override settings for any model
+    - Configure capabilities for custom models
+    """
+
+    PROVIDERS = ["openai", "gemini", "grok", "claude", "perplexity", "custom"]
+    API_FAMILIES = ["chat.completions", "responses", "images", "tts", "realtime"]
+
+    def __init__(self, parent, model_id: str, custom_models: dict = None):
+        super().__init__(title=f"Edit Model: {model_id}", transient_for=parent, flags=0)
+        self.set_modal(True)
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("Save", Gtk.ResponseType.OK)
+        self.set_default_size(500, 550)
+
+        self.model_id = model_id
+        self.custom_models = custom_models or {}
+        
+        # Load the current card (may be None for unknown models)
+        self.original_card = get_card(model_id, self.custom_models)
+        
+        # Check if there's an existing override
+        from model_cards import get_override
+        self.existing_override = get_override(model_id)
+        
+        box = self.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        # Model ID (read-only display)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Model ID", xalign=0)
+        label.set_size_request(120, -1)
+        id_label = Gtk.Label(label=model_id, xalign=0)
+        id_label.set_selectable(True)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(id_label, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Display Name
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Display Name", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_display_name = Gtk.Entry()
+        self.entry_display_name.set_placeholder_text("Optional display name")
+        if self.original_card and self.original_card.display_name:
+            self.entry_display_name.set_text(self.original_card.display_name)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_display_name, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Provider
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Provider", xalign=0)
+        label.set_size_request(120, -1)
+        self.combo_provider = Gtk.ComboBoxText()
+        for p in self.PROVIDERS:
+            self.combo_provider.append_text(p)
+        provider_idx = 0
+        if self.original_card:
+            try:
+                provider_idx = self.PROVIDERS.index(self.original_card.provider)
+            except ValueError:
+                pass
+        elif isinstance(parent, CustomModelDialog):
+            # When opened from CustomModelDialog, default to "custom" for new models
+            try:
+                provider_idx = self.PROVIDERS.index("custom")
+            except ValueError:
+                pass
+        self.combo_provider.set_active(provider_idx)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.combo_provider, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        # Base URL
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Base URL", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_base_url = Gtk.Entry()
+        self.entry_base_url.set_placeholder_text("Optional endpoint override")
+        if self.original_card and self.original_card.base_url:
+            self.entry_base_url.set_text(self.original_card.base_url)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_base_url, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        # API Family
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="API Family", xalign=0)
+        label.set_size_request(120, -1)
+        self.combo_api_family = Gtk.ComboBoxText()
+        for af in self.API_FAMILIES:
+            self.combo_api_family.append_text(af)
+        api_idx = 0
+        if self.original_card:
+            try:
+                api_idx = self.API_FAMILIES.index(self.original_card.api_family)
+            except ValueError:
+                pass
+        self.combo_api_family.set_active(api_idx)
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.combo_api_family, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        # --- Capabilities Section ---
+        frame = Gtk.Frame(label=" Capabilities ")
+        frame.set_margin_top(8)
+        caps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        caps_box.set_margin_top(8)
+        caps_box.set_margin_bottom(8)
+        caps_box.set_margin_start(8)
+        caps_box.set_margin_end(8)
+        frame.add(caps_box)
+
+        # Capability checkboxes in a grid for vertical alignment
+        caps = self.original_card.capabilities if self.original_card else None
+        
+        caps_grid = Gtk.Grid()
+        caps_grid.set_column_spacing(16)
+        caps_grid.set_row_spacing(4)
+        caps_grid.set_column_homogeneous(True)
+        
+        self.chk_text = Gtk.CheckButton(label="Text")
+        self.chk_text.set_active(caps.text if caps else True)
+        self.chk_vision = Gtk.CheckButton(label="Vision")
+        self.chk_vision.set_active(caps.vision if caps else False)
+        self.chk_audio_in = Gtk.CheckButton(label="Audio Input")
+        self.chk_audio_in.set_active(caps.audio_in if caps else False)
+        caps_grid.attach(self.chk_text, 0, 0, 1, 1)
+        caps_grid.attach(self.chk_vision, 1, 0, 1, 1)
+        caps_grid.attach(self.chk_audio_in, 2, 0, 1, 1)
+
+        self.chk_tool_use = Gtk.CheckButton(label="Tool Use")
+        self.chk_tool_use.set_active(caps.tool_use if caps else False)
+        self.chk_audio_out = Gtk.CheckButton(label="Audio Output")
+        self.chk_audio_out.set_active(caps.audio_out if caps else False)
+        self.chk_files = Gtk.CheckButton(label="File Uploads")
+        self.chk_files.set_active(caps.files if caps else False)
+        caps_grid.attach(self.chk_tool_use, 0, 1, 1, 1)
+        caps_grid.attach(self.chk_audio_out, 1, 1, 1, 1)
+        caps_grid.attach(self.chk_files, 2, 1, 1, 1)
+
+        self.chk_web_search = Gtk.CheckButton(label="Web Search")
+        self.chk_web_search.set_active(caps.web_search if caps else False)
+        self.chk_image_gen = Gtk.CheckButton(label="Image Gen")
+        self.chk_image_gen.set_active(caps.image_gen if caps else False)
+        self.chk_image_edit = Gtk.CheckButton(label="Image Edit")
+        self.chk_image_edit.set_active(caps.image_edit if caps else False)
+        caps_grid.attach(self.chk_web_search, 0, 2, 1, 1)
+        caps_grid.attach(self.chk_image_gen, 1, 2, 1, 1)
+        caps_grid.attach(self.chk_image_edit, 2, 2, 1, 1)
+        
+        caps_box.pack_start(caps_grid, False, False, 0)
+
+        box.pack_start(frame, False, False, 0)
+
+        # --- Quirks Section ---
+        frame = Gtk.Frame(label=" Quirks ")
+        frame.set_margin_top(8)
+        quirks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        quirks_box.set_margin_top(8)
+        quirks_box.set_margin_bottom(8)
+        quirks_box.set_margin_start(8)
+        quirks_box.set_margin_end(8)
+        frame.add(quirks_box)
+
+        quirks = self.original_card.quirks if self.original_card else {}
+
+        row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_no_temp = Gtk.CheckButton(label="No Temperature")
+        self.chk_no_temp.set_active(quirks.get("no_temperature", False))
+        self.chk_no_temp.set_tooltip_text("Model does not accept temperature parameter")
+        self.chk_dev_role = Gtk.CheckButton(label="Needs Developer Role")
+        self.chk_dev_role.set_active(quirks.get("needs_developer_role", False))
+        self.chk_dev_role.set_tooltip_text("Model requires 'developer' role instead of 'system'")
+        row1.pack_start(self.chk_no_temp, False, False, 0)
+        row1.pack_start(self.chk_dev_role, False, False, 0)
+        quirks_box.pack_start(row1, False, False, 0)
+
+        row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_audio_modality = Gtk.CheckButton(label="Requires Audio Modality")
+        self.chk_audio_modality.set_active(quirks.get("requires_audio_modality", False))
+        self.chk_audio_modality.set_tooltip_text("Model requires audio modality in request")
+        row2.pack_start(self.chk_audio_modality, False, False, 0)
+        quirks_box.pack_start(row2, False, False, 0)
+
+        # Reasoning effort row
+        row3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.chk_reasoning_effort = Gtk.CheckButton(label="Reasoning Effort")
+        self.chk_reasoning_effort.set_active(quirks.get("reasoning_effort_enabled", False))
+        self.chk_reasoning_effort.set_tooltip_text("Not all models support reasoning or all parameters")
+        self.chk_reasoning_effort.connect("toggled", self._on_reasoning_effort_toggled)
+        row3.pack_start(self.chk_reasoning_effort, False, False, 0)
+        
+        self.combo_reasoning_effort = Gtk.ComboBoxText()
+        self.REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"]
+        for level in self.REASONING_LEVELS:
+            self.combo_reasoning_effort.append_text(level)
+        effort_level = quirks.get("reasoning_effort_level", "low")
+        try:
+            effort_idx = self.REASONING_LEVELS.index(effort_level)
+        except ValueError:
+            effort_idx = 2  # Default to "low"
+        self.combo_reasoning_effort.set_active(effort_idx)
+        self.combo_reasoning_effort.set_sensitive(quirks.get("reasoning_effort_enabled", False))
+        row3.pack_start(self.combo_reasoning_effort, False, False, 0)
+        quirks_box.pack_start(row3, False, False, 0)
+
+        box.pack_start(frame, False, False, 0)
+
+        # --- Constraints Section ---
+        frame = Gtk.Frame(label=" Constraints (optional) ")
+        frame.set_margin_top(8)
+        const_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        const_box.set_margin_top(8)
+        const_box.set_margin_bottom(8)
+        const_box.set_margin_start(8)
+        const_box.set_margin_end(8)
+        frame.add(const_box)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Max Tokens", xalign=0)
+        label.set_size_request(100, -1)
+        self.entry_max_tokens = Gtk.Entry()
+        self.entry_max_tokens.set_placeholder_text("e.g., 4096")
+        self.entry_max_tokens.set_width_chars(10)
+        if self.original_card and self.original_card.max_tokens:
+            self.entry_max_tokens.set_text(str(self.original_card.max_tokens))
+        row.pack_start(label, False, False, 0)
+        row.pack_start(self.entry_max_tokens, False, False, 0)
+        const_box.pack_start(row, False, False, 0)
+
+        box.pack_start(frame, False, False, 0)
+
+        # --- Reset Button ---
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_margin_top(12)
+        self.btn_reset = Gtk.Button(label="Reset to Default")
+        self.btn_reset.connect("clicked", self._on_reset_clicked)
+        self.btn_reset.set_tooltip_text("Remove all overrides and revert to builtin defaults")
+        # Only enable if there's an existing override
+        self.btn_reset.set_sensitive(self.existing_override is not None)
+        btn_box.pack_end(self.btn_reset, False, False, 0)
+        box.pack_start(btn_box, False, False, 0)
+
+        self.show_all()
+
+    def _on_reset_clicked(self, button):
+        """Reset to default by deleting the override."""
+        from model_cards import delete_override
+        delete_override(self.model_id)
+        self.response(Gtk.ResponseType.REJECT)  # Special response to indicate reset
+
+    def _on_reasoning_effort_toggled(self, checkbox):
+        """Enable/disable reasoning effort dropdown based on checkbox state."""
+        self.combo_reasoning_effort.set_sensitive(checkbox.get_active())
+
+    def get_override_data(self) -> dict:
+        """
+        Build override data dict from current dialog state.
+        
+        Returns a dict suitable for saving to model_card_overrides.json.
+        """
+        override = {}
+        
+        # Basic fields
+        display_name = self.entry_display_name.get_text().strip()
+        if display_name:
+            override["display_name"] = display_name
+        
+        provider = self.combo_provider.get_active_text()
+        if provider:
+            override["provider"] = provider
+        
+        base_url = self.entry_base_url.get_text().strip()
+        if base_url:
+            override["base_url"] = base_url
+        
+        api_family = self.combo_api_family.get_active_text()
+        if api_family:
+            override["api_family"] = api_family
+        
+        # Capabilities
+        override["capabilities"] = {
+            "text": self.chk_text.get_active(),
+            "vision": self.chk_vision.get_active(),
+            "files": self.chk_files.get_active(),
+            "tool_use": self.chk_tool_use.get_active(),
+            "web_search": self.chk_web_search.get_active(),
+            "audio_in": self.chk_audio_in.get_active(),
+            "audio_out": self.chk_audio_out.get_active(),
+            "image_gen": self.chk_image_gen.get_active(),
+            "image_edit": self.chk_image_edit.get_active(),
+        }
+        
+        # Quirks
+        quirks = {}
+        if self.chk_no_temp.get_active():
+            quirks["no_temperature"] = True
+        if self.chk_dev_role.get_active():
+            quirks["needs_developer_role"] = True
+        if self.chk_audio_modality.get_active():
+            quirks["requires_audio_modality"] = True
+        if self.chk_reasoning_effort.get_active():
+            quirks["reasoning_effort_enabled"] = True
+            quirks["reasoning_effort_level"] = self.combo_reasoning_effort.get_active_text() or "low"
+        if quirks:
+            override["quirks"] = quirks
+        
+        # Constraints
+        max_tokens = self.entry_max_tokens.get_text().strip()
+        if max_tokens:
+            try:
+                override["max_tokens"] = int(max_tokens)
+            except ValueError:
+                pass
+        
+        return override
 
 
 # ---------------------------------------------------------------------------
@@ -803,7 +1407,7 @@ class SettingsDialog(Gtk.Dialog):
         label.set_hexpand(True)
         self.combo_tts_provider = Gtk.ComboBoxText()
 
-        # All TTS provider options (unified for all speech synthesis)
+        # Built-in TTS provider options
         tts_providers = [
             ("openai", "OpenAI TTS (tts-1 / tts-1-hd)"),
             ("gemini", "Gemini TTS"),
@@ -812,6 +1416,12 @@ class SettingsDialog(Gtk.Dialog):
         ]
         for provider_id, display_name in tts_providers:
             self.combo_tts_provider.append(provider_id, display_name)
+
+        # Add custom TTS models from custom_models.json
+        for model_id, cfg in self.custom_models.items():
+            if (cfg.get("api_type") or "").lower() == "tts":
+                display_name = cfg.get("display_name") or model_id
+                self.combo_tts_provider.append(model_id, f"{display_name} (custom)")
 
         current_tts_provider = getattr(self, "tts_voice_provider", "openai") or "openai"
         self.combo_tts_provider.set_active_id(current_tts_provider)
@@ -955,8 +1565,32 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     # Tool Options page
     # -----------------------------------------------------------------------
+    def _get_all_image_models(self):
+        """
+        Get all image-capable models from the catalog and custom models.
+        
+        Returns a sorted list of model IDs that have image generation capability.
+        """
+        image_models = set()
+        
+        # Get image models from the catalog
+        for model_id, card in list_cards().items():
+            if card.is_image_model() or card.capabilities.image_gen:
+                image_models.add(model_id)
+        
+        # Add custom image models (from custom_models.json)
+        for model_id, cfg in self.custom_models.items():
+            if (cfg.get("api_type") or "").lower() == "images":
+                image_models.add(model_id)
+            # Also check if there's a card override with image_gen capability
+            card = get_card(model_id, self.custom_models)
+            if card and (card.is_image_model() or card.capabilities.image_gen):
+                image_models.add(model_id)
+        
+        return sorted(image_models)
+
     def _refresh_image_model_dropdown(self):
-        """Refresh the image model dropdown to include any new custom image models."""
+        """Refresh the image model dropdown to include all image-capable models."""
         if not hasattr(self, 'combo_image_model') or self.combo_image_model is None:
             return
         
@@ -966,38 +1600,18 @@ class SettingsDialog(Gtk.Dialog):
         # Clear and rebuild the list
         self.combo_image_model.remove_all()
         
-        known_image_models = [
-            "dall-e-3",
-            "gpt-image-1",
-            "gpt-image-1-mini",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-            "grok-2-image-1212",
-        ]
+        # Get all image models from catalog and custom models
+        all_models = self._get_all_image_models()
         
-        for model_id in known_image_models:
+        for model_id in all_models:
             self.combo_image_model.append_text(model_id)
         
-        # Add custom image models
-        for model_id, cfg in self.custom_models.items():
-            if (cfg.get("api_type") or "").lower() == "images":
-                if model_id not in known_image_models:
-                    self.combo_image_model.append_text(model_id)
-        
         # Restore current value
-        all_models = known_image_models + [
-            model_id for model_id, cfg in self.custom_models.items()
-            if (cfg.get("api_type") or "").lower() == "images" and model_id not in known_image_models
-        ]
         if current_value in all_models:
-            active_index = 0
-            for idx, model_id in enumerate(all_models):
-                if model_id == current_value:
-                    active_index = idx
-                    break
+            active_index = all_models.index(current_value)
             self.combo_image_model.set_active(active_index)
         else:
-            # Set as entry text if not in list
+            # Set as entry text if not in list (allows custom values)
             entry = self.combo_image_model.get_child()
             if entry:
                 entry.set_text(current_value)
@@ -1052,42 +1666,22 @@ class SettingsDialog(Gtk.Dialog):
         label.set_hexpand(True)
         self.combo_image_model = Gtk.ComboBoxText.new_with_entry()
 
-        known_image_models = [
-            "dall-e-3",
-            "gpt-image-1",
-            "gpt-image-1-mini",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-            "grok-2-image-1212",
-        ]
+        # Get all image models from catalog and custom models
+        all_image_models = self._get_all_image_models()
 
-        for model_id in known_image_models:
+        for model_id in all_image_models:
             self.combo_image_model.append_text(model_id)
 
-        # Add custom image models
-        for model_id, cfg in self.custom_models.items():
-            if (cfg.get("api_type") or "").lower() == "images":
-                if model_id not in known_image_models:
-                    self.combo_image_model.append_text(model_id)
-
         current_image_model = getattr(self, "image_model", "dall-e-3")
-        active_index = 0
-        all_models = known_image_models + [
-            model_id for model_id, cfg in self.custom_models.items()
-            if (cfg.get("api_type") or "").lower() == "images" and model_id not in known_image_models
-        ]
-        for idx, model_id in enumerate(all_models):
-            if model_id == current_image_model:
-                active_index = idx
-                break
         
-        # If current model is not in the list, set it as the entry text
-        if current_image_model not in all_models:
+        # If current model is in the list, select it; otherwise set as entry text
+        if current_image_model in all_image_models:
+            active_index = all_image_models.index(current_image_model)
+            self.combo_image_model.set_active(active_index)
+        else:
             entry = self.combo_image_model.get_child()
             if entry:
                 entry.set_text(current_image_model)
-        else:
-            self.combo_image_model.set_active(active_index)
 
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.combo_image_model, False, True, 0)
@@ -1784,12 +2378,19 @@ class SettingsDialog(Gtk.Dialog):
 
     def _test_custom_model(self, cfg: dict):
         try:
+            from utils import resolve_api_key
             provider = CustomProvider()
+            voice = cfg.get("voice")
+            if not voice:
+                cfg_voices = cfg.get("voices")
+                if isinstance(cfg_voices, list) and cfg_voices:
+                    voice = cfg_voices[0]
             provider.initialize(
-                api_key=cfg.get("api_key", ""),
+                api_key=resolve_api_key(cfg.get("api_key", "")),
                 endpoint=cfg.get("endpoint"),
                 model_name=cfg.get("model_name") or cfg.get("model_id"),
                 api_type=cfg.get("api_type") or "chat.completions",
+                voice=voice,
             )
             return provider.test_connection()
         except Exception as exc:
@@ -1983,14 +2584,25 @@ class SettingsDialog(Gtk.Dialog):
                 hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 row.add(hbox)
                 
-                # Checkbox
-                cb = Gtk.CheckButton(label=model_id)
+                # Checkbox with capability badges
+                cb = Gtk.CheckButton()
+                cb_label = Gtk.Label()
+                cb_label.set_markup(self._format_model_label_with_badges(model_id))
+                cb_label.set_xalign(0)
+                cb.add(cb_label)
                 cb.set_active(model_id in whitelist_set)
-                cb.set_size_request(200, -1)
+                cb.set_size_request(250, -1)
+                cb.set_tooltip_text(self._get_capability_tooltip(model_id))
                 hbox.pack_start(cb, False, False, 0)
                 
                 # Spacer to push entry box to the right
                 hbox.pack_start(Gtk.Box(), True, True, 0)
+                
+                # Edit button for model card
+                edit_btn = Gtk.Button.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
+                edit_btn.set_tooltip_text("Edit model capabilities")
+                edit_btn.connect("clicked", self._on_edit_model_card, model_id)
+                hbox.pack_end(edit_btn, False, False, 0)
                 
                 # Display name entry (positioned on the right side)
                 display_name_entry = Gtk.Entry()
@@ -2073,7 +2685,7 @@ class SettingsDialog(Gtk.Dialog):
         threading.Thread(target=do_refresh, daemon=True).start()
 
     def _get_display_name_for_model(self, model_id):
-        """Get display name for a model, checking custom models first, then display names setting."""
+        """Get display name for a model, checking: custom models -> settings -> card -> empty."""
         # Check custom models first
         if model_id in self.custom_models:
             custom_model = self.custom_models[model_id]
@@ -2082,7 +2694,65 @@ class SettingsDialog(Gtk.Dialog):
         
         # Check display names setting
         display_names = load_model_display_names()
-        return display_names.get(model_id, '')
+        if model_id in display_names:
+            return display_names[model_id]
+        
+        # Check model card for display name
+        card = get_card(model_id)
+        if card and card.display_name:
+            return card.display_name
+        
+        return ''
+
+    def _format_model_label_with_badges(self, model_id):
+        """Format model label with capability badges from model card."""
+        card = get_card(model_id)
+        
+        badges = []
+        if card:
+            if card.capabilities.vision:
+                badges.append("V")
+            if card.capabilities.tool_use:
+                badges.append("T")
+            if card.capabilities.web_search:
+                badges.append("W")
+            if card.capabilities.image_gen:
+                badges.append("I")
+            if card.capabilities.audio_out:
+                badges.append("A")
+        
+        if badges:
+            return f"{model_id}  <small><tt>[{' '.join(badges)}]</tt></small>"
+        return model_id
+
+    def _get_capability_tooltip(self, model_id):
+        """Get a tooltip describing model capabilities."""
+        card = get_card(model_id)
+        if not card:
+            return model_id
+        
+        lines = [model_id]
+        caps = []
+        if card.capabilities.vision:
+            caps.append("Vision")
+        if card.capabilities.tool_use:
+            caps.append("Tools")
+        if card.capabilities.web_search:
+            caps.append("Web Search")
+        if card.capabilities.image_gen:
+            caps.append("Image Generation")
+        if card.capabilities.audio_out:
+            caps.append("Audio Output")
+        if card.capabilities.files:
+            caps.append("File Uploads")
+        
+        if caps:
+            lines.append(f"Capabilities: {', '.join(caps)}")
+        
+        if card.api_family != "chat.completions":
+            lines.append(f"API: {card.api_family}")
+        
+        return "\n".join(lines)
     
     def _on_display_name_changed(self, entry, model_id):
         """Handler for when display name entry is changed."""
@@ -2114,6 +2784,24 @@ class SettingsDialog(Gtk.Dialog):
         # Refresh custom models list if this model is a custom model
         if model_id in self.custom_models:
             self._refresh_custom_models_list()
+
+    def _on_edit_model_card(self, button, model_id):
+        """Open the Model Card Editor dialog for the given model."""
+        dialog = ModelCardEditorDialog(self, model_id, self.custom_models)
+        response = dialog.run()
+        
+        if response == Gtk.ResponseType.OK:
+            # Save the override
+            from model_cards import set_override
+            override_data = dialog.get_override_data()
+            set_override(model_id, override_data)
+            # Refresh the whitelist to update capability badges
+            self._populate_model_whitelist_sections(preserve_selections=True)
+        elif response == Gtk.ResponseType.REJECT:
+            # Reset was clicked - override already deleted, just refresh
+            self._populate_model_whitelist_sections(preserve_selections=True)
+        
+        dialog.destroy()
 
     def _get_available_models_for_provider(self, provider_key, force_refresh=False):
         """
@@ -2229,6 +2917,50 @@ class SettingsDialog(Gtk.Dialog):
         selected_provider = self.combo_tts_provider.get_active_id() or "openai"
         selected_voice = self.combo_tts.get_active_text()
         voice_name_lower = selected_voice.lower() if selected_voice else ""
+
+        # Check for custom TTS providers
+        custom_model_cfg = self.custom_models.get(selected_provider) if hasattr(self, 'custom_models') else None
+        is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
+
+        if is_custom_tts:
+            # Use a cached preview if available
+            safe_provider = "".join(c if c.isalnum() else "_" for c in selected_provider)
+            preview_dir = Path(BASE_DIR) / "preview_custom"
+            preview_file = preview_dir / f"{safe_provider}_{voice_name_lower or 'default'}.wav"
+
+            if preview_file.exists():
+                try:
+                    subprocess.Popen(['paplay', str(preview_file)])
+                except Exception as e:
+                    self._show_preview_error(str(e))
+                return
+
+            # Generate a new preview clip
+            from ai_providers import CustomProvider
+            from utils import resolve_api_key
+
+            provider = CustomProvider()
+            voice_to_use = selected_voice or custom_model_cfg.get("voice") or "default"
+            try:
+                provider.initialize(
+                    api_key=resolve_api_key(custom_model_cfg.get("api_key", "")),
+                    endpoint=custom_model_cfg.get("endpoint", ""),
+                    model_name=custom_model_cfg.get("model_name") or custom_model_cfg.get("model_id") or selected_provider,
+                    api_type="tts",
+                    voice=voice_to_use,
+                )
+
+                preview_text = "Hey there!"
+                preview_dir.mkdir(parents=True, exist_ok=True)
+                audio_bytes = provider.generate_speech(preview_text, voice_to_use)
+
+                with open(preview_file, 'wb') as f:
+                    f.write(audio_bytes)
+
+                subprocess.Popen(['paplay', str(preview_file)])
+            except Exception as e:
+                self._show_preview_error(str(e))
+            return
 
         if selected_provider == "gemini":
             # Gemini TTS preview
@@ -2368,8 +3100,22 @@ class SettingsDialog(Gtk.Dialog):
         # Get the selected provider
         provider_id = self.combo_tts_provider.get_active_id() or "openai"
 
-        # Gemini TTS uses Gemini voices, all others use OpenAI voices
-        if provider_id == "gemini":
+        # Check if this is a custom TTS model
+        custom_model_cfg = self.custom_models.get(provider_id) if hasattr(self, 'custom_models') else None
+        is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
+
+        if is_custom_tts:
+            # Custom TTS model - use the provided voice list or fallback voice
+            cfg_voices = custom_model_cfg.get("voices")
+            voices = []
+            if isinstance(cfg_voices, list):
+                voices.extend([v for v in cfg_voices if isinstance(v, str) and v.strip()])
+            custom_voice = (custom_model_cfg.get("voice") or "").strip()
+            if custom_voice and custom_voice not in voices:
+                voices.insert(0, custom_voice)
+            if not voices:
+                voices = ["default"]
+        elif provider_id == "gemini":
             voices = self.GEMINI_TTS_VOICES
         else:
             # OpenAI TTS and audio-preview models use the same OpenAI voices
@@ -2391,16 +3137,20 @@ class SettingsDialog(Gtk.Dialog):
         """Show/hide HD Voice and Prompt Template rows based on the selected TTS provider."""
         provider_id = self.combo_tts_provider.get_active_id() or "openai"
         
-        # HD Voice only applies to OpenAI TTS (tts-1 / tts-1-hd)
+        # Check if this is a custom TTS model
+        custom_model_cfg = self.custom_models.get(provider_id) if hasattr(self, 'custom_models') else None
+        is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
+        
+        # HD Voice only applies to OpenAI TTS (tts-1 / tts-1-hd), not custom models
         if hasattr(self, 'row_hd_voice'):
-            if provider_id == "openai":
+            if provider_id == "openai" and not is_custom_tts:
                 self.row_hd_voice.show()
             else:
                 self.row_hd_voice.hide()
         
-        # Prompt Template only applies to Gemini TTS and audio-preview models
+        # Prompt Template only applies to Gemini TTS and audio-preview models (not custom)
         if hasattr(self, 'row_prompt_template'):
-            if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview"):
+            if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview") and not is_custom_tts:
                 self.row_prompt_template.show()
             else:
                 self.row_prompt_template.hide()

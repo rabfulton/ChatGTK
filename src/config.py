@@ -48,6 +48,8 @@ API_KEYS_FILE = os.path.join(PARENT_DIR, "api_keys.json")
 # Custom model definitions (including per-model API keys) are persisted
 # separately from the standard settings and API key files.
 CUSTOM_MODELS_FILE = os.path.join(PARENT_DIR, "custom_models.json")
+# User overrides for model cards (capabilities, quirks, etc.)
+MODEL_CARD_OVERRIDES_FILE = os.path.join(PARENT_DIR, "model_card_overrides.json")
 CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
 
 # Define settings configuration with their types and defaults
