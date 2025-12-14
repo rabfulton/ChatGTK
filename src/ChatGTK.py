@@ -1088,6 +1088,7 @@ class OpenAIGTKClient(Gtk.Window):
                     endpoint=cfg.get("endpoint"),
                     model_name=cfg.get("model_name") or model,
                     api_type=cfg.get("api_type") or "images",
+                    voice=cfg.get("voice"),
                 )
                 self.custom_providers[model] = provider
         else:
@@ -1445,6 +1446,10 @@ class OpenAIGTKClient(Gtk.Window):
             # Use unified TTS settings (tts_voice_provider)
             provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
             
+            # Check if this is a custom TTS model
+            custom_models = getattr(self, 'custom_models', {}) or {}
+            is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
+            
             if provider == 'openai':
                 success = self._synthesize_and_play_tts(
                     text,
@@ -1459,6 +1464,13 @@ class OpenAIGTKClient(Gtk.Window):
                 )
             elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
                 success = self._synthesize_and_play_audio_preview(
+                    text,
+                    chat_id=self.current_chat_id,
+                    model_id=provider,
+                    stop_event=None
+                )
+            elif is_custom_tts:
+                success = self._synthesize_and_play_custom_tts(
                     text,
                     chat_id=self.current_chat_id,
                     model_id=provider,
@@ -1916,6 +1928,7 @@ class OpenAIGTKClient(Gtk.Window):
                         endpoint=config.get("endpoint"),
                         model_name=config.get("model_name") or model,
                         api_type=config.get("api_type") or "chat.completions",
+                        voice=config.get("voice"),
                     )
                     self.custom_providers[model] = provider
             else:
@@ -2869,7 +2882,10 @@ class OpenAIGTKClient(Gtk.Window):
                 current_model = self._get_model_id_from_combo()
 
             # Only store the model name if it's not dall-e-3 and does not contain "tts" or "audio"
-            if "dall-e" not in current_model.lower() and "tts" not in current_model.lower() and "audio" not in current_model.lower():
+            # Exception: if no model is saved yet, this is the primary model - save it regardless
+            has_existing_model = len(self.conversation_history) > 0 and "model" in self.conversation_history[0]
+            is_excluded = "dall-e" in current_model.lower() or "tts" in current_model.lower() or "audio" in current_model.lower()
+            if not has_existing_model or not is_excluded:
                 self.conversation_history[0]["model"] = current_model
 
             # TODO: This may be reduntant
@@ -3485,6 +3501,10 @@ class OpenAIGTKClient(Gtk.Window):
                         # No cached file, use TTS synthesis based on current provider
                         provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
                         
+                        # Check if this is a custom TTS model
+                        custom_models = getattr(self, 'custom_models', {}) or {}
+                        is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
+                        
                         if provider == 'openai':
                             self._synthesize_and_play_tts(
                                 text_content,
@@ -3499,6 +3519,13 @@ class OpenAIGTKClient(Gtk.Window):
                             )
                         elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
                             self._synthesize_and_play_audio_preview(
+                                text_content,
+                                chat_id=self.current_chat_id,
+                                model_id=provider,
+                                stop_event=stop_event
+                            )
+                        elif is_custom_tts:
+                            self._synthesize_and_play_custom_tts(
                                 text_content,
                                 chat_id=self.current_chat_id,
                                 model_id=provider,
@@ -3827,6 +3854,88 @@ class OpenAIGTKClient(Gtk.Window):
             print(f"TTS Gemini error: {e}")
             return False
 
+    def _synthesize_and_play_custom_tts(self, text: str, *, chat_id: str, model_id: str, stop_event: threading.Event = None) -> bool:
+        """
+        Synthesize text using a custom TTS model defined in custom_models.json.
+        
+        Uses the CustomProvider to call the model's TTS endpoint with the voice
+        configured in the model definition.
+        Returns True if playback completed successfully, False otherwise.
+        """
+        from ai_providers import CustomProvider
+        
+        # Get the custom model configuration
+        custom_models = getattr(self, 'custom_models', {}) or {}
+        cfg = custom_models.get(model_id)
+        if not cfg:
+            print(f"TTS: Custom model '{model_id}' not found")
+            return False
+        
+        try:
+            # Clean the text of any audio file tags
+            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
+            if not clean_text:
+                return True  # Nothing to say
+            
+            # Get voice from model configuration
+            voice = cfg.get('voice') or 'default'
+            
+            # Create and initialize the custom provider
+            provider = CustomProvider()
+            provider.initialize(
+                api_key=cfg.get('api_key', ''),
+                endpoint=cfg.get('endpoint', ''),
+                model_name=cfg.get('model_name') or cfg.get('model_id') or model_id,
+                api_type='tts',
+                voice=voice
+            )
+            
+            # Generate cache file path
+            import hashlib
+            import tempfile
+            cache_key = f"{clean_text}_{model_id}_{voice}"
+            text_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
+            
+            if chat_id:
+                audio_dir = get_chat_dir(chat_id) / 'audio'
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                safe_model = "".join(c if c.isalnum() else "_" for c in model_id)
+                audio_file = audio_dir / f"custom_{safe_model}_{voice}_{text_hash}.wav"
+                
+                # Check for cached file
+                if audio_file.exists():
+                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+                    self.current_read_aloud_process.wait()
+                    return True
+            else:
+                audio_file = Path(tempfile.gettempdir()) / f"tts_custom_{text_hash}.wav"
+            
+            if stop_event and stop_event.is_set():
+                return False
+            
+            # Generate TTS audio using the custom provider
+            audio_bytes = provider.generate_speech(clean_text, voice)
+            
+            if stop_event and stop_event.is_set():
+                return False
+            
+            # Save the audio file
+            with open(audio_file, 'wb') as f:
+                f.write(audio_bytes)
+            
+            if stop_event and stop_event.is_set():
+                audio_file.unlink(missing_ok=True)
+                return False
+            
+            # Play the generated audio
+            self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
+            self.current_read_aloud_process.wait()
+            return True
+            
+        except Exception as e:
+            print(f"TTS Custom model error: {e}")
+            return False
+
     def read_aloud_text(self, text: str, *, chat_id: str = None):
         """
         Read the given text aloud using the unified TTS settings.
@@ -3855,6 +3964,10 @@ class OpenAIGTKClient(Gtk.Window):
             # Use unified TTS settings (tts_voice_provider)
             provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
             
+            # Check if this is a custom TTS model
+            custom_models = getattr(self, 'custom_models', {}) or {}
+            is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
+            
             try:
                 if provider == 'openai':
                     self._synthesize_and_play_tts(
@@ -3870,6 +3983,13 @@ class OpenAIGTKClient(Gtk.Window):
                     )
                 elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
                     self._synthesize_and_play_audio_preview(
+                        text,
+                        chat_id=chat_id,
+                        model_id=provider,
+                        stop_event=self.read_aloud_stop_event
+                    )
+                elif is_custom_tts:
+                    self._synthesize_and_play_custom_tts(
                         text,
                         chat_id=chat_id,
                         model_id=provider,

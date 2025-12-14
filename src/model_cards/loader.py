@@ -143,6 +143,7 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
         display_name=cfg.get("display_name") or model_id,
         api_family=api_type,
         base_url=cfg.get("endpoint"),
+        voice=cfg.get("voice"),  # Voice for TTS models
         capabilities=caps,
         key_name=model_id,  # Custom models use their own key
     )

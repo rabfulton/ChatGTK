@@ -41,14 +41,23 @@ def convert_settings_for_save(settings):
             converted[key] = str(value)
     return converted
 
-def _migrate_legacy_tts_settings(settings):
+def _migrate_legacy_tts_settings(settings, explicit_keys=None):
     """
     Migrate legacy READ_ALOUD_* settings to unified TTS_* settings.
     
     This handles backward compatibility for users upgrading from older versions
     that had separate Read Aloud settings. The new unified TTS settings are used
     by the play button, automatic read-aloud, and the read-aloud tool.
+    
+    Args:
+        settings: The settings dict to migrate
+        explicit_keys: Set of keys that were explicitly present in the settings file.
+                      If None, migration is skipped to avoid overwriting user choices.
     """
+    # If we don't know which keys were explicit, skip migration to be safe
+    if explicit_keys is None:
+        return settings
+    
     # Map legacy READ_ALOUD_PROVIDER values to new TTS_VOICE_PROVIDER values
     legacy_provider_map = {
         'tts': 'openai',
@@ -57,31 +66,32 @@ def _migrate_legacy_tts_settings(settings):
         'gpt-4o-mini-audio-preview': 'gpt-4o-mini-audio-preview',
     }
     
-    # Migrate READ_ALOUD_PROVIDER -> TTS_VOICE_PROVIDER if TTS provider is still default
-    legacy_provider = settings.get('READ_ALOUD_PROVIDER', 'tts')
-    if settings.get('TTS_VOICE_PROVIDER') == DEFAULT_SETTINGS.get('TTS_VOICE_PROVIDER', 'openai'):
+    # Only migrate if TTS_VOICE_PROVIDER was NOT explicitly set in the file
+    # This prevents the legacy setting from overwriting user's explicit choice
+    if 'TTS_VOICE_PROVIDER' not in explicit_keys:
+        legacy_provider = settings.get('READ_ALOUD_PROVIDER', 'tts')
         if legacy_provider in legacy_provider_map:
             new_provider = legacy_provider_map[legacy_provider]
-            if new_provider != 'openai':  # Only migrate if it was non-default
-                settings['TTS_VOICE_PROVIDER'] = new_provider
+            settings['TTS_VOICE_PROVIDER'] = new_provider
     
-    # Migrate READ_ALOUD_VOICE -> TTS_VOICE if TTS voice is still default
-    legacy_voice = settings.get('READ_ALOUD_VOICE', 'alloy')
-    if settings.get('TTS_VOICE') == DEFAULT_SETTINGS.get('TTS_VOICE', 'alloy'):
-        if legacy_voice != 'alloy':  # Only migrate if it was non-default
+    # Only migrate TTS_VOICE if not explicitly set
+    if 'TTS_VOICE' not in explicit_keys:
+        legacy_voice = settings.get('READ_ALOUD_VOICE', 'alloy')
+        if legacy_voice:
             settings['TTS_VOICE'] = legacy_voice
     
-    # Migrate READ_ALOUD_AUDIO_PROMPT_TEMPLATE -> TTS_PROMPT_TEMPLATE if not set
-    legacy_template = settings.get('READ_ALOUD_AUDIO_PROMPT_TEMPLATE', '')
-    default_legacy_template = SETTINGS_CONFIG.get('READ_ALOUD_AUDIO_PROMPT_TEMPLATE', {}).get('default', '')
-    if not settings.get('TTS_PROMPT_TEMPLATE') and legacy_template and legacy_template != default_legacy_template:
-        settings['TTS_PROMPT_TEMPLATE'] = legacy_template
+    # Only migrate TTS_PROMPT_TEMPLATE if not explicitly set
+    if 'TTS_PROMPT_TEMPLATE' not in explicit_keys:
+        legacy_template = settings.get('READ_ALOUD_AUDIO_PROMPT_TEMPLATE', '')
+        if legacy_template:
+            settings['TTS_PROMPT_TEMPLATE'] = legacy_template
     
     return settings
 
 def load_settings():
     """Load settings with type conversion based on config."""
     settings = DEFAULT_SETTINGS.copy()
+    explicit_keys = set()  # Track which keys were explicitly set in the file
     
     try:
         with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
@@ -95,6 +105,7 @@ def load_settings():
                     key = key.strip().upper()
                     value = value.strip()
                     if key in SETTINGS_CONFIG:
+                        explicit_keys.add(key)  # Mark this key as explicitly set
                         try:
                             # Special handling for boolean values
                             if SETTINGS_CONFIG[key]['type'] == bool:
@@ -109,8 +120,8 @@ def load_settings():
     except Exception as e:
         print(f"Error loading settings: {e}")
     
-    # Apply migration for legacy TTS settings
-    settings = _migrate_legacy_tts_settings(settings)
+    # Apply migration for legacy TTS settings (only for keys not explicitly set)
+    settings = _migrate_legacy_tts_settings(settings, explicit_keys)
     
     return settings
 

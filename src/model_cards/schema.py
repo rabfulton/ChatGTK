@@ -41,6 +41,7 @@ class ModelCard:
     # API/transport
     api_family: str = "chat.completions"        # chat.completions|responses|images|tts
     base_url: Optional[str] = None              # Override for custom endpoints
+    voice: Optional[str] = None                 # Voice name for TTS models
 
     # Capabilities
     capabilities: Capabilities = field(default_factory=Capabilities)

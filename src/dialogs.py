@@ -240,6 +240,21 @@ class CustomModelDialog(Gtk.Dialog):
         row.pack_start(self.combo_api_type, False, False, 0)
         box.pack_start(row, False, False, 0)
 
+        # Voice (for TTS models only)
+        self.voice_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="Voice", xalign=0)
+        label.set_size_request(120, -1)
+        self.entry_voice = Gtk.Entry()
+        self.entry_voice.set_placeholder_text("Voice name (e.g., alloy, nova)")
+        self.entry_voice.set_text(str(data.get("voice", "")))
+        self.voice_row.pack_start(label, False, False, 0)
+        self.voice_row.pack_start(self.entry_voice, True, True, 0)
+        box.pack_start(self.voice_row, False, False, 0)
+        
+        # Show/hide voice row based on api_type
+        self.combo_api_type.connect("changed", self._on_api_type_changed)
+        self._on_api_type_changed(self.combo_api_type)  # Set initial visibility
+
         # Store initial data for editing existing models
         self._initial_model_id = str(data.get("model_id", data.get("model_name", "")))
 
@@ -318,7 +333,7 @@ class CustomModelDialog(Gtk.Dialog):
         if not endpoint:
             raise ValueError("Endpoint URL is required")
 
-        return {
+        result = {
             "model_id": model_id,
             "model_name": model_id,
             "display_name": display_name or model_id,
@@ -326,6 +341,22 @@ class CustomModelDialog(Gtk.Dialog):
             "api_key": api_key,
             "api_type": api_type,
         }
+        
+        # Include voice for TTS models
+        if api_type == "tts":
+            voice = self.entry_voice.get_text().strip()
+            if voice:
+                result["voice"] = voice
+        
+        return result
+
+    def _on_api_type_changed(self, combo):
+        """Show/hide voice field based on API type selection."""
+        api_type = combo.get_active_text() or "chat.completions"
+        if api_type == "tts":
+            self.voice_row.show_all()
+        else:
+            self.voice_row.hide()
 
     def _on_advanced_clicked(self, button):
         """Open the Model Card Editor dialog for this custom model."""
@@ -361,6 +392,7 @@ class CustomModelDialog(Gtk.Dialog):
             endpoint=data["endpoint"],
             model_name=data["model_id"],
             api_type=data["api_type"],
+            voice=data.get("voice"),
         )
         
         self.btn_test.set_sensitive(False)
@@ -1185,7 +1217,7 @@ class SettingsDialog(Gtk.Dialog):
         label.set_hexpand(True)
         self.combo_tts_provider = Gtk.ComboBoxText()
 
-        # All TTS provider options (unified for all speech synthesis)
+        # Built-in TTS provider options
         tts_providers = [
             ("openai", "OpenAI TTS (tts-1 / tts-1-hd)"),
             ("gemini", "Gemini TTS"),
@@ -1194,6 +1226,12 @@ class SettingsDialog(Gtk.Dialog):
         ]
         for provider_id, display_name in tts_providers:
             self.combo_tts_provider.append(provider_id, display_name)
+
+        # Add custom TTS models from custom_models.json
+        for model_id, cfg in self.custom_models.items():
+            if (cfg.get("api_type") or "").lower() == "tts":
+                display_name = cfg.get("display_name") or model_id
+                self.combo_tts_provider.append(model_id, f"{display_name} (custom)")
 
         current_tts_provider = getattr(self, "tts_voice_provider", "openai") or "openai"
         self.combo_tts_provider.set_active_id(current_tts_provider)
@@ -2156,6 +2194,7 @@ class SettingsDialog(Gtk.Dialog):
                 endpoint=cfg.get("endpoint"),
                 model_name=cfg.get("model_name") or cfg.get("model_id"),
                 api_type=cfg.get("api_type") or "chat.completions",
+                voice=cfg.get("voice"),
             )
             return provider.test_connection()
         except Exception as exc:
@@ -2821,8 +2860,15 @@ class SettingsDialog(Gtk.Dialog):
         # Get the selected provider
         provider_id = self.combo_tts_provider.get_active_id() or "openai"
 
-        # Gemini TTS uses Gemini voices, all others use OpenAI voices
-        if provider_id == "gemini":
+        # Check if this is a custom TTS model
+        custom_model_cfg = self.custom_models.get(provider_id) if hasattr(self, 'custom_models') else None
+        is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
+
+        if is_custom_tts:
+            # Custom TTS model - use only the voice from model card
+            custom_voice = custom_model_cfg.get("voice") or "default"
+            voices = [custom_voice]
+        elif provider_id == "gemini":
             voices = self.GEMINI_TTS_VOICES
         else:
             # OpenAI TTS and audio-preview models use the same OpenAI voices
@@ -2844,16 +2890,20 @@ class SettingsDialog(Gtk.Dialog):
         """Show/hide HD Voice and Prompt Template rows based on the selected TTS provider."""
         provider_id = self.combo_tts_provider.get_active_id() or "openai"
         
-        # HD Voice only applies to OpenAI TTS (tts-1 / tts-1-hd)
+        # Check if this is a custom TTS model
+        custom_model_cfg = self.custom_models.get(provider_id) if hasattr(self, 'custom_models') else None
+        is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
+        
+        # HD Voice only applies to OpenAI TTS (tts-1 / tts-1-hd), not custom models
         if hasattr(self, 'row_hd_voice'):
-            if provider_id == "openai":
+            if provider_id == "openai" and not is_custom_tts:
                 self.row_hd_voice.show()
             else:
                 self.row_hd_voice.hide()
         
-        # Prompt Template only applies to Gemini TTS and audio-preview models
+        # Prompt Template only applies to Gemini TTS and audio-preview models (not custom)
         if hasattr(self, 'row_prompt_template'):
-            if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview"):
+            if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview") and not is_custom_tts:
                 self.row_prompt_template.show()
             else:
                 self.row_prompt_template.hide()

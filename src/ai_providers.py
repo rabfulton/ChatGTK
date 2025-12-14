@@ -69,9 +69,10 @@ class CustomProvider(AIProvider):
         self.endpoint = None
         self.model_name = None
         self.api_type = "chat.completions"
+        self.voice = None
         self.session = requests.Session()
 
-    def initialize(self, api_key: str, endpoint: str = None, model_name: str = None, api_type: str = None):
+    def initialize(self, api_key: str, endpoint: str = None, model_name: str = None, api_type: str = None, voice: str = None):
         self.api_key = api_key
         if endpoint:
             self.endpoint = endpoint.rstrip("/")
@@ -79,10 +80,17 @@ class CustomProvider(AIProvider):
             self.model_name = model_name
         if api_type:
             self.api_type = api_type
+        if voice:
+            self.voice = voice
 
     # -----------------------------
     # Helpers
     # -----------------------------
+    def _debug(self, label: str, data: any):
+        """Print debug info if DEBUG_CHATGTK env var is set."""
+        if os.environ.get("DEBUG_CHATGTK"):
+            print(f"[DEBUG CustomProvider] {label}: {json.dumps(data, indent=2, default=str)}")
+
     def _headers(self):
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -239,6 +247,59 @@ class CustomProvider(AIProvider):
                 read_aloud_tool_handler=read_aloud_tool_handler,
             )
         
+        if api_type == "tts":
+            print(f"[CustomProvider] Using TTS API for model: {model or self.model_name}")
+            self._debug("API Type", api_type)
+            self._debug("Endpoint", self.endpoint)
+            # Extract text from the last user message
+            text = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                text = item.get("text", "")
+                                break
+                            elif isinstance(item, str):
+                                text = item
+                                break
+                    break
+            
+            self._debug("TTS Text Input", text[:200] if text else "(empty)")
+            self._debug("TTS Voice", self.voice)
+            if not text:
+                return "No text provided for TTS generation."
+            
+            try:
+                audio_bytes = self.generate_speech(text, voice=self.voice)
+                # Save audio to chat history
+                audio_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'audio'
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or "tts"))
+                audio_path = audio_dir / f"{safe_model}_{timestamp}.mp3"
+                audio_path.write_bytes(audio_bytes)
+                
+                # Auto-play the audio using paplay (PulseAudio)
+                def play_audio(file_path):
+                    try:
+                        subprocess.run(['paplay', str(file_path)], check=True)
+                    except (subprocess.CalledProcessError, FileNotFoundError):
+                        try:
+                            subprocess.run(['aplay', str(file_path)], check=True)
+                        except Exception as e:
+                            print(f"Error playing audio: {e}")
+                
+                threading.Thread(target=play_audio, args=(audio_path,), daemon=True).start()
+                
+                # Return with audio_file tag for replay button support
+                return f"<audio_file>{audio_path}</audio_file>"
+            except Exception as e:
+                return f"TTS Error: {e}"
+        
         # Default to chat.completions
         print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_name}")
         url = self._url("/chat/completions")
@@ -263,9 +324,13 @@ class CustomProvider(AIProvider):
             if max_tokens and max_tokens > 0:
                 payload["max_tokens"] = int(max_tokens)
             
+            self._debug("Chat URL", url)
+            self._debug("Chat Payload", payload)
             resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+            self._debug("Chat Response Status", resp.status_code)
             resp.raise_for_status()
             data = resp.json()
+            self._debug("Chat Response Data", data)
             return self._extract_text(data, chat_id=chat_id)
         
         # Tool-aware flow: allow the model to call tools, route those through
@@ -908,11 +973,15 @@ class CustomProvider(AIProvider):
         raise NotImplementedError("Transcription not implemented for custom provider")
 
     def generate_speech(self, text, voice):
-        url = self._url("/audio/speech")
+        base = self._get_base_endpoint()
+        url = base + "/audio/speech" if base else "/audio/speech"
         payload = {"model": self.model_name, "input": text}
         if voice:
             payload["voice"] = voice
+        self._debug("TTS URL", url)
+        self._debug("TTS Payload", payload)
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+        self._debug("TTS Response Status", resp.status_code)
         resp.raise_for_status()
         return resp.content
 
