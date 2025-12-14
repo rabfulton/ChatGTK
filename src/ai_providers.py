@@ -316,13 +316,22 @@ class CustomProvider(AIProvider):
         # Build tool declarations for custom provider (uses OpenAI-compatible format)
         tools = build_tools_for_provider(enabled_tools, "custom")
         
+        # Check reasoning effort from model card
+        model_name = model or self.model_name
+        card = get_card(model_name)
+        reasoning_effort = None
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            reasoning_effort = card.quirks.get("reasoning_effort_level", "low")
+        
         # Simple one-shot path when no tools are involved
         if not enabled_tools:
-            payload = {"model": model or self.model_name, "messages": messages}
+            payload = {"model": model_name, "messages": messages}
             if temperature is not None:
                 payload["temperature"] = temperature
             if max_tokens and max_tokens > 0:
                 payload["max_tokens"] = int(max_tokens)
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
             
             self._debug("Chat URL", url)
             self._debug("Chat Payload", payload)
@@ -342,13 +351,15 @@ class CustomProvider(AIProvider):
         
         for round_num in range(max_tool_rounds):
             payload = {
-                "model": model or self.model_name,
+                "model": model_name,
                 "messages": tool_aware_messages,
             }
             if temperature is not None:
                 payload["temperature"] = temperature
             if max_tokens and max_tokens > 0:
                 payload["max_tokens"] = int(max_tokens)
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
             if tools:
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
@@ -767,6 +778,12 @@ class CustomProvider(AIProvider):
         
         if tools:
             params["tools"] = tools
+        
+        # Add reasoning effort if enabled in model card
+        card = get_card(self.model_name)
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            effort_level = card.quirks.get("reasoning_effort_level", "low")
+            params["reasoning"] = {"effort": effort_level}
         
         # If no function tools are enabled, we can do a simple one-shot call
         if not enabled_tools:
@@ -1326,6 +1343,11 @@ class OpenAIProvider(AIProvider):
         card = get_card(model)
         skip_temperature = card.quirks.get("no_temperature", False) if card else False
         
+        # Check for reasoning effort
+        reasoning_effort = None
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            reasoning_effort = card.quirks.get("reasoning_effort_level", "low")
+        
         # Build input from messages
         input_items, instructions = self._build_responses_input(messages)
         
@@ -1359,6 +1381,9 @@ class OpenAIProvider(AIProvider):
         
         if tools:
             params["tools"] = tools
+        
+        if reasoning_effort:
+            params["reasoning"] = {"effort": reasoning_effort}
         
         print(f"[OpenAIProvider] Calling Responses API with {len(input_items)} input items, {len(tools)} tools")
         
@@ -1641,6 +1666,11 @@ class OpenAIProvider(AIProvider):
         # Check if model supports tools (o3/o4 do, o1 doesn't)
         card = get_card(model)
         model_supports_tools = card and card.capabilities.tool_use
+        
+        # Add reasoning effort if enabled in model card
+        if card and card.quirks.get("reasoning_effort_enabled"):
+            reasoning_effort = card.quirks.get("reasoning_effort_level", "low")
+            params["reasoning_effort"] = reasoning_effort
         
         # Build tools if model supports them and handlers are provided
         enabled_tools = set()

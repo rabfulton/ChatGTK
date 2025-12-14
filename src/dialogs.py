@@ -637,6 +637,28 @@ class ModelCardEditorDialog(Gtk.Dialog):
         row2.pack_start(self.chk_audio_modality, False, False, 0)
         quirks_box.pack_start(row2, False, False, 0)
 
+        # Reasoning effort row
+        row3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.chk_reasoning_effort = Gtk.CheckButton(label="Reasoning Effort")
+        self.chk_reasoning_effort.set_active(quirks.get("reasoning_effort_enabled", False))
+        self.chk_reasoning_effort.set_tooltip_text("Not all models support reasoning or all parameters")
+        self.chk_reasoning_effort.connect("toggled", self._on_reasoning_effort_toggled)
+        row3.pack_start(self.chk_reasoning_effort, False, False, 0)
+        
+        self.combo_reasoning_effort = Gtk.ComboBoxText()
+        self.REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"]
+        for level in self.REASONING_LEVELS:
+            self.combo_reasoning_effort.append_text(level)
+        effort_level = quirks.get("reasoning_effort_level", "low")
+        try:
+            effort_idx = self.REASONING_LEVELS.index(effort_level)
+        except ValueError:
+            effort_idx = 2  # Default to "low"
+        self.combo_reasoning_effort.set_active(effort_idx)
+        self.combo_reasoning_effort.set_sensitive(quirks.get("reasoning_effort_enabled", False))
+        row3.pack_start(self.combo_reasoning_effort, False, False, 0)
+        quirks_box.pack_start(row3, False, False, 0)
+
         box.pack_start(frame, False, False, 0)
 
         # --- Constraints Section ---
@@ -681,6 +703,10 @@ class ModelCardEditorDialog(Gtk.Dialog):
         from model_cards import delete_override
         delete_override(self.model_id)
         self.response(Gtk.ResponseType.REJECT)  # Special response to indicate reset
+
+    def _on_reasoning_effort_toggled(self, checkbox):
+        """Enable/disable reasoning effort dropdown based on checkbox state."""
+        self.combo_reasoning_effort.set_sensitive(checkbox.get_active())
 
     def get_override_data(self) -> dict:
         """
@@ -728,6 +754,9 @@ class ModelCardEditorDialog(Gtk.Dialog):
             quirks["needs_developer_role"] = True
         if self.chk_audio_modality.get_active():
             quirks["requires_audio_modality"] = True
+        if self.chk_reasoning_effort.get_active():
+            quirks["reasoning_effort_enabled"] = True
+            quirks["reasoning_effort_level"] = self.combo_reasoning_effort.get_active_text() or "low"
         if quirks:
             override["quirks"] = quirks
         
