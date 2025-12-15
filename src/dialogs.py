@@ -708,30 +708,39 @@ class ModelCardEditorDialog(Gtk.Dialog):
         
         self.chk_text = Gtk.CheckButton(label="Text")
         self.chk_text.set_active(caps.text if caps else True)
+        self.chk_text.set_tooltip_text("Indicates that a model can receive text as an input modality.")
         self.chk_vision = Gtk.CheckButton(label="Vision")
         self.chk_vision.set_active(caps.vision if caps else False)
+        self.chk_vision.set_tooltip_text("Indicates that a model can receive images or videos as input.")
         self.chk_audio_in = Gtk.CheckButton(label="Audio Input")
         self.chk_audio_in.set_active(caps.audio_in if caps else False)
+        self.chk_audio_in.set_tooltip_text("Allows the model to receive audio and enables its use as a speech-to-text provider.")
         caps_grid.attach(self.chk_text, 0, 0, 1, 1)
         caps_grid.attach(self.chk_vision, 1, 0, 1, 1)
         caps_grid.attach(self.chk_audio_in, 2, 0, 1, 1)
 
         self.chk_tool_use = Gtk.CheckButton(label="Tool Use")
         self.chk_tool_use.set_active(caps.tool_use if caps else False)
+        self.chk_tool_use.set_tooltip_text("Enables function calling for the model and use of tools from the tools menu.")
         self.chk_audio_out = Gtk.CheckButton(label="Audio Output")
         self.chk_audio_out.set_active(caps.audio_out if caps else False)
+        self.chk_audio_out.set_tooltip_text("Flags models that speak directly; skips the built-in text-to-speech playback.")
         self.chk_files = Gtk.CheckButton(label="File Uploads")
         self.chk_files.set_active(caps.files if caps else False)
+        self.chk_files.set_tooltip_text("Allows file uploads to capable models.")
         caps_grid.attach(self.chk_tool_use, 0, 1, 1, 1)
         caps_grid.attach(self.chk_audio_out, 1, 1, 1, 1)
         caps_grid.attach(self.chk_files, 2, 1, 1, 1)
 
         self.chk_web_search = Gtk.CheckButton(label="Web Search")
         self.chk_web_search.set_active(caps.web_search if caps else False)
+        self.chk_web_search.set_tooltip_text("Adds provider search tools (currently OpenAI, Grok, and Gemini).")
         self.chk_image_gen = Gtk.CheckButton(label="Image Gen")
         self.chk_image_gen.set_active(caps.image_gen if caps else False)
+        self.chk_image_gen.set_tooltip_text("Marks the model as able to generate images; adds it to image tool options.")
         self.chk_image_edit = Gtk.CheckButton(label="Image Edit")
         self.chk_image_edit.set_active(caps.image_edit if caps else False)
+        self.chk_image_edit.set_tooltip_text("Allows attached images to be forwarded as editing sources in a conversation.")
         caps_grid.attach(self.chk_web_search, 0, 2, 1, 1)
         caps_grid.attach(self.chk_image_gen, 1, 2, 1, 1)
         caps_grid.attach(self.chk_image_edit, 2, 2, 1, 1)
@@ -776,12 +785,16 @@ class ModelCardEditorDialog(Gtk.Dialog):
         self.chk_dev_role = Gtk.CheckButton(label="Needs Developer Role")
         self.chk_dev_role.set_active(quirks.get("needs_developer_role", False))
         self.chk_dev_role.set_tooltip_text("Model requires 'developer' role instead of 'system'")
-        self.chk_audio_modality = Gtk.CheckButton(label="Requires Audio Modality")
-        self.chk_audio_modality.set_active(quirks.get("requires_audio_modality", False))
-        self.chk_audio_modality.set_tooltip_text("Model requires audio modality in request")
         row2.pack_start(self.chk_dev_role, False, False, 0)
-        row2.pack_start(self.chk_audio_modality, False, False, 0)
         quirks_box.pack_start(row2, False, False, 0)
+
+        # Voice agent flag on its own row for clarity
+        row_voice = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_audio_modality = Gtk.CheckButton(label="Voice Agent")
+        self.chk_audio_modality.set_active(quirks.get("requires_audio_modality", False))
+        self.chk_audio_modality.set_tooltip_text("Not a plain transcription model; uses chat endpoints with audio modality.")
+        row_voice.pack_start(self.chk_audio_modality, False, False, 0)
+        quirks_box.pack_start(row_voice, False, False, 0)
 
         # Reasoning effort row
         row3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -804,30 +817,6 @@ class ModelCardEditorDialog(Gtk.Dialog):
         self.combo_reasoning_effort.set_sensitive(quirks.get("reasoning_effort_enabled", False))
         row3.pack_start(self.combo_reasoning_effort, False, False, 0)
         quirks_box.pack_start(row3, False, False, 0)
-
-        box.pack_start(frame, False, False, 0)
-
-        # --- Constraints Section ---
-        frame = Gtk.Frame(label=" Constraints (optional) ")
-        frame.set_margin_top(8)
-        const_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        const_box.set_margin_top(8)
-        const_box.set_margin_bottom(8)
-        const_box.set_margin_start(8)
-        const_box.set_margin_end(8)
-        frame.add(const_box)
-
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        label = Gtk.Label(label="Max Tokens", xalign=0)
-        label.set_size_request(100, -1)
-        self.entry_max_tokens = Gtk.Entry()
-        self.entry_max_tokens.set_placeholder_text("e.g., 4096")
-        self.entry_max_tokens.set_width_chars(10)
-        if self.original_card and self.original_card.max_tokens:
-            self.entry_max_tokens.set_text(str(self.original_card.max_tokens))
-        row.pack_start(label, False, False, 0)
-        row.pack_start(self.entry_max_tokens, False, False, 0)
-        const_box.pack_start(row, False, False, 0)
 
         box.pack_start(frame, False, False, 0)
 
@@ -914,14 +903,6 @@ class ModelCardEditorDialog(Gtk.Dialog):
             quirks["reasoning_effort_level"] = self.combo_reasoning_effort.get_active_text() or "low"
         if quirks:
             override["quirks"] = quirks
-        
-        # Constraints
-        max_tokens = self.entry_max_tokens.get_text().strip()
-        if max_tokens:
-            try:
-                override["max_tokens"] = int(max_tokens)
-            except ValueError:
-                pass
         
         return override
 
