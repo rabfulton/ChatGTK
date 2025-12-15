@@ -1840,7 +1840,9 @@ class OpenAIGTKClient(Gtk.Window):
                     model=target_model,
                     system_message=self.system_message,
                     temperature=model_temperature,
-                    voice=self.realtime_voice
+                    voice=self.realtime_voice,
+                    realtime_prompt=self._get_realtime_prompt(),
+                    api_key=api_key
                 )
                 if not success:
                     self.display_error("Failed to connect to WebSocket server")
@@ -2540,7 +2542,7 @@ class OpenAIGTKClient(Gtk.Window):
                     if not hasattr(self, 'ws_provider'):
                         self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
                         self.ws_provider.microphone = self.microphone  # Pass selected microphone
-                    
+                
                     # Connect to WebSocket before starting stream
                     api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
                     if not api_key:
@@ -2554,7 +2556,9 @@ class OpenAIGTKClient(Gtk.Window):
                         model=current_model,
                         system_message=self.system_message,
                         temperature=model_temperature,
-                        voice=self.realtime_voice
+                        voice=self.realtime_voice,
+                        realtime_prompt=self._get_realtime_prompt(),
+                        api_key=api_key
                     ):
                         self.show_error_dialog("Failed to connect to OpenAI realtime service")
                         return False
@@ -2567,7 +2571,9 @@ class OpenAIGTKClient(Gtk.Window):
                         callback=self.on_stream_content_received,
                         microphone=self.microphone,
                         system_message=self.system_message,
-                        temperature=model_temperature
+                        temperature=model_temperature,
+                        realtime_prompt=self._get_realtime_prompt(),
+                        api_key=api_key
                     )
                     
                 except Exception as e:
@@ -4213,6 +4219,12 @@ class OpenAIGTKClient(Gtk.Window):
         if value >= 0.4:
             return Gtk.Justification.CENTER
         return Gtk.Justification.LEFT
+
+    def _get_realtime_prompt(self):
+        """Return the realtime prompt with the AI name substituted."""
+        template = getattr(self, "realtime_prompt", "") or "Your name is {name}, speak quickly and professionally"
+        ai_name = getattr(self, "ai_name", "") or "Assistant"
+        return template.replace("{name}", ai_name)
 
     def _is_latex_math_image(self, img_path: str) -> bool:
         """

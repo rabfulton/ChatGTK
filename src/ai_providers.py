@@ -3346,6 +3346,7 @@ class OpenAIWebSocketProvider:
         self.last_event_id = None  # Track event ID for responses
         self._callback_scheduler = callback_scheduler
         self.debug = False  # Realtime logging suppressed by default
+        self.api_key = None  # Allow callers to inject key directly
         
         # Audio configuration
         self.input_sample_rate = 48000  # Input from mic
@@ -3451,9 +3452,8 @@ class OpenAIWebSocketProvider:
 
     async def ensure_connection(self, voice):
         """Ensure we have an active WebSocket connection"""
-        self._log("Ensuring connection")
         if not self._ws_is_open():
-            api_key = os.getenv('OPENAI_API_KEY')
+            api_key = self.api_key or os.getenv('OPENAI_API_KEY')
             if not api_key:
                 raise ValueError("OPENAI_API_KEY environment variable not set")
             
@@ -3482,8 +3482,7 @@ class OpenAIWebSocketProvider:
             self.response_started = False  # reset stream state on fresh connect
             
             # Send initial configuration with session parameters
-            instructions = (self.system_message or "You are a helpful assistant.").strip()
-            instructions = f"{instructions} Start the conversation with a very brief introduction of yourself."
+            instructions = (self.realtime_prompt or "Your name is {name}, speak quickly and professionally").strip()
             config_message = {
                 "type": "session.update",
                 "session": {
@@ -3558,13 +3557,11 @@ class OpenAIWebSocketProvider:
                     device_idx = i
                     break
             
-            if self.debug:
-                print(f"Found device index: {device_idx}")
+            print(f"Found device index: {device_idx}")
             
             # If selected microphone not found, use default
             if device_idx is None:
-                if self.debug:
-                    print("Using default input device")
+                print("Using default input device")
                 device_idx = sd.default.device[0]
             
             # Query device capabilities
@@ -3597,10 +3594,9 @@ class OpenAIWebSocketProvider:
                 return
             
             with stream:
-                if self.debug:
-                    print(f"Started audio input stream: {supported_sample_rate}Hz, 1 channels")
-                    print(f"Using microphone: {devices[device_idx]['name']}")
-                    print(f"Resampling from {self.input_sample_rate}Hz to {self.output_sample_rate}Hz")
+                print(f"Started audio input stream: {supported_sample_rate}Hz, 1 channels")
+                print(f"Using microphone: {devices[device_idx]['name']}")
+                print(f"Resampling from {self.input_sample_rate}Hz to {self.output_sample_rate}Hz")
                 self._log("start_audio_stream: entering receive loop")
                 
                 while self.is_recording:
@@ -3814,7 +3810,7 @@ class OpenAIWebSocketProvider:
         except Exception as e:
             print(f"Error sending audio data: {e}")
 
-    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None):
+    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None):
         """Start streaming audio in a background task"""
         self._log("Starting streaming")
         # Store the configuration
@@ -3822,6 +3818,10 @@ class OpenAIWebSocketProvider:
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature
         self.voice = voice or "alloy"
+        if api_key:
+            self.api_key = api_key
+        if realtime_prompt:
+            self.realtime_prompt = realtime_prompt
         
         self.start_loop()
         
@@ -3937,13 +3937,17 @@ class OpenAIWebSocketProvider:
                 self.loop
             )
 
-    def connect(self, model=None, system_message=None, temperature=None, voice=None):
+    def connect(self, model=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None):
         """Initialize WebSocket connection without starting audio stream"""
         # Store the configuration
         self.model = model or 'gpt-4o-realtime-preview-2024-12-17'
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature
         self.voice = voice or "alloy"
+        if api_key:
+            self.api_key = api_key
+        if realtime_prompt:
+            self.realtime_prompt = realtime_prompt
         
         self.start_loop()
         

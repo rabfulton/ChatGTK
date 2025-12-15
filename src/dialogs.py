@@ -1393,9 +1393,8 @@ class SettingsDialog(Gtk.Dialog):
         row.add(hbox)
         label = Gtk.Label(label="Speech to Text", xalign=0)
         label.set_hexpand(True)
-        self.combo_stt_model = Gtk.ComboBoxText()
         # Allow custom entry for future models
-        self.combo_stt_model.set_property("has-entry", True)
+        self.combo_stt_model = Gtk.ComboBoxText.new_with_entry()
         self.combo_stt_model.set_entry_text_column(0)
 
         # Known transcription models (client.audio.transcriptions.create)
@@ -1583,7 +1582,7 @@ class SettingsDialog(Gtk.Dialog):
         row.set_activatable(False)
         list_box.add(row)
 
-        # Realtime Voice
+        # Realtime Voice + Prompt
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -1593,7 +1592,7 @@ class SettingsDialog(Gtk.Dialog):
         voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.combo_realtime = Gtk.ComboBoxText()
 
-        realtime_voices = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"]
+        realtime_voices = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
         for voice in realtime_voices:
             self.combo_realtime.append_text(voice)
 
@@ -1607,8 +1606,26 @@ class SettingsDialog(Gtk.Dialog):
 
         voice_box.pack_start(self.combo_realtime, True, True, 0)
         voice_box.pack_start(self.btn_preview_realtime, False, False, 0)
+        voice_box.set_hexpand(True)
         hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(voice_box, False, True, 0)
+        hbox.pack_start(voice_box, True, True, 0)
+        list_box.add(row)
+
+        # Realtime Prompt (expanded like Speech Prompt Template)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Realtime Prompt", xalign=0)
+        label.set_hexpand(False)
+        self.entry_realtime_prompt = Gtk.Entry()
+        self.entry_realtime_prompt.set_hexpand(True)
+        self.entry_realtime_prompt.set_width_chars(50)
+        default_rt_prompt = getattr(self, "realtime_prompt", "") or "Your name is {name}, speak quickly and professionally"
+        self.entry_realtime_prompt.set_text(default_rt_prompt)
+        self.entry_realtime_prompt.set_placeholder_text("Your name is {name}, speak quickly and professionally")
+        hbox.pack_start(label, False, True, 0)
+        hbox.pack_start(self.entry_realtime_prompt, True, True, 0)
         list_box.add(row)
 
         self.stack.add_named(scroll, "Audio")
@@ -3409,6 +3426,7 @@ class SettingsDialog(Gtk.Dialog):
             'tts_voice_provider': self.combo_tts_provider.get_active_id() or 'openai',
             'tts_voice': self.combo_tts.get_active_text(),
             'realtime_voice': self.combo_realtime.get_active_text(),
+            'realtime_prompt': self.entry_realtime_prompt.get_text(),
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
