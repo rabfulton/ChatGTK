@@ -2635,6 +2635,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Reset chat ID to indicate this is a new chat
         self.current_chat_id = None
+        self.history_list.unselect_all()
         
         # Clear the conversation display
         for child in self.conversation_box.get_children():
@@ -2659,10 +2660,11 @@ class OpenAIGTKClient(Gtk.Window):
                 self.history_filter_whole_words_toggle.set_active(self.history_filter_whole_words)
 
         # Preserve current selection if present
-        selected_filename = None
-        current_row = self.history_list.get_selected_row()
-        if current_row and hasattr(current_row, "filename"):
-            selected_filename = current_row.filename
+        selected_filename = self.current_chat_id
+        if selected_filename is None:
+            current_row = self.history_list.get_selected_row()
+            if current_row and hasattr(current_row, "filename"):
+                selected_filename = current_row.filename
 
         # Clear existing items
         for child in self.history_list.get_children():
@@ -2711,11 +2713,17 @@ class OpenAIGTKClient(Gtk.Window):
         self.history_list.show_all()
 
         # Restore selection if possible
+        selected_row = None
         if selected_filename:
             for row in self.history_list.get_children():
                 if getattr(row, "filename", None) == selected_filename:
-                    self.history_list.select_row(row)
+                    selected_row = row
                     break
+
+        if selected_row:
+            self.history_list.select_row(selected_row)
+        else:
+            self.history_list.unselect_all()
 
     def on_history_filter_changed(self, entry):
         """Debounce and apply history filter as the user types."""
