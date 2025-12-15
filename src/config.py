@@ -106,6 +106,7 @@ SETTINGS_CONFIG = {
     'TTS_PROMPT_TEMPLATE': {'type': str, 'default': ''},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},
     'REALTIME_PROMPT': {'type': str, 'default': 'Your name is {name}, speak quickly and professionally'},
+    'MUTE_MIC_DURING_PLAYBACK': {'type': bool, 'default': True},
     'SIDEBAR_VISIBLE': {'type': bool, 'default': True},
     'SIDEBAR_WIDTH': {'type': int, 'default': 200},
     'MAX_TOKENS': {'type': int, 'default': 0},

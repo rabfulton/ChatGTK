@@ -1841,6 +1841,7 @@ class OpenAIGTKClient(Gtk.Window):
                     system_message=self.system_message,
                     temperature=model_temperature,
                     voice=self.realtime_voice,
+                    mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
                     realtime_prompt=self._get_realtime_prompt(),
                     api_key=api_key
                 )
@@ -2557,6 +2558,7 @@ class OpenAIGTKClient(Gtk.Window):
                         system_message=self.system_message,
                         temperature=model_temperature,
                         voice=self.realtime_voice,
+                        mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
                         realtime_prompt=self._get_realtime_prompt(),
                         api_key=api_key
                     ):
@@ -2572,6 +2574,7 @@ class OpenAIGTKClient(Gtk.Window):
                         microphone=self.microphone,
                         system_message=self.system_message,
                         temperature=model_temperature,
+                        mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
                         realtime_prompt=self._get_realtime_prompt(),
                         api_key=api_key
                     )

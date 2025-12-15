@@ -3347,6 +3347,7 @@ class OpenAIWebSocketProvider:
         self._callback_scheduler = callback_scheduler
         self.debug = False  # Realtime logging suppressed by default
         self.api_key = None  # Allow callers to inject key directly
+        self.mute_mic_during_playback = True
         
         # Audio configuration
         self.input_sample_rate = 48000  # Input from mic
@@ -3715,7 +3716,7 @@ class OpenAIWebSocketProvider:
             except Exception as e:
                 self._log(f"audio_callback: reconnect failed {e!r}")
                 return
-        if self.is_ai_speaking:
+        if self.is_ai_speaking and getattr(self, "mute_mic_during_playback", False):
             return
         
         try:
@@ -3810,7 +3811,7 @@ class OpenAIWebSocketProvider:
         except Exception as e:
             print(f"Error sending audio data: {e}")
 
-    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None):
+    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None):
         """Start streaming audio in a background task"""
         self._log("Starting streaming")
         # Store the configuration
@@ -3822,6 +3823,8 @@ class OpenAIWebSocketProvider:
             self.api_key = api_key
         if realtime_prompt:
             self.realtime_prompt = realtime_prompt
+        if mute_mic_during_playback is not None:
+            self.mute_mic_during_playback = bool(mute_mic_during_playback)
         
         self.start_loop()
         
@@ -3937,7 +3940,7 @@ class OpenAIWebSocketProvider:
                 self.loop
             )
 
-    def connect(self, model=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None):
+    def connect(self, model=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None):
         """Initialize WebSocket connection without starting audio stream"""
         # Store the configuration
         self.model = model or 'gpt-4o-realtime-preview-2024-12-17'
@@ -3948,6 +3951,8 @@ class OpenAIWebSocketProvider:
             self.api_key = api_key
         if realtime_prompt:
             self.realtime_prompt = realtime_prompt
+        if mute_mic_during_playback is not None:
+            self.mute_mic_during_playback = bool(mute_mic_during_playback)
         
         self.start_loop()
         

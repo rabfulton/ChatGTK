@@ -1628,6 +1628,21 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_realtime_prompt, True, True, 0)
         list_box.add(row)
 
+        # Mute mic during playback (echo suppression)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Mute mic during playback", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("May be necessary on systems that use speakers and do not have echo cancellation set up.")
+        self.switch_mute_mic_playback = Gtk.Switch()
+        current_mute = bool(getattr(self, "mute_mic_during_playback", False))
+        self.switch_mute_mic_playback.set_active(current_mute)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_mute_mic_playback, False, True, 0)
+        list_box.add(row)
+
         self.stack.add_named(scroll, "Audio")
 
     # -----------------------------------------------------------------------
@@ -3427,6 +3442,7 @@ class SettingsDialog(Gtk.Dialog):
             'tts_voice': self.combo_tts.get_active_text(),
             'realtime_voice': self.combo_realtime.get_active_text(),
             'realtime_prompt': self.entry_realtime_prompt.get_text(),
+            'mute_mic_during_playback': self.switch_mute_mic_playback.get_active(),
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
