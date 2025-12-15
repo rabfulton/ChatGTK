@@ -17,7 +17,6 @@ test_latex_links.py
 !screenshots/*.pdf
 debug_failed.log
 PKGBUILD
-aur.txt
+*.txt
 .SRCINFO
 *.md
-todo.txt

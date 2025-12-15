@@ -756,7 +756,7 @@ class ModelCardEditorDialog(Gtk.Dialog):
         temp_tip = "Temperature is not supported by all models. Lower values make the model more deterministic."
         self.chk_temperature = Gtk.CheckButton(label="Temperature")
         self.chk_temperature.set_tooltip_text(temp_tip)
-        self.scale_temperature = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
+        self.scale_temperature = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 2.0, 0.01)
         self.scale_temperature.set_digits(2)
         self.scale_temperature.set_size_request(160, -1)
         self.scale_temperature.set_hexpand(True)
@@ -1689,7 +1689,15 @@ class SettingsDialog(Gtk.Dialog):
             entry = self.combo_image_model.get_child()
             if entry:
                 entry.set_text(current_image_model)
-
+        
+        # Set entry width to fit the longest model name
+        entry = self.combo_image_model.get_child()
+        if entry and all_image_models:
+            # Calculate width based on longest model name
+            max_width = max(len(model_id) for model_id in all_image_models)
+            # Use exact width - GTK handles dropdown arrow space automatically
+            entry.set_width_chars(max_width)
+        
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.combo_image_model, False, True, 0)
         list_box.add(row)

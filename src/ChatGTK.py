@@ -242,7 +242,11 @@ class OpenAIGTKClient(Gtk.Window):
         # Add sidebar toggle button to top bar
         self.sidebar_button = Gtk.Button()
         self.sidebar_button.set_relief(Gtk.ReliefStyle.NONE)
-        arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.LEFT, shadow_type=Gtk.ShadowType.NONE)
+        # Set arrow direction based on initial sidebar visibility state
+        # LEFT arrow = sidebar is visible (clicking will hide it)
+        # RIGHT arrow = sidebar is hidden (clicking will show it)
+        initial_arrow_type = Gtk.ArrowType.LEFT if getattr(self, 'sidebar_visible', True) else Gtk.ArrowType.RIGHT
+        arrow = Gtk.Arrow(arrow_type=initial_arrow_type, shadow_type=Gtk.ShadowType.NONE)
         self.sidebar_button.add(arrow)
         self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
         hbox_top.pack_start(self.sidebar_button, False, False, 0)
@@ -363,6 +367,28 @@ class OpenAIGTKClient(Gtk.Window):
         # Load chat histories
         self.refresh_history_list()
         self.apply_sidebar_styles()
+        
+        # Load the last active conversation if it exists
+        if hasattr(self, 'last_active_chat') and self.last_active_chat:
+            # Use idle_add to ensure UI is fully initialized before loading
+            def load_last_active():
+                try:
+                    # Check if the chat file still exists
+                    chat_filename = self.last_active_chat
+                    if not chat_filename.endswith('.json'):
+                        chat_filename = f"{chat_filename}.json"
+                    
+                    # Verify the file exists before trying to load
+                    from config import HISTORY_DIR
+                    import os
+                    chat_path = os.path.join(HISTORY_DIR, chat_filename)
+                    if os.path.exists(chat_path):
+                        self.load_chat_by_filename(chat_filename, save_current=False)
+                except Exception as e:
+                    print(f"Error loading last active chat: {e}")
+                return False  # Don't repeat
+            
+            GLib.idle_add(load_last_active)
 
         # Connect window event handlers
         self.connect("configure-event", self.on_configure_event)
@@ -2811,18 +2837,28 @@ class OpenAIGTKClient(Gtk.Window):
             print(f"Error getting timestamp: {e}")
         return "Unknown date"
 
-    def on_history_selected(self, listbox, row):
-        """Handle selection of a chat history."""
+    def load_chat_by_filename(self, filename, save_current=True):
+        """Load a chat history by filename.
+        
+        Args:
+            filename: The chat filename (with or without .json extension)
+            save_current: If True, save the current chat before loading (default: True)
+        """
         # Save current chat if it's new and has messages
-        if self.current_chat_id is None and len(self.conversation_history) > 1:
+        if save_current and self.current_chat_id is None and len(self.conversation_history) > 1:
             self.save_current_chat()
         
         # Load the selected chat history
-        history = load_chat_history(row.filename, messages_only=True)  # Only get messages
+        history = load_chat_history(filename, messages_only=True)  # Only get messages
         if history:
             # Update conversation history and chat ID
             self.conversation_history = history
-            self.current_chat_id = row.filename
+            self.current_chat_id = filename
+            
+            # Save the last active chat to settings (remove .json extension for storage)
+            chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
+            self.last_active_chat = chat_id
+            save_settings(convert_settings_for_save(get_object_settings(self)))
             
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:
@@ -2896,6 +2932,16 @@ class OpenAIGTKClient(Gtk.Window):
             
             # Schedule scroll after the conversation is rebuilt
             GLib.idle_add(scroll_to_top)
+            
+            # Update history list selection to highlight the loaded chat
+            for row in self.history_list.get_children():
+                if getattr(row, "filename", None) == filename:
+                    self.history_list.select_row(row)
+                    break
+
+    def on_history_selected(self, listbox, row):
+        """Handle selection of a chat history."""
+        self.load_chat_by_filename(row.filename)
 
     def save_current_chat(self):
         """Save the current chat history."""
@@ -2930,6 +2976,10 @@ class OpenAIGTKClient(Gtk.Window):
                 print(f"Error preserving metadata: {e}")
                 # Fall back to original save behavior
                 save_chat_history(chat_name, self.conversation_history)
+            
+            # Update the last active chat to the current one
+            self.last_active_chat = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
+            save_settings(convert_settings_for_save(get_object_settings(self)))
             
             self.refresh_history_list()
 

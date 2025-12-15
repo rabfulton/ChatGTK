@@ -506,6 +506,7 @@ def list_chat_histories():
     
     return histories
 
+
 # Note: parse_color_to_rgba is re-exported from gtk_utils at the top of this file
 
 def rgb_to_hex(color_str):
