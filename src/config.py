@@ -93,6 +93,9 @@ SETTINGS_CONFIG = {
     # If empty or not found, the first prompt in the list is used.
     'ACTIVE_SYSTEM_PROMPT_ID': {'type': str, 'default': ''},
     'MICROPHONE': {'type': str, 'default': 'default'},
+    # Speech-to-text model for voice input. Currently only Whisper variants are supported,
+    # but future releases will list any model with audio input capability.
+    'SPEECH_TO_TEXT_MODEL': {'type': str, 'default': 'whisper-1'},
     # TTS Voice Provider: 'openai' uses OpenAI TTS (tts-1/tts-1-hd), 'gemini' uses Gemini TTS,
     # 'gpt-4o-audio-preview' or 'gpt-4o-mini-audio-preview' uses audio-preview models.
     # This is the unified TTS setting used by the play button, auto read-aloud, and read-aloud tool.

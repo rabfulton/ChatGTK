@@ -1386,6 +1386,53 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.combo_mic, False, True, 0)
         list_box.add(row)
 
+        # Speech-to-Text model selection for voice input
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Speech to Text", xalign=0)
+        label.set_hexpand(True)
+        self.combo_stt_model = Gtk.ComboBoxText()
+        # Allow custom entry for future models
+        self.combo_stt_model.set_property("has-entry", True)
+        self.combo_stt_model.set_entry_text_column(0)
+
+        # Known transcription models (client.audio.transcriptions.create)
+        stt_models = [
+            "whisper-1",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+        ]
+        for model in stt_models:
+            self.combo_stt_model.append_text(model)
+
+        current_stt = getattr(self, "speech_to_text_model", "") or stt_models[0]
+        if current_stt in stt_models:
+            self.combo_stt_model.set_active(stt_models.index(current_stt))
+        else:
+            self.combo_stt_model.set_active(0)
+            entry = self.combo_stt_model.get_child()
+            if entry:
+                entry.set_text(current_stt)
+
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_stt_model, False, True, 0)
+        list_box.add(row)
+
+        # Separator after STT section
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
         # TTS Voice Provider (unified - used by play button, auto read-aloud, and read-aloud tool)
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -3342,6 +3389,7 @@ class SettingsDialog(Gtk.Dialog):
             'system_prompts_json': system_prompts_json,
             'active_system_prompt_id': self._active_prompt_id,
             'microphone': self.combo_mic.get_active_text() or 'default',
+            'speech_to_text_model': self.combo_stt_model.get_active_text() or (self.combo_stt_model.get_child().get_text() if self.combo_stt_model.get_child() else '') or 'whisper-1',
             'tts_voice_provider': self.combo_tts_provider.get_active_id() or 'openai',
             'tts_voice': self.combo_tts.get_active_text(),
             'realtime_voice': self.combo_realtime.get_active_text(),
