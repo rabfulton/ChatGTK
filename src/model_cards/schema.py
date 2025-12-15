@@ -47,6 +47,7 @@ class ModelCard:
     capabilities: Capabilities = field(default_factory=Capabilities)
 
     # Constraints
+    temperature: Optional[float] = None          # Optional temperature override
     max_tokens: Optional[int] = None
     max_images_per_message: Optional[int] = None
     supported_file_types: Set[str] = field(default_factory=set)

@@ -97,6 +97,7 @@ def _create_card_from_override(model_id: str, override: dict) -> ModelCard:
         display_name=override.get("display_name"),
         api_family=override.get("api_family", "chat.completions"),
         base_url=override.get("base_url"),
+        temperature=override.get("temperature"),
         capabilities=caps,
         max_tokens=override.get("max_tokens"),
         quirks=override.get("quirks", {}),

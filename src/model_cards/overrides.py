@@ -105,6 +105,7 @@ def apply_override_to_card(card: ModelCard, override: Dict[str, Any]) -> ModelCa
     new_provider = override.get("provider", card.provider)
     new_api_family = override.get("api_family", card.api_family)
     new_base_url = override.get("base_url", card.base_url)
+    new_temperature = override.get("temperature") if "temperature" in override else card.temperature
     new_max_tokens = override.get("max_tokens", card.max_tokens)
     new_key_name = override.get("key_name", card.key_name)
     
@@ -137,6 +138,7 @@ def apply_override_to_card(card: ModelCard, override: Dict[str, Any]) -> ModelCa
         api_family=new_api_family,
         base_url=new_base_url,
         capabilities=new_caps,
+        temperature=new_temperature,
         max_tokens=new_max_tokens,
         max_images_per_message=new_max_images,
         supported_file_types=new_supported_file_types,
@@ -157,6 +159,7 @@ def card_to_override_dict(card: ModelCard) -> Dict[str, Any]:
         "provider": card.provider,
         "api_family": card.api_family,
         "base_url": card.base_url,
+        "temperature": card.temperature,
         "capabilities": {
             "text": card.capabilities.text,
             "vision": card.capabilities.vision,

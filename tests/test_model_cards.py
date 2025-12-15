@@ -26,6 +26,7 @@ from model_cards import (
     clear_custom_cards,
 )
 from model_cards.catalog import BUILTIN_CARDS
+from model_cards.overrides import apply_override_to_card
 
 
 class TestCapabilities:
@@ -165,11 +166,11 @@ class TestBuiltinCatalog:
             assert card.capabilities.tool_use is True, f"{model_id} should support tools"
 
     def test_reasoning_models_quirks(self):
-        """Reasoning models (o1, o3) should have appropriate quirks."""
+        """Reasoning models (o1, o3) should require developer role and leave temperature unset."""
         for model_id in ["o1-mini", "o1-preview", "o3", "o3-mini"]:
             card = BUILTIN_CARDS.get(model_id)
             assert card is not None, f"{model_id} should be in catalog"
-            assert card.quirks.get("no_temperature") is True
+            assert card.temperature is None
             assert card.quirks.get("needs_developer_role") is True
 
 
@@ -251,6 +252,13 @@ class TestCardLookup:
         result = unregister_card("test-card")
         assert result is True
         assert get_card("test-card") is None
+
+    def test_override_applies_temperature(self):
+        """Overrides should carry through temperature configuration."""
+        base_card = ModelCard(id="temp-model", provider="openai")
+        override = {"temperature": 0.55}
+        updated = apply_override_to_card(base_card, override)
+        assert updated.temperature == 0.55
 
     def test_list_cards(self):
         """list_cards() returns all cards."""
@@ -396,19 +404,19 @@ class TestPhase2ProviderIntegration:
         assert card.quirks.get("requires_audio_modality") is True
 
     def test_reasoning_model_quirks(self):
-        """Reasoning models should have needs_developer_role and no_temperature quirks."""
+        """Reasoning models should have needs_developer_role and unset temperature."""
         for model_id in ["o1-mini", "o1-preview", "o3", "o3-mini"]:
             card = get_card(model_id)
             assert card is not None, f"{model_id} should be in catalog"
             assert card.quirks.get("needs_developer_role") is True, f"{model_id} should need developer role"
-            assert card.quirks.get("no_temperature") is True, f"{model_id} should have no_temperature"
+            assert card.temperature is None, f"{model_id} should not set temperature by default"
 
-    def test_gpt5_no_temperature_quirk(self):
-        """GPT-5 models should have no_temperature quirk."""
+    def test_gpt5_temperature_default(self):
+        """GPT-5 models should leave temperature unset by default."""
         for model_id in ["gpt-5.1", "gpt-5.1-chat-latest", "gpt-5-pro"]:
             card = get_card(model_id)
             assert card is not None, f"{model_id} should be in catalog"
-            assert card.quirks.get("no_temperature") is True, f"{model_id} should have no_temperature"
+            assert card.temperature is None, f"{model_id} should not set temperature by default"
 
     def test_api_family_routing(self):
         """Models should have correct api_family for routing."""

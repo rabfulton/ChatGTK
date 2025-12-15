@@ -92,7 +92,6 @@ SETTINGS_CONFIG = {
     # The ID of the currently active system prompt from SYSTEM_PROMPTS_JSON.
     # If empty or not found, the first prompt in the list is used.
     'ACTIVE_SYSTEM_PROMPT_ID': {'type': str, 'default': ''},
-    'TEMPERAMENT': {'type': float, 'default': 1.0},
     'MICROPHONE': {'type': str, 'default': 'default'},
     # TTS Voice Provider: 'openai' uses OpenAI TTS (tts-1/tts-1-hd), 'gemini' uses Gemini TTS,
     # 'gpt-4o-audio-preview' or 'gpt-4o-mini-audio-preview' uses audio-preview models.

@@ -753,20 +753,33 @@ class ModelCardEditorDialog(Gtk.Dialog):
         quirks = self.original_card.quirks if self.original_card else {}
 
         row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        self.chk_no_temp = Gtk.CheckButton(label="No Temperature")
-        self.chk_no_temp.set_active(quirks.get("no_temperature", False))
-        self.chk_no_temp.set_tooltip_text("Model does not accept temperature parameter")
-        self.chk_dev_role = Gtk.CheckButton(label="Needs Developer Role")
-        self.chk_dev_role.set_active(quirks.get("needs_developer_role", False))
-        self.chk_dev_role.set_tooltip_text("Model requires 'developer' role instead of 'system'")
-        row1.pack_start(self.chk_no_temp, False, False, 0)
-        row1.pack_start(self.chk_dev_role, False, False, 0)
+        temp_tip = "Temperature is not supported by all models. Lower values make the model more deterministic."
+        self.chk_temperature = Gtk.CheckButton(label="Temperature")
+        self.chk_temperature.set_tooltip_text(temp_tip)
+        self.scale_temperature = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
+        self.scale_temperature.set_digits(2)
+        self.scale_temperature.set_size_request(160, -1)
+        self.scale_temperature.set_hexpand(True)
+        initial_temp = getattr(self.original_card, "temperature", None)
+        if initial_temp is not None:
+            self.chk_temperature.set_active(True)
+            self.scale_temperature.set_value(float(initial_temp))
+        else:
+            self.scale_temperature.set_value(1.0)
+            self.scale_temperature.set_sensitive(False)
+        self.chk_temperature.connect("toggled", self._on_temperature_toggled)
+        row1.pack_start(self.chk_temperature, False, False, 0)
+        row1.pack_start(self.scale_temperature, True, True, 0)
         quirks_box.pack_start(row1, False, False, 0)
 
         row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.chk_dev_role = Gtk.CheckButton(label="Needs Developer Role")
+        self.chk_dev_role.set_active(quirks.get("needs_developer_role", False))
+        self.chk_dev_role.set_tooltip_text("Model requires 'developer' role instead of 'system'")
         self.chk_audio_modality = Gtk.CheckButton(label="Requires Audio Modality")
         self.chk_audio_modality.set_active(quirks.get("requires_audio_modality", False))
         self.chk_audio_modality.set_tooltip_text("Model requires audio modality in request")
+        row2.pack_start(self.chk_dev_role, False, False, 0)
         row2.pack_start(self.chk_audio_modality, False, False, 0)
         quirks_box.pack_start(row2, False, False, 0)
 
@@ -837,6 +850,10 @@ class ModelCardEditorDialog(Gtk.Dialog):
         delete_override(self.model_id)
         self.response(Gtk.ResponseType.REJECT)  # Special response to indicate reset
 
+    def _on_temperature_toggled(self, checkbox):
+        """Enable/disable temperature slider based on checkbox state."""
+        self.scale_temperature.set_sensitive(checkbox.get_active())
+
     def _on_reasoning_effort_toggled(self, checkbox):
         """Enable/disable reasoning effort dropdown based on checkbox state."""
         self.combo_reasoning_effort.set_sensitive(checkbox.get_active())
@@ -865,6 +882,13 @@ class ModelCardEditorDialog(Gtk.Dialog):
         api_family = self.combo_api_family.get_active_text()
         if api_family:
             override["api_family"] = api_family
+
+        # Temperature
+        if self.chk_temperature.get_active():
+            override["temperature"] = round(self.scale_temperature.get_value(), 2)
+        elif self.existing_override and "temperature" in self.existing_override:
+            # Explicitly clear any previously set temperature
+            override["temperature"] = None
         
         # Capabilities
         override["capabilities"] = {
@@ -881,8 +905,6 @@ class ModelCardEditorDialog(Gtk.Dialog):
         
         # Quirks
         quirks = {}
-        if self.chk_no_temp.get_active():
-            quirks["no_temperature"] = True
         if self.chk_dev_role.get_active():
             quirks["needs_developer_role"] = True
         if self.chk_audio_modality.get_active():
@@ -1319,21 +1341,6 @@ class SettingsDialog(Gtk.Dialog):
         self.entry_conv_buffer.set_placeholder_text("ALL")
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.entry_conv_buffer, False, True, 0)
-        list_box.add(row)
-
-        # Temperament
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Temperament", xalign=0)
-        label.set_hexpand(True)
-        self.scale_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.01)
-        self.scale_temp.set_size_request(200, -1)
-        self.scale_temp.set_value(float(self.temperament))
-        self.scale_temp.set_digits(2)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.scale_temp, False, True, 0)
         list_box.add(row)
 
         # Minimize to tray
@@ -3345,7 +3352,6 @@ class SettingsDialog(Gtk.Dialog):
             'system_message': system_message,
             'system_prompts_json': system_prompts_json,
             'active_system_prompt_id': self._active_prompt_id,
-            'temperament': self.scale_temp.get_value(),
             'microphone': self.combo_mic.get_active_text() or 'default',
             'tts_voice_provider': self.combo_tts_provider.get_active_id() or 'openai',
             'tts_voice': self.combo_tts.get_active_text(),

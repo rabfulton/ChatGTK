@@ -39,7 +39,7 @@ class AIProvider(ABC):
         pass
     
     @abstractmethod
-    def generate_chat_completion(self, messages, model, temperature=0.7, max_tokens=None):
+    def generate_chat_completion(self, messages, model, temperature=None, max_tokens=None):
         """Generate chat completion."""
         pass
     
@@ -226,7 +226,7 @@ class CustomProvider(AIProvider):
         self,
         messages,
         model,
-        temperature=0.7,
+        temperature=None,
         max_tokens=None,
         chat_id=None,
         web_search_enabled: bool = False,
@@ -235,6 +235,11 @@ class CustomProvider(AIProvider):
         read_aloud_tool_handler=None,
     ):
         api_type = (self.api_type or "chat.completions").lower()
+        card = get_card(model)
+        if temperature is None and card and getattr(card, "temperature", None) is not None:
+            temperature = card.temperature
+        if card and card.quirks.get("no_temperature") and temperature is None:
+            temperature = None
         if api_type == "responses":
             print(f"[CustomProvider] Using Responses API for model: {model or self.model_name}")
             return self._call_responses(
@@ -1299,7 +1304,7 @@ class OpenAIProvider(AIProvider):
         self,
         messages,
         model: str,
-        temperature: float = 0.7,
+        temperature: float = None,
         max_tokens: int = None,
         web_search_enabled: bool = False,
         image_tool_handler=None,
@@ -1321,8 +1326,8 @@ class OpenAIProvider(AIProvider):
             Conversation messages in internal format.
         model : str
             OpenAI model name.
-        temperature : float
-            Sampling temperature.
+        temperature : float, optional
+            Sampling temperature. When None, the provider default is used.
         max_tokens : int
             Maximum output tokens.
         web_search_enabled : bool
@@ -1339,9 +1344,15 @@ class OpenAIProvider(AIProvider):
         str
             The assistant's response text, with any tool outputs appended.
         """
-        # Some models do not support temperature - check the model card
+        # Some models do not support temperature - check the model card.
+        # If the card explicitly sets a temperature, prefer that even when legacy
+        # no_temperature quirks are present.
         card = get_card(model)
-        skip_temperature = card.quirks.get("no_temperature", False) if card else False
+        if temperature is None and card and getattr(card, "temperature", None) is not None:
+            temperature = card.temperature
+        skip_temperature = False
+        if card and card.quirks.get("no_temperature") and getattr(card, "temperature", None) is None:
+            skip_temperature = True
         
         # Check for reasoning effort
         reasoning_effort = None
@@ -1524,9 +1535,9 @@ class OpenAIProvider(AIProvider):
         self,
         messages,
         model: str,
-        temperature: float,
-        max_tokens: int,
-        chat_id: str,
+        temperature: float = None,
+        max_tokens: int = None,
+        chat_id: str = None,
     ) -> str:
         """
         Generate a response using chat.completions for audio-capable models.
@@ -1758,7 +1769,7 @@ class OpenAIProvider(AIProvider):
         self,
         messages,
         model,
-        temperature=0.7,
+        temperature=None,
         max_tokens=None,
         chat_id=None,
         web_search_enabled: bool = False,
@@ -1780,6 +1791,9 @@ class OpenAIProvider(AIProvider):
         - File attachments
         - Image inputs
         """
+        card = get_card(model)
+        if temperature is None and card and getattr(card, "temperature", None) is not None:
+            temperature = card.temperature
         # Determine if we need to use chat.completions
         needs_chat_completions, reason = self._requires_chat_completions(model)
         
@@ -2051,7 +2065,7 @@ class GrokProvider(AIProvider):
         self,
         messages,
         model: str,
-        temperature: float = 0.7,
+        temperature: float = None,
         max_tokens: int = None,
         web_search_enabled: bool = False,
     ) -> str:
@@ -2142,7 +2156,7 @@ class GrokProvider(AIProvider):
         self,
         messages,
         model,
-        temperature=0.7,
+        temperature=None,
         max_tokens=None,
         chat_id=None,
         # response_meta kept for interface compatibility; not used by Grok.
@@ -2161,6 +2175,9 @@ class GrokProvider(AIProvider):
         - Otherwise, fall back to the standard chat.completions schema with
           optional function tools (image/music/read_aloud).
         """
+        card = get_card(model)
+        if temperature is None and card and getattr(card, "temperature", None) is not None:
+            temperature = card.temperature
         if not self.client:
             raise RuntimeError("Grok client not initialized")
 
@@ -2421,7 +2438,7 @@ class ClaudeProvider(AIProvider):
         self,
         messages,
         model,
-        temperature=0.7,
+        temperature=None,
         max_tokens=None,
         chat_id=None,
         response_meta=None,
@@ -2436,6 +2453,9 @@ class ClaudeProvider(AIProvider):
         """
         if not self.client:
             raise RuntimeError("Claude client not initialized")
+        card = get_card(model)
+        if temperature is None and card and getattr(card, "temperature", None) is not None:
+            temperature = card.temperature
 
         # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
         # Also support image input using the same structure as OpenAI vision models.
@@ -2637,7 +2657,7 @@ class PerplexityProvider(AIProvider):
         self,
         messages,
         model,
-        temperature=0.7,
+        temperature=None,
         max_tokens=None,
         chat_id=None,
         response_meta=None,
@@ -2654,6 +2674,9 @@ class PerplexityProvider(AIProvider):
         """
         if not self.client:
             raise RuntimeError("Perplexity client not initialized")
+        card = get_card(model)
+        if temperature is None and card and getattr(card, "temperature", None) is not None:
+            temperature = card.temperature
 
         # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
         # Note: Perplexity does not support image inputs currently.
@@ -2863,7 +2886,7 @@ class GeminiProvider(AIProvider):
         self,
         messages,
         model,
-        temperature=0.7,
+        temperature=None,
         max_tokens=None,
         chat_id=None,
         response_meta=None,
@@ -2873,6 +2896,9 @@ class GeminiProvider(AIProvider):
         read_aloud_tool_handler=None,
     ):
         self._require_key()
+        card = get_card(model)
+        if temperature is None and card and getattr(card, "temperature", None) is not None:
+            temperature = card.temperature
         contents, system_instruction = self._convert_messages(messages)
         payload = {
             "contents": contents
@@ -3294,14 +3320,16 @@ class OpenAIWebSocketProvider:
             print(f"Connected to server using model: {model}")
             
             # Send initial configuration with session parameters
+            response_config = {
+                "modalities": ["text", "audio"],
+                "instructions": self.system_message,
+                "voice": "alloy",        # Current voice options for realtime models are: alloy, ash, ballad, coral, echo sage, shimmer, verse
+            }
+            if self.temperature is not None:
+                response_config["temperature"] = self.temperature
             config_message = {
                 "type": "response.create",
-                "response": {
-                    "modalities": ["text", "audio"],
-                    "instructions": self.system_message,
-                    "temperature": self.temperature,
-                    "voice": "alloy",        # Current voice options for realtime models are: alloy, ash, ballad, coral, echo sage, shimmer, verse
-                }
+                "response": response_config,
             }
             config_message2 = {
                 "type": "session.update",
@@ -3561,7 +3589,7 @@ class OpenAIWebSocketProvider:
         # Store the configuration
         self.microphone = microphone
         self.system_message = system_message or "You are a helpful assistant."
-        self.temperature = temperature or 0.7
+        self.temperature = temperature
         self.voice = voice or "alloy"
         
         self.start_loop()
@@ -3681,7 +3709,7 @@ class OpenAIWebSocketProvider:
         # Store the configuration
         self.model = model or 'gpt-4o-realtime-preview'
         self.system_message = system_message or "You are a helpful assistant."
-        self.temperature = temperature or 0.7
+        self.temperature = temperature
         self.voice = voice or "alloy"
         
         self.start_loop()

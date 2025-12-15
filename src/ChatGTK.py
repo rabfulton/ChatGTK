@@ -543,6 +543,23 @@ class OpenAIGTKClient(Gtk.Window):
         # If no mapping found, assume it's the model_id itself
         return display_text
 
+    def _get_temperature_for_model(self, model_id: str):
+        """
+        Look up the configured temperature for a model.
+        
+        Returns a float if the model card has temperature enabled, otherwise None
+        so the API call omits the temperature parameter.
+        """
+        if not model_id:
+            return None
+        card = get_card(model_id, self.custom_models)
+        if card and getattr(card, "temperature", None) is not None:
+            return float(card.temperature)
+        # Preserve legacy quirk as a hard stop if no explicit temperature is set
+        if card and card.quirks.get("no_temperature"):
+            return None
+        return None
+
     def update_model_list(self, models, current_model=None):
         """Update the model combo box with fetched models."""
         if not models:
@@ -1743,6 +1760,8 @@ class OpenAIGTKClient(Gtk.Window):
         if not provider:
             self.show_error_dialog(f"Unable to initialize the {provider_label} provider")
             return False
+        
+        model_temperature = self._get_temperature_for_model(target_model)
 
         if quick_image_request:
             msg_index = len(self.conversation_history)
@@ -1765,7 +1784,7 @@ class OpenAIGTKClient(Gtk.Window):
                 success = self.ws_provider.connect(
                     model=target_model,
                     system_message=self.system_message,
-                    temperature=self.temperament,
+                    temperature=model_temperature,
                     voice=self.realtime_voice
                 )
                 if not success:
@@ -1941,6 +1960,8 @@ class OpenAIGTKClient(Gtk.Window):
                     if not provider:
                         raise ValueError(f"{provider_name.title()} provider is not initialized")
             
+            model_temperature = self._get_temperature_for_model(model)
+            
             # This will hold any provider-specific metadata for the assistant message
             assistant_provider_meta = None
 
@@ -2003,7 +2024,7 @@ class OpenAIGTKClient(Gtk.Window):
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
-                    "temperature": float(self.temperament),
+                    "temperature": model_temperature,
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
@@ -2040,7 +2061,7 @@ class OpenAIGTKClient(Gtk.Window):
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
-                    "temperature": float(self.temperament),
+                    "temperature": model_temperature,
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
@@ -2079,7 +2100,7 @@ class OpenAIGTKClient(Gtk.Window):
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
-                    "temperature": float(self.temperament),
+                    "temperature": model_temperature,
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "response_meta": response_meta,
@@ -2120,7 +2141,7 @@ class OpenAIGTKClient(Gtk.Window):
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
-                    "temperature": float(self.temperament),
+                    "temperature": model_temperature,
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
@@ -2160,7 +2181,7 @@ class OpenAIGTKClient(Gtk.Window):
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
-                    "temperature": float(self.temperament),
+                    "temperature": model_temperature,
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "response_meta": assistant_provider_meta,
@@ -2193,7 +2214,7 @@ class OpenAIGTKClient(Gtk.Window):
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
-                    "temperature": float(self.temperament),
+                    "temperature": model_temperature,
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
                     "response_meta": response_meta,
@@ -2413,6 +2434,8 @@ class OpenAIGTKClient(Gtk.Window):
         if current_model is None or current_model == "":
             self.show_error_dialog("Please select a model before using voice input")
             return False
+        
+        model_temperature = self._get_temperature_for_model(current_model)
 
         if "realtime" not in current_model.lower():
             # Call function for normal transcription
@@ -2444,7 +2467,7 @@ class OpenAIGTKClient(Gtk.Window):
                     if not self.ws_provider.connect(
                         model=current_model,
                         system_message=self.system_message,
-                        temperature=self.temperament,
+                        temperature=model_temperature,
                         voice=self.realtime_voice
                     ):
                         self.show_error_dialog("Failed to connect to OpenAI realtime service")
@@ -2458,7 +2481,7 @@ class OpenAIGTKClient(Gtk.Window):
                         callback=self.on_stream_content_received,
                         microphone=self.microphone,
                         system_message=self.system_message,
-                        temperature=self.temperament
+                        temperature=model_temperature
                     )
                     
                 except Exception as e:
