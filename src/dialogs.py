@@ -1404,6 +1404,22 @@ class SettingsDialog(Gtk.Dialog):
             "gpt-4o-transcribe",
             "gpt-4o-mini-transcribe",
         ]
+
+        # Add any audio-input (non-audio-output) capable models (builtin + custom)
+        extra_models = set()
+        try:
+            for mid, card in list_cards().items():
+                if card.capabilities.audio_in and not card.capabilities.audio_out:
+                    extra_models.add(mid)
+            for mid in self.custom_models.keys():
+                card = get_card(mid, self.custom_models)
+                if card and card.capabilities.audio_in and not card.capabilities.audio_out:
+                    extra_models.add(mid)
+        except Exception as e:
+            print(f"Error gathering STT models: {e}")
+
+        for model in sorted(m for m in extra_models if m not in stt_models):
+            stt_models.append(model)
         for model in stt_models:
             self.combo_stt_model.append_text(model)
 
@@ -1413,7 +1429,7 @@ class SettingsDialog(Gtk.Dialog):
         else:
             self.combo_stt_model.set_active(0)
             entry = self.combo_stt_model.get_child()
-            if entry:
+            if entry and hasattr(entry, "set_text"):
                 entry.set_text(current_stt)
 
         hbox.pack_start(label, True, True, 0)

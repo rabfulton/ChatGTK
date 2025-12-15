@@ -13,6 +13,7 @@ import numpy as np
 import sounddevice as sd
 import threading
 import base64
+import io
 import tempfile
 import subprocess
 
@@ -1894,13 +1895,100 @@ class OpenAIProvider(AIProvider):
         
         return f'<img src="{image_path}"/>'
     
-    def transcribe_audio(self, audio_file):
-        transcript = self.client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            timeout=20
-        )
-        return transcript.text
+    def transcribe_audio(
+        self,
+        audio_file,
+        model: str = "whisper-1",
+        prompt: str = None,
+        use_chat_fallback: bool = True,
+        base_url: str = None,
+        api_key: str = None,
+    ):
+        """
+        Transcribe audio using either the transcription endpoint (whisper-style)
+        or, if unsupported, via chat.completions with audio input.
+        """
+        transcribe_models = {"whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"}
+        prompt = prompt or "Please transcribe this audio file."
+
+        # Ensure we have bytes and a fresh file handle for retries
+        if hasattr(audio_file, "read"):
+            audio_bytes = audio_file.read()
+            if hasattr(audio_file, "seek"):
+                audio_file.seek(0)
+        else:
+            audio_path = Path(audio_file)
+            audio_bytes = audio_path.read_bytes()
+
+        # Choose client, honoring optional base_url/api_key overrides
+        client = self.client
+        if base_url or api_key:
+            client = OpenAI(api_key=api_key or self._current_api_key, base_url=base_url or None)
+        is_openai_base = not base_url or "openai.com" in (base_url or "")
+
+        def _make_file_obj():
+            bio = io.BytesIO(audio_bytes)
+            bio.name = getattr(audio_file, "name", "audio.wav")
+            return bio
+
+        # Preferred: transcription endpoint
+        if model in transcribe_models:
+            try:
+                payload_info = {
+                    "endpoint": f"{getattr(client, '_base_url', None) or 'https://api.openai.com'}/audio/transcriptions",
+                    "model": model,
+                    "audio_bytes": len(audio_bytes),
+                }
+                print(f"[Audio STT] Transcription payload: {json.dumps(payload_info)}")
+                with _make_file_obj() as f:
+                    transcript = client.audio.transcriptions.create(
+                        model=model,
+                        file=f,
+                        timeout=20
+                    )
+                return transcript.text
+            except Exception as exc:
+                print(f"[Audio STT] Transcription endpoint failed for {model}: {exc}")
+                if not use_chat_fallback:
+                    raise
+
+        # Fallback: chat with audio input (base64-encoded)
+        try:
+            b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+            content = [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": b64_audio,
+                        "format": "wav",
+                    },
+                },
+            ]
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": 800,
+            }
+            if is_openai_base:
+                payload["modalities"] = ["text", "audio"]
+
+            # Log payload with audio length only to keep logs readable
+            payload_preview = json.loads(json.dumps(payload))  # shallow copy
+            try:
+                for part in payload_preview["messages"][0]["content"]:
+                    if isinstance(part, dict) and part.get("type") == "input_audio":
+                        part["input_audio"]["data"] = f"<len {len(b64_audio)}>"
+            except Exception:
+                pass
+            endpoint = f"{getattr(client, '_base_url', None) or 'https://api.openai.com'}/chat/completions"
+            print(f"[Audio STT] Chat fallback payload: endpoint={endpoint} body={json.dumps(payload_preview)}")
+
+            response = client.chat.completions.create(**payload)
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            print(f"[Audio STT] Chat fallback failed for {model}: {exc}")
+            raise
     
     def generate_speech(self, text, voice):
         return self.client.audio.speech.create(

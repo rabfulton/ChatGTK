@@ -2315,6 +2315,23 @@ class OpenAIGTKClient(Gtk.Window):
     def audio_transcription(self, widget):
         """Handle audio transcription."""
         print("Audio transcription...")
+        stt_model = getattr(self, "speech_to_text_model", "") or "whisper-1"
+        stt_base_url = None
+        stt_api_key = None
+        try:
+            card = get_card(stt_model, self.custom_models)
+            if card:
+                stt_base_url = card.base_url or None
+                # Try to resolve a key for custom models
+                if card.provider == "custom":
+                    cfg = (self.custom_models or {}).get(stt_model, {})
+                    if cfg:
+                        from utils import resolve_api_key
+                        stt_api_key = resolve_api_key(cfg.get("api_key", ""))
+                elif card.key_name:
+                    stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
+        except Exception as e:
+            print(f"[Audio STT] Error reading card for {stt_model}: {e}")
         openai_provider = self.providers.get('openai')
         if not openai_provider:
             api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
@@ -2353,31 +2370,45 @@ class OpenAIGTKClient(Gtk.Window):
                                 # Save to temporary file
                                 sf.write(temp_file, recording, sample_rate)
                                 
-                                # Transcribe with Whisper
-                                try:
-                                    with open(temp_file, "rb") as audio_file:
-                                        transcript = openai_provider.transcribe_audio(audio_file)
-                                        
-                                    # Add transcribed text to input
+                                # Transcribe with selected model (fallback to whisper-1)
+                                transcript = None
+                                models_to_try = [stt_model]
+                                if "whisper-1" not in models_to_try:
+                                    models_to_try.append("whisper-1")
+
+                                for model in models_to_try:
+                                    try:
+                                        with open(temp_file, "rb") as audio_file:
+                                            transcript = openai_provider.transcribe_audio(
+                                                audio_file,
+                                                model=model,
+                                                prompt="Please transcribe this audio file. Return only the transcribed text.",
+                                                base_url=stt_base_url,
+                                                api_key=stt_api_key,
+                                            )
+                                        print(f"[Audio STT] Transcribed with model: {model}")
+                                        break
+                                    except Exception as e:
+                                        print(f"[Audio STT] Model {model} failed: {e}")
+                                        transcript = None
+                                        continue
+
+                                if transcript:
                                     GLib.idle_add(self.entry_question.set_text, transcript)
-                                    
-                                except Exception as e:
-                                    GLib.idle_add(self.append_message, 'ai', f"Error transcribing audio: {str(e)}")
+                                else:
+                                    print("[Audio STT] No transcript produced; keeping input unchanged.")
                             
                             except Exception as e:
-                                GLib.idle_add(self.append_message, 'ai', f"Error saving audio: {str(e)}")
+                                print(f"[Audio STT] Error saving audio: {e}")
                             
                             finally:
                                 # Clean up temp file
                                 temp_file.unlink(missing_ok=True)
                         else:
-                            GLib.idle_add(self.append_message, 'ai', "Error: Failed to record audio")
+                            print("[Audio STT] Error: Failed to record audio")
                     
                     except Exception as e:
-                        err_text = f"Error in recording thread: {str(e)}"
-                        msg_index = len(self.conversation_history)
-                        self.conversation_history.append(create_assistant_message(err_text))
-                        GLib.idle_add(self.append_message, 'ai', err_text, msg_index)
+                        print(f"[Audio STT] Error in recording thread: {e}")
                     
                     finally:
                         # Reset button state
