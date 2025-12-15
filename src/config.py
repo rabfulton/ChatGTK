@@ -123,7 +123,8 @@ SETTINGS_CONFIG = {
     # These defaults mirror the curated sets previously hardcoded in ai_providers.py.
     'OPENAI_MODEL_WHITELIST': {
         'type': str,
-        'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-realtime,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
+        # Include current realtime releases first, keep legacy preview IDs for backward compatibility.
+        'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview-2024-12-17,gpt-4o-realtime-preview-2024-12-17,gpt-realtime,gpt-realtime-mini,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-4o-mini-realtime-preview,gpt-realtime-2025-08-28,gpt-realtime-mini-2025-10-06,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
     },
     'CUSTOM_MODEL_WHITELIST': {
         'type': str,

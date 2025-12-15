@@ -1720,6 +1720,35 @@ class OpenAIGTKClient(Gtk.Window):
             Gtk.STYLE_PROVIDER_PRIORITY_USER
         )
 
+    def show_error_dialog(self, message: str):
+        """Display a simple modal error dialog."""
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text="Error",
+        )
+        dialog.format_secondary_text(str(message))
+        dialog.run()
+        dialog.destroy()
+
+    def display_error(self, message: str):
+        """Backward-compatible alias used by legacy call sites."""
+        self.show_error_dialog(message)
+
+    def on_stream_content_received(self, content: str):
+        """Handle realtime text events from the websocket provider."""
+        if not content:
+            return
+        # Treat each callback as a distinct assistant message for now.
+        msg_index = len(self.conversation_history)
+        assistant_msg = create_assistant_message(content)
+        self.conversation_history.append(assistant_msg)
+        formatted = format_response(content)
+        GLib.idle_add(lambda idx=msg_index, msg=formatted: self.append_message('ai', msg, idx))
+        GLib.idle_add(self.save_current_chat)
+
     def append_message(self, sender, message_text, message_index: int = None):
         if message_index is None:
             if sender == 'ai':
