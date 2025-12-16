@@ -1808,7 +1808,11 @@ class OpenAIGTKClient(Gtk.Window):
         """Open a larger dialog for composing a more complex prompt."""
         initial_text = self.entry_question.get_text()
 
-        dialog = PromptEditorDialog(self, initial_text=initial_text)
+        def voice_input_callback(textview):
+            """Handle voice input for the prompt editor textview."""
+            self._audio_transcription_to_textview(textview)
+
+        dialog = PromptEditorDialog(self, initial_text=initial_text, on_voice_input=voice_input_callback)
         response = dialog.run()
 
         if response == Gtk.ResponseType.OK:
@@ -2688,6 +2692,120 @@ class OpenAIGTKClient(Gtk.Window):
                 self.recording_event.clear()  # Signal recording to stop
             self.recording = False
             self.btn_voice.set_label("Start Voice Input")
+
+    def _audio_transcription_to_textview(self, textview):
+        """Handle audio transcription and insert result into a textview at cursor position."""
+        stt_model = getattr(self, "speech_to_text_model", "") or "whisper-1"
+        stt_base_url = None
+        stt_api_key = None
+        try:
+            card = get_card(stt_model, self.custom_models)
+            if card:
+                stt_base_url = card.base_url or None
+                if card.provider == "custom":
+                    cfg = (self.custom_models or {}).get(stt_model, {})
+                    if cfg:
+                        from utils import resolve_api_key
+                        stt_api_key = resolve_api_key(cfg.get("api_key", ""))
+                elif card.key_name:
+                    stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
+        except Exception as e:
+            print(f"[Audio STT] Error reading card for {stt_model}: {e}")
+
+        openai_provider = self.providers.get('openai')
+        if not openai_provider:
+            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
+            if api_key:
+                os.environ['OPENAI_API_KEY'] = api_key
+                openai_provider = self.initialize_provider('openai', api_key)
+        if not openai_provider:
+            self.show_error_dialog("Audio transcription requires an OpenAI API key")
+            return
+
+        # Get the dialog to update recording state
+        dialog = textview.get_toplevel()
+
+        if not self.recording:
+            try:
+                self.recording_event = threading.Event()
+                self.recording_event.set()
+                self.recording = True
+                if hasattr(dialog, 'set_recording_state'):
+                    dialog.set_recording_state(True)
+                print("Recording started for prompt editor")
+
+                def record_thread():
+                    try:
+                        temp_dir = Path(tempfile.gettempdir())
+                        temp_file = temp_dir / "voice_input.wav"
+
+                        recording, sample_rate = record_audio(self.microphone, self.recording_event)
+
+                        if recording is not None and sample_rate is not None:
+                            try:
+                                if len(recording.shape) == 1:
+                                    recording = recording.reshape(-1, 1)
+                                sf.write(temp_file, recording, sample_rate)
+
+                                transcript = None
+                                models_to_try = [stt_model]
+                                if "whisper-1" not in models_to_try:
+                                    models_to_try.append("whisper-1")
+
+                                for model in models_to_try:
+                                    try:
+                                        with open(temp_file, "rb") as audio_file:
+                                            transcript = openai_provider.transcribe_audio(
+                                                audio_file,
+                                                model=model,
+                                                prompt="Please transcribe this audio file. Return only the transcribed text.",
+                                                base_url=stt_base_url,
+                                                api_key=stt_api_key,
+                                            )
+                                        print(f"[Audio STT] Transcribed with model: {model}")
+                                        break
+                                    except Exception as e:
+                                        print(f"[Audio STT] Model {model} failed: {e}")
+                                        transcript = None
+                                        continue
+
+                                if transcript:
+                                    def insert_transcript():
+                                        buf = textview.get_buffer()
+                                        buf.insert_at_cursor(transcript)
+                                    GLib.idle_add(insert_transcript)
+                                else:
+                                    print("[Audio STT] No transcript produced.")
+                            except Exception as e:
+                                print(f"[Audio STT] Error saving audio: {e}")
+                            finally:
+                                temp_file.unlink(missing_ok=True)
+                        else:
+                            print("[Audio STT] Error: Failed to record audio")
+                    except Exception as e:
+                        print(f"[Audio STT] Error in recording thread: {e}")
+                    finally:
+                        def reset_state():
+                            if hasattr(dialog, 'set_recording_state'):
+                                dialog.set_recording_state(False)
+                        GLib.idle_add(reset_state)
+                        self.recording = False
+
+                threading.Thread(target=record_thread, daemon=True).start()
+
+            except Exception as e:
+                print(f"Error initializing audio for prompt editor: {e}")
+                self.show_error_dialog(f"Error initializing audio: {str(e)}")
+                if hasattr(dialog, 'set_recording_state'):
+                    dialog.set_recording_state(False)
+                self.recording = False
+        else:
+            # Stop recording
+            if hasattr(self, 'recording_event'):
+                self.recording_event.clear()
+            self.recording = False
+            if hasattr(dialog, 'set_recording_state'):
+                dialog.set_recording_state(False)
 
     def on_attach_file(self, widget):
         """Handle file attachment."""

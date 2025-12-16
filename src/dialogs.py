@@ -3928,9 +3928,10 @@ class ToolsDialog(Gtk.Dialog):
 class PromptEditorDialog(Gtk.Dialog):
     """Dialog providing a larger multiline editor for composing prompts."""
 
-    def __init__(self, parent, initial_text: str = ""):
+    def __init__(self, parent, initial_text: str = "", on_voice_input=None):
         super().__init__(title="Edit Prompt", transient_for=parent, flags=0)
         self.set_modal(True)
+        self.on_voice_input_callback = on_voice_input
 
         # Default size; user can resize further
         self.set_default_size(800, 500)
@@ -3960,17 +3961,62 @@ class PromptEditorDialog(Gtk.Dialog):
         self.textview = Gtk.TextView()
         self.textview.set_wrap_mode(Gtk.WrapMode.WORD)
         self.textview.set_accepts_tab(True)
+        self.textview.set_left_margin(8)
+        self.textview.set_right_margin(8)
+        self.textview.set_top_margin(8)
+        self.textview.set_bottom_margin(8)
 
         buf = self.textview.get_buffer()
         buf.set_text(initial_text or "")
 
         scroll.add(self.textview)
 
-        # Dialog buttons
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        self.add_button("Use Prompt", Gtk.ResponseType.OK)
+        # Bottom row with voice button on left and dialog buttons on right
+        bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        vbox.pack_start(bottom_box, False, False, 0)
+
+        # Voice input button (left side)
+        self.is_recording = False
+        if on_voice_input:
+            self.btn_voice = Gtk.Button()
+            self.btn_voice.set_tooltip_text("Start voice input")
+            self._voice_icon = Gtk.Image.new_from_icon_name("audio-input-microphone-symbolic", Gtk.IconSize.BUTTON)
+            self.btn_voice.add(self._voice_icon)
+            self.btn_voice.connect("clicked", self._on_voice_clicked)
+            bottom_box.pack_start(self.btn_voice, False, False, 0)
+
+        # Spacer to push dialog buttons to the right
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        bottom_box.pack_start(spacer, True, True, 0)
+
+        # Dialog buttons (right side)
+        btn_cancel = Gtk.Button(label="Cancel")
+        btn_cancel.connect("clicked", lambda w: self.response(Gtk.ResponseType.CANCEL))
+        bottom_box.pack_start(btn_cancel, False, False, 0)
+
+        btn_ok = Gtk.Button(label="Use Prompt")
+        btn_ok.connect("clicked", lambda w: self.response(Gtk.ResponseType.OK))
+        bottom_box.pack_start(btn_ok, False, False, 0)
 
         self.show_all()
+
+    def _on_voice_clicked(self, widget):
+        """Handle voice button click by invoking the callback with the textview buffer."""
+        if self.on_voice_input_callback:
+            self.on_voice_input_callback(self.textview)
+
+    def set_recording_state(self, recording: bool):
+        """Update the voice button icon based on recording state."""
+        self.is_recording = recording
+        if not hasattr(self, 'btn_voice'):
+            return
+        # Update the icon
+        self._voice_icon.set_from_icon_name(
+            "media-playback-stop-symbolic" if recording else "audio-input-microphone-symbolic",
+            Gtk.IconSize.BUTTON
+        )
+        self.btn_voice.set_tooltip_text("Stop recording" if recording else "Start voice input")
 
     def get_text(self) -> str:
         """Return the full prompt text from the editor."""
