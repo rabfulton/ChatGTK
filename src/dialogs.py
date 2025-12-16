@@ -3933,8 +3933,14 @@ class PromptEditorDialog(Gtk.Dialog):
         self.set_modal(True)
         self.on_voice_input_callback = on_voice_input
 
-        # Default size; user can resize further
-        self.set_default_size(800, 500)
+        # Load saved dialog size or use defaults
+        settings_dict = load_settings()
+        dialog_width = settings_dict.get('PROMPT_EDITOR_DIALOG_WIDTH', 800)
+        dialog_height = settings_dict.get('PROMPT_EDITOR_DIALOG_HEIGHT', 500)
+        self.set_default_size(dialog_width, dialog_height)
+
+        # Connect to size change signal to save dialog size
+        self.connect('configure-event', self._on_configure_event)
 
         content = self.get_content_area()
         content.set_spacing(6)
@@ -4012,6 +4018,19 @@ class PromptEditorDialog(Gtk.Dialog):
         bottom_box.pack_start(btn_ok, False, False, 0)
 
         self.show_all()
+
+    def _on_configure_event(self, widget, event):
+        """Save the dialog size when it changes."""
+        width = event.width
+        height = event.height
+
+        # Load current settings and update dialog size
+        settings_dict = load_settings()
+        settings_dict['PROMPT_EDITOR_DIALOG_WIDTH'] = width
+        settings_dict['PROMPT_EDITOR_DIALOG_HEIGHT'] = height
+        save_settings(convert_settings_for_save(settings_dict))
+
+        return False  # Allow the event to continue
 
     def _on_voice_clicked(self, widget):
         """Handle voice button click by invoking the callback with the textview buffer."""

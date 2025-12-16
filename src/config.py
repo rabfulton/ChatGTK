@@ -83,6 +83,8 @@ SETTINGS_CONFIG = {
     'WINDOW_HEIGHT': {'type': int, 'default': 600},
     'SETTINGS_DIALOG_WIDTH': {'type': int, 'default': 800},
     'SETTINGS_DIALOG_HEIGHT': {'type': int, 'default': 600},
+    'PROMPT_EDITOR_DIALOG_WIDTH': {'type': int, 'default': 800},
+    'PROMPT_EDITOR_DIALOG_HEIGHT': {'type': int, 'default': 500},
     'SYSTEM_MESSAGE': {'type': str, 'default': 'You are a helpful assistant.'},
     # JSON-encoded list of named system prompts. Each entry is a dict with keys:
     # "id" (unique identifier), "name" (display name), "content" (prompt text).
