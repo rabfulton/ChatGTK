@@ -1954,6 +1954,106 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_web_search_settings, False, True, 0)
         list_box.add(row)
 
+        # --- Separator ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # ---- Search/Memory Tool section ----
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Search/Memory Tool</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+
+        # Enable Search Tool
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Search/Memory Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_search_tool_settings = Gtk.Switch()
+        current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
+        self.switch_search_tool_settings.set_active(current_search_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_search_tool_settings, False, True, 0)
+        list_box.add(row)
+
+        # Search History checkbox
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Include Conversation History", xalign=0)
+        label.set_hexpand(True)
+        self.switch_search_history = Gtk.Switch()
+        current_search_history_enabled = bool(getattr(self, "search_history_enabled", True))
+        self.switch_search_history.set_active(current_search_history_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_search_history, False, True, 0)
+        list_box.add(row)
+
+        # Search Directories entry
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Additional Directories", xalign=0)
+        label.set_tooltip_text("Comma-separated list of directories to search")
+        self.entry_search_directories = Gtk.Entry()
+        self.entry_search_directories.set_hexpand(True)
+        self.entry_search_directories.set_placeholder_text("/path/to/notes, /path/to/docs")
+        current_search_dirs = getattr(self, "search_directories", "") or ""
+        self.entry_search_directories.set_text(current_search_dirs)
+        hbox.pack_start(label, False, False, 0)
+        hbox.pack_start(self.entry_search_directories, True, True, 0)
+        list_box.add(row)
+
+        # Search Result Limit dropdown
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Result Limit", xalign=0)
+        label.set_tooltip_text("Maximum number of results to return to the model")
+        label.set_hexpand(True)
+        self.combo_search_result_limit = Gtk.ComboBoxText()
+        for i in range(1, 6):
+            self.combo_search_result_limit.append_text(str(i))
+        current_limit = int(getattr(self, "search_result_limit", 1))
+        self.combo_search_result_limit.set_active(max(0, min(4, current_limit - 1)))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_search_result_limit, False, True, 0)
+        list_box.add(row)
+
+        # Show Results in Chat checkbox
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Show Results in Chat", xalign=0)
+        label.set_tooltip_text("If enabled, search results are shown in the chat output. If disabled, results are only sent to the model.")
+        label.set_hexpand(True)
+        self.switch_search_show_results = Gtk.Switch()
+        current_show_results = bool(getattr(self, "search_show_results", False))
+        self.switch_search_show_results.set_active(current_show_results)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_search_show_results, False, True, 0)
+        list_box.add(row)
+
         # Connect signals to enforce mutual exclusivity between auto-read and tool
         self.switch_read_aloud.connect("state-set", self._on_read_aloud_state_set)
         self.switch_read_aloud_tool.connect("state-set", self._on_read_aloud_tool_state_set)
@@ -3464,6 +3564,12 @@ class SettingsDialog(Gtk.Dialog):
             # Read Aloud settings (uses unified TTS settings above)
             'read_aloud_enabled': self.switch_read_aloud.get_active(),
             'read_aloud_tool_enabled': self.switch_read_aloud_tool.get_active(),
+            # Search/Memory Tool settings
+            'search_tool_enabled': self.switch_search_tool_settings.get_active(),
+            'search_history_enabled': self.switch_search_history.get_active(),
+            'search_directories': self.entry_search_directories.get_text().strip(),
+            'search_result_limit': int(self.combo_search_result_limit.get_active_text() or '1'),
+            'search_show_results': self.switch_search_show_results.get_active(),
             # Speech prompt template for Gemini TTS and audio-preview models
             'tts_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
             # Conversation buffer length (string: "ALL", "0", "10", etc.)
@@ -3757,6 +3863,20 @@ class ToolsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
         list_box.add(row)
 
+        # Enable/disable search/memory tool for text models
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Search/Memory Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_search_tool = Gtk.Switch()
+        current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
+        self.switch_search_tool.set_active(current_search_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_search_tool, False, True, 0)
+        list_box.add(row)
+
         if not self.tool_use_supported:
             frame = Gtk.Frame()
             frame.set_shadow_type(Gtk.ShadowType.IN)
@@ -3797,6 +3917,7 @@ class ToolsDialog(Gtk.Dialog):
             "music_tool_enabled": self.switch_music_tool.get_active(),
             "web_search_enabled": self.switch_web_search.get_active(),
             "read_aloud_tool_enabled": self.switch_read_aloud_tool.get_active(),
+            "search_tool_enabled": self.switch_search_tool.get_active(),
         }
 
 

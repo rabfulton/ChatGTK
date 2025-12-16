@@ -20,6 +20,8 @@ import subprocess
 from tools import (
     build_tools_for_provider,
     ToolContext,
+    should_hide_tool_result,
+    strip_hide_prefix,
     run_tool_call,
     parse_tool_arguments,
 )
@@ -247,6 +249,7 @@ class CustomProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ):
         api_type = (self.api_type or "chat.completions").lower()
         card = get_card(model)
@@ -264,6 +267,7 @@ class CustomProvider(AIProvider):
                 image_tool_handler=image_tool_handler,
                 music_tool_handler=music_tool_handler,
                 read_aloud_tool_handler=read_aloud_tool_handler,
+                search_tool_handler=search_tool_handler,
             )
         
         if api_type == "tts":
@@ -331,6 +335,8 @@ class CustomProvider(AIProvider):
             enabled_tools.add("control_music")
         if read_aloud_tool_handler is not None:
             enabled_tools.add("read_aloud")
+        if search_tool_handler is not None:
+            enabled_tools.add("search_memory")
         
         # Build tool declarations for custom provider (uses OpenAI-compatible format)
         tools = build_tools_for_provider(enabled_tools, "custom")
@@ -411,6 +417,7 @@ class CustomProvider(AIProvider):
                 image_handler=image_tool_handler,
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
+                search_handler=search_tool_handler,
             )
             
             for tc in tool_calls:
@@ -428,14 +435,14 @@ class CustomProvider(AIProvider):
                     parsed_args = parse_tool_arguments(raw_args)
                     tool_result_content = run_tool_call(tool_name, parsed_args, tool_context)
                 
-                if tool_result_content:
-                    tool_result_snippets.append(tool_result_content)
+                if tool_result_content and not should_hide_tool_result(tool_result_content):
+                    tool_result_snippets.append(strip_hide_prefix(tool_result_content))
                 
                 tool_aware_messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
                     "name": tool_name,
-                    "content": tool_result_content or "",
+                    "content": strip_hide_prefix(tool_result_content) if tool_result_content else "",
                 })
         
         if last_response_data is None:
@@ -761,6 +768,7 @@ class CustomProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ):
         # Use base endpoint to avoid appending /responses to an endpoint that already has /chat/completions
         base = self._get_base_endpoint()
@@ -777,6 +785,8 @@ class CustomProvider(AIProvider):
             enabled_tools.add("control_music")
         if read_aloud_tool_handler is not None:
             enabled_tools.add("read_aloud")
+        if search_tool_handler is not None:
+            enabled_tools.add("search_memory")
         
         # Build tools array
         tools = self._build_responses_tools(enabled_tools)
@@ -832,6 +842,7 @@ class CustomProvider(AIProvider):
             image_handler=image_tool_handler,
             music_handler=music_tool_handler,
             read_aloud_handler=read_aloud_tool_handler,
+            search_handler=search_tool_handler,
         )
         
         max_tool_rounds = 3
@@ -871,8 +882,8 @@ class CustomProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                if tool_result:
-                    tool_result_snippets.append(tool_result)
+                if tool_result and not should_hide_tool_result(tool_result):
+                    tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
                 # First, add the assistant's function call
@@ -887,7 +898,7 @@ class CustomProvider(AIProvider):
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": tool_result or "",
+                    "output": strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -1325,6 +1336,7 @@ class OpenAIProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ) -> str:
         """
         Generate a response using the OpenAI Responses API.
@@ -1385,6 +1397,8 @@ class OpenAIProvider(AIProvider):
             enabled_tools.add("control_music")
         if read_aloud_tool_handler is not None:
             enabled_tools.add("read_aloud")
+        if search_tool_handler is not None:
+            enabled_tools.add("search_memory")
         
         # Build tools array
         tools = self._build_responses_tools(enabled_tools, web_search_enabled, model)
@@ -1425,6 +1439,7 @@ class OpenAIProvider(AIProvider):
             image_handler=image_tool_handler,
             music_handler=music_tool_handler,
             read_aloud_handler=read_aloud_tool_handler,
+            search_handler=search_tool_handler,
         )
         
         max_tool_rounds = 3
@@ -1451,8 +1466,8 @@ class OpenAIProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                if tool_result:
-                    tool_result_snippets.append(tool_result)
+                if tool_result and not should_hide_tool_result(tool_result):
+                    tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
                 # First, add the assistant's function call
@@ -1467,7 +1482,7 @@ class OpenAIProvider(AIProvider):
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": tool_result or "",
+                    "output": strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -1652,6 +1667,7 @@ class OpenAIProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ) -> str:
         """
         Generate a response using chat.completions for reasoning models (o1, o3, o4).
@@ -1714,6 +1730,8 @@ class OpenAIProvider(AIProvider):
                 enabled_tools.add("control_music")
             if read_aloud_tool_handler is not None:
                 enabled_tools.add("read_aloud")
+            if search_tool_handler is not None:
+                enabled_tools.add("search_memory")
         
         tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else []
         if tools:
@@ -1734,6 +1752,7 @@ class OpenAIProvider(AIProvider):
             image_handler=image_tool_handler,
             music_handler=music_tool_handler,
             read_aloud_handler=read_aloud_tool_handler,
+            search_handler=search_tool_handler,
         )
         
         tool_aware_messages = formatted_messages.copy()
@@ -1772,13 +1791,13 @@ class OpenAIProvider(AIProvider):
             for tc in tool_calls:
                 parsed_args = parse_tool_arguments(tc.function.arguments)
                 tool_result = run_tool_call(tc.function.name, parsed_args, tool_context)
-                if tool_result:
-                    tool_result_snippets.append(tool_result)
+                if tool_result and not should_hide_tool_result(tool_result):
+                    tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 tool_aware_messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": tool_result or "",
+                    "content": strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -1798,6 +1817,7 @@ class OpenAIProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ):
         """
         Generate a chat completion using the most appropriate API.
@@ -1836,6 +1856,7 @@ class OpenAIProvider(AIProvider):
                     image_tool_handler=image_tool_handler,
                     music_tool_handler=music_tool_handler,
                     read_aloud_tool_handler=read_aloud_tool_handler,
+                    search_tool_handler=search_tool_handler,
                 )
         
         # Default path: use Responses API for everything else
@@ -1850,6 +1871,7 @@ class OpenAIProvider(AIProvider):
             image_tool_handler=image_tool_handler,
             music_tool_handler=music_tool_handler,
             read_aloud_tool_handler=read_aloud_tool_handler,
+            search_tool_handler=search_tool_handler,
         )
     
     def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
@@ -2274,6 +2296,7 @@ class GrokProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ):
         """
         Generate a chat completion using Grok text models.
@@ -2358,6 +2381,8 @@ class GrokProvider(AIProvider):
             enabled_tools.add("control_music")
         if read_aloud_tool_handler is not None:
             enabled_tools.add("read_aloud")
+        if search_tool_handler is not None:
+            enabled_tools.add("search_memory")
         tools = build_tools_for_provider(enabled_tools, "grok")
         if tools:
             params["tools"] = tools
@@ -2416,6 +2441,7 @@ class GrokProvider(AIProvider):
                 image_handler=image_tool_handler,
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
+                search_handler=search_tool_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -2424,15 +2450,15 @@ class GrokProvider(AIProvider):
                     parsed_args = parse_tool_arguments(tc.function.arguments or "{}")
                     tool_result_content = run_tool_call(tc.function.name, parsed_args, tool_context)
 
-                if tool_result_content:
-                    tool_result_snippets.append(tool_result_content)
+                if tool_result_content and not should_hide_tool_result(tool_result_content):
+                    tool_result_snippets.append(strip_hide_prefix(tool_result_content))
 
                 tool_aware_messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "name": tc.function.name,
-                        "content": tool_result_content or "",
+                        "content": strip_hide_prefix(tool_result_content) if tool_result_content else "",
                     }
                 )
 
@@ -2555,6 +2581,7 @@ class ClaudeProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ):
         """
         Generate a chat completion using Claude models via the OpenAI-compatible
@@ -2622,6 +2649,8 @@ class ClaudeProvider(AIProvider):
             enabled_tools.add("control_music")
         if read_aloud_tool_handler is not None:
             enabled_tools.add("read_aloud")
+        if search_tool_handler is not None:
+            enabled_tools.add("search_memory")
         tools = build_tools_for_provider(enabled_tools, "claude")
         if tools:
             params["tools"] = tools
@@ -2680,6 +2709,7 @@ class ClaudeProvider(AIProvider):
                 image_handler=image_tool_handler,
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
+                search_handler=search_tool_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -2688,15 +2718,15 @@ class ClaudeProvider(AIProvider):
                     parsed_args = parse_tool_arguments(tc.function.arguments or "{}")
                     tool_result_content = run_tool_call(tc.function.name, parsed_args, tool_context)
 
-                if tool_result_content:
-                    tool_result_snippets.append(tool_result_content)
+                if tool_result_content and not should_hide_tool_result(tool_result_content):
+                    tool_result_snippets.append(strip_hide_prefix(tool_result_content))
 
                 tool_aware_messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "name": tc.function.name,
-                        "content": tool_result_content or "",
+                        "content": strip_hide_prefix(tool_result_content) if tool_result_content else "",
                     }
                 )
 
@@ -2774,6 +2804,7 @@ class PerplexityProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ):
         """
         Generate a chat completion using Perplexity models via the OpenAI-compatible
@@ -3003,6 +3034,7 @@ class GeminiProvider(AIProvider):
         image_tool_handler=None,
         music_tool_handler=None,
         read_aloud_tool_handler=None,
+        search_tool_handler=None,
     ):
         self._require_key()
         card = get_card(model)
@@ -3066,6 +3098,8 @@ class GeminiProvider(AIProvider):
             enabled_tools.add("control_music")
         if read_aloud_tool_handler is not None:
             enabled_tools.add("read_aloud")
+        if search_tool_handler is not None:
+            enabled_tools.add("search_memory")
         function_declarations = build_tools_for_provider(enabled_tools, "gemini")
         if function_declarations:
             payload.setdefault("tools", []).append(
@@ -3106,6 +3140,7 @@ class GeminiProvider(AIProvider):
                 image_handler=image_tool_handler,
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
+                search_handler=search_tool_handler,
             )
             for candidate in data.get("candidates", []) or []:
                 parts = candidate.get("content", {}).get("parts", []) or []

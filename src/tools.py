@@ -111,6 +111,20 @@ READ_ALOUD_TOOL_PROMPT_APPENDIX = (
     "experience (e.g. reading a poem, story, or important announcement)."
 )
 
+# Guidance appended to system prompts when the search/memory tool is enabled.
+SEARCH_TOOL_PROMPT_APPENDIX = (
+    "You have access to a search_memory tool that can search the user's past "
+    "conversations and configured document directories for relevant context. "
+    "Use this tool when:\n"
+    "  - The user asks about something they mentioned before\n"
+    "  - You need context from previous conversations\n"
+    "  - The user references past discussions or decisions\n"
+    "  - Finding relevant information from the user's documents would help\n\n"
+    "The search uses word-boundary matching, so searching for 'dog' will match "
+    "'dog', 'dog,', 'dog.' but not 'doggedly' or 'hotdog'. You can search "
+    "'history' (past conversations), 'documents' (configured directories), or 'all'."
+)
+
 
 # ---------------------------------------------------------------------------
 # ToolSpec dataclass
@@ -213,11 +227,45 @@ READ_ALOUD_TOOL_SPEC = ToolSpec(
     prompt_appendix=READ_ALOUD_TOOL_PROMPT_APPENDIX,
 )
 
+SEARCH_TOOL_SPEC = ToolSpec(
+    name="search_memory",
+    description=(
+        "Search the user's past conversations and configured document directories "
+        "for relevant context. Use this when the user asks about something they "
+        "mentioned before, references past discussions, or when finding relevant "
+        "information from their documents would help answer their question."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "keyword": {
+                "type": "string",
+                "description": (
+                    "The word or phrase to search for. Uses word-boundary matching, "
+                    "so 'dog' matches 'dog', 'dog,', 'dog.' but not 'doggedly'."
+                ),
+            },
+            "source": {
+                "type": "string",
+                "enum": ["history", "documents", "all"],
+                "description": (
+                    "Where to search: 'history' for past conversations, "
+                    "'documents' for configured directories, or 'all' for both. "
+                    "Defaults to 'history'."
+                ),
+            },
+        },
+        "required": ["keyword"],
+    },
+    prompt_appendix=SEARCH_TOOL_PROMPT_APPENDIX,
+)
+
 # Registry mapping tool name to spec for easy lookup.
 TOOL_REGISTRY: Dict[str, ToolSpec] = {
     IMAGE_TOOL_SPEC.name: IMAGE_TOOL_SPEC,
     MUSIC_TOOL_SPEC.name: MUSIC_TOOL_SPEC,
     READ_ALOUD_TOOL_SPEC.name: READ_ALOUD_TOOL_SPEC,
+    SEARCH_TOOL_SPEC.name: SEARCH_TOOL_SPEC,
 }
 
 
@@ -326,11 +374,13 @@ def build_tools_for_provider(
     for tool_name in sorted(enabled_tools):
         spec = TOOL_REGISTRY.get(tool_name)
         if not spec:
+            print(f"[build_tools_for_provider] WARNING: No spec found for tool '{tool_name}'")
             continue
         if provider_name in ("openai", "grok", "claude", "custom"):
             declarations.append(build_openai_tool_declaration(spec))
         elif provider_name == "gemini":
             declarations.append(build_gemini_function_declaration(spec))
+    print(f"[build_tools_for_provider] Built {len(declarations)} tools for {provider_name}: {[d.get('function', d).get('name', d.get('name')) for d in declarations]}")
     return declarations
 
 
@@ -349,6 +399,7 @@ class ToolContext:
     image_handler: Optional[Callable[[str], str]] = None
     music_handler: Optional[Callable[[str, Optional[str], Optional[float]], str]] = None
     read_aloud_handler: Optional[Callable[[str], str]] = None
+    search_handler: Optional[Callable[[str, Optional[str]], str]] = None
 
 
 def run_tool_call(
@@ -405,6 +456,17 @@ def run_tool_call(
             print(f"Error in read_aloud_handler: {e}")
             return f"Error reading aloud: {e}"
 
+    elif tool_name == "search_memory":
+        if context.search_handler is None:
+            return "Error: search/memory tool is not available."
+        keyword = args.get("keyword", "")
+        source = args.get("source", "history")
+        try:
+            return context.search_handler(keyword, source)
+        except Exception as e:
+            print(f"Error in search_handler: {e}")
+            return f"Error searching memory: {e}"
+
     else:
         return f"Error: unknown tool '{tool_name}' requested."
 
@@ -430,6 +492,22 @@ def parse_tool_arguments(raw_args: str) -> Dict[str, Any]:
         return {}
 
 
+# Prefix used by tools to indicate their result should not be shown in the chat UI
+HIDE_TOOL_RESULT_PREFIX = "__HIDE_TOOL_RESULT__"
+
+
+def should_hide_tool_result(result: str) -> bool:
+    """Return True if the tool result should be hidden from chat output."""
+    return result and result.startswith(HIDE_TOOL_RESULT_PREFIX)
+
+
+def strip_hide_prefix(result: str) -> str:
+    """Strip the hide prefix from a tool result (for sending to model)."""
+    if result and result.startswith(HIDE_TOOL_RESULT_PREFIX):
+        return result[len(HIDE_TOOL_RESULT_PREFIX):]
+    return result
+
+
 # ---------------------------------------------------------------------------
 # ToolManager – model capability checks and handler creation
 # ---------------------------------------------------------------------------
@@ -447,6 +525,7 @@ class ToolManager:
         image_tool_enabled: bool = True,
         music_tool_enabled: bool = False,
         read_aloud_tool_enabled: bool = False,
+        search_tool_enabled: bool = False,
     ):
         """
         Initialize the ToolManager.
@@ -459,10 +538,13 @@ class ToolManager:
             Whether the music tool is globally enabled.
         read_aloud_tool_enabled : bool
             Whether the read aloud tool is globally enabled.
+        search_tool_enabled : bool
+            Whether the search/memory tool is globally enabled.
         """
         self.image_tool_enabled = image_tool_enabled
         self.music_tool_enabled = music_tool_enabled
         self.read_aloud_tool_enabled = read_aloud_tool_enabled
+        self.search_tool_enabled = search_tool_enabled
 
     def get_provider_name_for_model(
         self,
@@ -578,6 +660,17 @@ class ToolManager:
             return False
         return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
+    def supports_search_tools(self, model_name: str, model_provider_map: Optional[Dict[str, str]] = None, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+        """
+        Return True if the given model should be offered the search/memory tool.
+        """
+        if not self.search_tool_enabled:
+            print(f"[SearchTool] Tool globally disabled (search_tool_enabled={self.search_tool_enabled})")
+            return False
+        supports = self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
+        print(f"[SearchTool] supports_search_tools({model_name}) = {supports}")
+        return supports
+
     def get_enabled_tools_for_model(
         self,
         model_name: str,
@@ -594,6 +687,9 @@ class ToolManager:
             enabled.add("control_music")
         if self.supports_read_aloud_tools(model_name, model_provider_map, custom_models):
             enabled.add("read_aloud")
+        if self.supports_search_tools(model_name, model_provider_map, custom_models):
+            enabled.add("search_memory")
+        print(f"[ToolManager] get_enabled_tools_for_model({model_name}) = {enabled}")
         return enabled
 
     def build_tool_context(
@@ -602,6 +698,7 @@ class ToolManager:
         image_handler: Optional[Callable[[str], str]] = None,
         music_handler: Optional[Callable[[str, Optional[str], Optional[float]], str]] = None,
         read_aloud_handler: Optional[Callable[[str], str]] = None,
+        search_handler: Optional[Callable[[str, Optional[str]], str]] = None,
         model_provider_map: Optional[Dict[str, str]] = None,
         custom_models: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> ToolContext:
@@ -618,6 +715,8 @@ class ToolManager:
             Handler for music control.
         read_aloud_handler : Optional[Callable[[str], str]]
             Handler for read aloud.
+        search_handler : Optional[Callable[[str, Optional[str]], str]]
+            Handler for search/memory.
         model_provider_map : Optional[Dict[str, str]]
             Optional mapping of model names to provider names.
         custom_models : Optional[Dict[str, Dict[str, Any]]]
@@ -635,5 +734,7 @@ class ToolManager:
             ctx.music_handler = music_handler
         if self.supports_read_aloud_tools(model_name, model_provider_map, custom_models):
             ctx.read_aloud_handler = read_aloud_handler
+        if self.supports_search_tools(model_name, model_provider_map, custom_models):
+            ctx.search_handler = search_handler
         return ctx
 

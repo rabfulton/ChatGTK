@@ -81,6 +81,7 @@ class ChatController:
             image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
             music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
             read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
+            search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
         )
 
     # -----------------------------------------------------------------------
@@ -404,4 +405,5 @@ class ChatController:
             image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
             music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
             read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
+            search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
         )

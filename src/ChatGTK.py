@@ -1076,6 +1076,13 @@ class OpenAIGTKClient(Gtk.Window):
         """
         return self.tool_manager.supports_read_aloud_tools(model_name, self.model_provider_map, self.custom_models)
 
+    def _supports_search_tools(self, model_name):
+        """
+        Return True if the given model should be offered the search/memory tool.
+        Delegates to ToolManager.
+        """
+        return self.tool_manager.supports_search_tools(model_name, self.model_provider_map, self.custom_models)
+
     def _normalize_image_tags(self, text):
         """
         Normalize any <img ...> tags emitted by models into the self-closing
@@ -1530,6 +1537,174 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             return f"Error reading aloud: {e}"
 
+    def _handle_search_memory_tool(self, keyword: str, source: str = "history") -> str:
+        """
+        Handle search_memory tool calls from AI models.
+        
+        Searches past conversations and/or configured directories for the keyword
+        using word-boundary matching.
+        
+        Parameters
+        ----------
+        keyword : str
+            The word or phrase to search for.
+        source : str
+            Where to search: 'history', 'documents', or 'all'.
+        """
+        import re
+        import glob
+        from config import HISTORY_DIR
+        
+        print(f"[SearchTool] Called with keyword='{keyword}', source='{source}'")
+        
+        if not keyword:
+            return "No keyword provided for search."
+        
+        keyword = keyword.strip()
+        source = (source or "history").strip().lower()
+        
+        # Get settings
+        search_history_enabled = bool(getattr(self, "search_history_enabled", True))
+        search_directories = getattr(self, "search_directories", "") or ""
+        result_limit = int(getattr(self, "search_result_limit", 1))
+        result_limit = max(1, min(5, result_limit))
+        
+        # Build word-boundary regex pattern
+        pattern = re.compile(r'\b' + re.escape(keyword) + r'\b', re.IGNORECASE)
+        
+        results = []
+        
+        # Search history if enabled and source includes history
+        if search_history_enabled and source in ("history", "all"):
+            history_results = self._search_history_files(keyword, pattern, result_limit)
+            results.extend(history_results)
+        
+        # Search additional directories if source includes documents
+        if source in ("documents", "all") and search_directories:
+            dirs = [d.strip() for d in search_directories.split(",") if d.strip()]
+            for directory in dirs:
+                if os.path.isdir(directory):
+                    doc_results = self._search_directory(directory, keyword, pattern, result_limit - len(results))
+                    results.extend(doc_results)
+                    if len(results) >= result_limit:
+                        break
+        
+        # Limit results
+        results = results[:result_limit]
+        
+        if not results:
+            return f"No results found for '{keyword}'."
+        
+        # Format results for the model
+        formatted = []
+        for i, result in enumerate(results, 1):
+            formatted.append(f"--- Result {i} ---\nSource: {result['source']}\n{result['content']}")
+        
+        result_text = f"Found {len(results)} result(s) for '{keyword}':\n\n" + "\n\n".join(formatted)
+        
+        # If show_results is disabled, prefix with __HIDE_TOOL_RESULT__ so providers
+        # won't append it to the visible output (but it's still sent to the model)
+        show_results = bool(getattr(self, "search_show_results", False))
+        if not show_results:
+            return "__HIDE_TOOL_RESULT__" + result_text
+        return result_text
+    
+    def _search_history_files(self, keyword: str, pattern, limit: int) -> list:
+        """Search conversation history JSON files for keyword matches."""
+        import glob
+        from config import HISTORY_DIR
+        
+        results = []
+        current_chat_file = None
+        if self.current_chat_id:
+            current_chat_file = os.path.join(HISTORY_DIR, f"{self.current_chat_id}.json")
+        
+        # Find all JSON files in history directory
+        json_files = glob.glob(os.path.join(HISTORY_DIR, "*.json"))
+        
+        for json_file in json_files:
+            # Skip current conversation
+            if current_chat_file and os.path.normpath(json_file) == os.path.normpath(current_chat_file):
+                continue
+            
+            if len(results) >= limit:
+                break
+            
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                messages = data.get("messages", [])
+                matching_messages = []
+                
+                for msg in messages:
+                    content = msg.get("content", "")
+                    role = msg.get("role", "")
+                    if role == "system":
+                        continue
+                    if pattern.search(content):
+                        matching_messages.append(f"[{role}]: {content[:500]}{'...' if len(content) > 500 else ''}")
+                
+                if matching_messages:
+                    chat_name = os.path.basename(json_file).replace(".json", "")
+                    results.append({
+                        "source": f"Chat: {chat_name}",
+                        "content": "\n".join(matching_messages[:3])  # Limit messages per chat
+                    })
+                    
+            except (json.JSONDecodeError, IOError) as e:
+                continue
+        
+        return results
+    
+    def _search_directory(self, directory: str, keyword: str, pattern, limit: int) -> list:
+        """Search text files in a directory for keyword matches."""
+        import glob
+        
+        results = []
+        
+        # Search common text file types
+        file_patterns = ["*.txt", "*.md", "*.json", "*.log", "*.csv"]
+        
+        for file_pattern in file_patterns:
+            if len(results) >= limit:
+                break
+            
+            files = glob.glob(os.path.join(directory, "**", file_pattern), recursive=True)
+            
+            for filepath in files:
+                if len(results) >= limit:
+                    break
+                
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    
+                    if pattern.search(content):
+                        # Extract matching lines with context
+                        lines = content.split('\n')
+                        matching_lines = []
+                        for i, line in enumerate(lines):
+                            if pattern.search(line):
+                                # Get line with some context
+                                start = max(0, i - 1)
+                                end = min(len(lines), i + 2)
+                                context = '\n'.join(lines[start:end])
+                                matching_lines.append(context)
+                                if len(matching_lines) >= 3:
+                                    break
+                        
+                        if matching_lines:
+                            results.append({
+                                "source": f"File: {filepath}",
+                                "content": "\n---\n".join(matching_lines)[:1000]
+                            })
+                            
+                except (IOError, UnicodeDecodeError):
+                    continue
+        
+        return results
+
     def apply_model_fetch_results(self, models, mapping):
         if mapping:
             self.model_provider_map = mapping
@@ -1612,6 +1787,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
             self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
             self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
+            self.tool_manager.search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
 
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()
@@ -1708,6 +1884,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
             self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
             self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
+            self.tool_manager.search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
             # Persist all settings, including the updated tool flags.
             save_settings(convert_settings_for_save(get_object_settings(self)))
         dialog.destroy()
@@ -2070,6 +2247,7 @@ class OpenAIGTKClient(Gtk.Window):
                 image_tool_handler = None
                 music_tool_handler = None
                 read_aloud_tool_handler = None
+                search_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -2082,6 +2260,11 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
                         return self._handle_read_aloud_tool(text)
+
+                if self._supports_search_tools(model):
+                    def search_tool_handler(keyword, source=None):
+                        return self._handle_search_memory_tool(keyword, source)
+                    print(f"[ChatGTK] Search tool handler created for model {model}")
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -2097,6 +2280,9 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["music_tool_handler"] = music_tool_handler
                 if read_aloud_tool_handler is not None:
                     kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
+                if search_tool_handler is not None:
+                    kwargs["search_tool_handler"] = search_tool_handler
+                print(f"[ChatGTK] Tool handlers in kwargs: {[k for k in kwargs if 'handler' in k]}")
 
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'custom':
@@ -2107,6 +2293,7 @@ class OpenAIGTKClient(Gtk.Window):
                 image_tool_handler = None
                 music_tool_handler = None
                 read_aloud_tool_handler = None
+                search_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -2119,6 +2306,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
                         return self._handle_read_aloud_tool(text)
+
+                if self._supports_search_tools(model):
+                    def search_tool_handler(keyword, source=None):
+                        return self._handle_search_memory_tool(keyword, source)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -2134,6 +2325,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["music_tool_handler"] = music_tool_handler
                 if read_aloud_tool_handler is not None:
                     kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
+                if search_tool_handler is not None:
+                    kwargs["search_tool_handler"] = search_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'gemini':
@@ -2146,6 +2339,7 @@ class OpenAIGTKClient(Gtk.Window):
                 image_tool_handler = None
                 music_tool_handler = None
                 read_aloud_tool_handler = None
+                search_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -2158,6 +2352,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
                         return self._handle_read_aloud_tool(text)
+
+                if self._supports_search_tools(model):
+                    def search_tool_handler(keyword, source=None):
+                        return self._handle_search_memory_tool(keyword, source)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -2174,6 +2372,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["music_tool_handler"] = music_tool_handler
                 if read_aloud_tool_handler is not None:
                     kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
+                if search_tool_handler is not None:
+                    kwargs["search_tool_handler"] = search_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
 
@@ -2187,6 +2387,7 @@ class OpenAIGTKClient(Gtk.Window):
                 image_tool_handler = None
                 music_tool_handler = None
                 read_aloud_tool_handler = None
+                search_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -2199,6 +2400,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
                         return self._handle_read_aloud_tool(text)
+
+                if self._supports_search_tools(model):
+                    def search_tool_handler(keyword, source=None):
+                        return self._handle_search_memory_tool(keyword, source)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -2214,6 +2419,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["music_tool_handler"] = music_tool_handler
                 if read_aloud_tool_handler is not None:
                     kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
+                if search_tool_handler is not None:
+                    kwargs["search_tool_handler"] = search_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'claude':
@@ -2227,6 +2434,7 @@ class OpenAIGTKClient(Gtk.Window):
                 image_tool_handler = None
                 music_tool_handler = None
                 read_aloud_tool_handler = None
+                search_tool_handler = None
 
                 if self._supports_image_tools(model):
                     def image_tool_handler(prompt_arg):
@@ -2239,6 +2447,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if self._supports_read_aloud_tools(model):
                     def read_aloud_tool_handler(text):
                         return self._handle_read_aloud_tool(text)
+
+                if self._supports_search_tools(model):
+                    def search_tool_handler(keyword, source=None):
+                        return self._handle_search_memory_tool(keyword, source)
 
                 kwargs = {
                     "messages": messages_to_send,
@@ -2255,6 +2467,8 @@ class OpenAIGTKClient(Gtk.Window):
                     kwargs["music_tool_handler"] = music_tool_handler
                 if read_aloud_tool_handler is not None:
                     kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
+                if search_tool_handler is not None:
+                    kwargs["search_tool_handler"] = search_tool_handler
 
                 answer = provider.generate_chat_completion(**kwargs)
             elif provider_name == 'perplexity':

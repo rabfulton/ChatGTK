@@ -170,6 +170,17 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the read_aloud tool to text models.
     # When false, models will not be told about the tool and cannot call it.
     'READ_ALOUD_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Master switch for exposing the search/memory tool to text models.
+    # When enabled, models can search past conversations and configured directories.
+    'SEARCH_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Whether to include the conversation history folder in search tool queries.
+    'SEARCH_HISTORY_ENABLED': {'type': bool, 'default': True},
+    # Comma-separated list of additional directories to search (for documents, notes, etc.).
+    'SEARCH_DIRECTORIES': {'type': str, 'default': ''},
+    # Maximum number of search results to return to the model (1-5).
+    'SEARCH_RESULT_LIMIT': {'type': int, 'default': 1},
+    # Whether to show search results in the chat output (if False, results are only sent to the model).
+    'SEARCH_SHOW_RESULTS': {'type': bool, 'default': False},
     # When enabled, closing or minimizing the main window can hide it to the
     # system tray instead of keeping it in the taskbar. A tray icon is shown
     # which can be used to restore or quit the application.
