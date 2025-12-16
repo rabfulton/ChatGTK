@@ -18,7 +18,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
 
-from gi.repository import Gtk, GtkSource, GLib
+from gi.repository import Gtk, GtkSource, GLib, Pango
 import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
@@ -3683,9 +3683,10 @@ class SettingsDialog(Gtk.Dialog):
 class ToolsDialog(Gtk.Dialog):
     """Dialog for configuring tool enablement (image, music, web search, read aloud)."""
 
-    def __init__(self, parent, **settings):
+    def __init__(self, parent, tool_use_supported=True, **settings):
         super().__init__(title="Tools", transient_for=parent, flags=0)
         apply_settings(self, settings)
+        self.tool_use_supported = tool_use_supported
         self.set_modal(True)
         self.set_default_size(400, 200)
 
@@ -3755,6 +3756,34 @@ class ToolsDialog(Gtk.Dialog):
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
         list_box.add(row)
+
+        if not self.tool_use_supported:
+            frame = Gtk.Frame()
+            frame.set_shadow_type(Gtk.ShadowType.IN)
+            frame.set_margin_top(6)
+            frame.set_margin_bottom(0)
+            frame.set_margin_start(12)
+            frame.set_margin_end(12)
+
+            notice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            notice_box.set_margin_top(8)
+            notice_box.set_margin_bottom(8)
+            notice_box.set_margin_start(8)
+            notice_box.set_margin_end(8)
+
+            info_icon = Gtk.Image.new_from_icon_name("dialog-information-symbolic", Gtk.IconSize.MENU)
+            notice_box.pack_start(info_icon, False, False, 0)
+
+            notice = Gtk.Label(
+                label="Tool use disabled for current model. Enable this for supported models in settings->whitelist->edit",
+                xalign=0,
+            )
+            notice.set_line_wrap(True)
+            notice.set_line_wrap_mode(Pango.WrapMode.WORD)
+            notice_box.pack_start(notice, True, True, 0)
+
+            frame.add(notice_box)
+            box.pack_start(frame, False, False, 0)
 
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)

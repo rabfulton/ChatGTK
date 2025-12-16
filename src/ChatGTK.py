@@ -1689,8 +1689,12 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_open_tools(self, widget):
         # Open the tools dialog for configuring image/music tools.
+        current_model = self._get_model_id_from_combo()
+        card = get_card(current_model, self.custom_models)
+        tool_use_supported = bool(card and card.supports_tools() and card.is_chat_model())
         dialog = ToolsDialog(self, **{k.lower(): getattr(self, k.lower())
-                               for k in SETTINGS_CONFIG.keys()})
+                               for k in SETTINGS_CONFIG.keys()},
+                               tool_use_supported=tool_use_supported)
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             tool_settings = dialog.get_tool_settings()
