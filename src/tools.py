@@ -508,6 +508,52 @@ def strip_hide_prefix(result: str) -> str:
     return result
 
 
+def build_enabled_tools_from_handlers(
+    image_handler=None,
+    music_handler=None,
+    read_aloud_handler=None,
+    search_handler=None,
+) -> Set[str]:
+    """
+    Build the set of enabled tool names based on which handlers are provided.
+    
+    This centralizes the logic for determining which tools are enabled,
+    eliminating the need to update multiple places when adding a new tool.
+    """
+    enabled: Set[str] = set()
+    if image_handler is not None:
+        enabled.add("generate_image")
+    if music_handler is not None:
+        enabled.add("control_music")
+    if read_aloud_handler is not None:
+        enabled.add("read_aloud")
+    if search_handler is not None:
+        enabled.add("search_memory")
+    return enabled
+
+
+def process_tool_result(result: str, snippets: List[str]) -> str:
+    """
+    Process a tool result: add to snippets list if visible, return cleaned result.
+    
+    Parameters
+    ----------
+    result : str
+        The raw tool result, possibly with HIDE_TOOL_RESULT_PREFIX.
+    snippets : List[str]
+        List to append visible results to (modified in place).
+    
+    Returns
+    -------
+    str
+        The cleaned result (prefix stripped) for sending to the model.
+    """
+    cleaned = strip_hide_prefix(result) if result else ""
+    if result and not should_hide_tool_result(result):
+        snippets.append(cleaned)
+    return cleaned
+
+
 # ---------------------------------------------------------------------------
 # ToolManager – model capability checks and handler creation
 # ---------------------------------------------------------------------------

@@ -180,6 +180,20 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
   - To use the tools just ask your model "Write me a short poem and read it aloud".
 
+- **Search/Memory tool (`search_memory`)**
+  - Disabled by default; enable via **Enable Search Tool** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
+  - Allows models to search past conversations and optionally configured directories for information using word-boundary matching (e.g., "dog" matches "dog," and "dog." but not "doggedly").
+  - Searches both user questions and assistant responses from your conversation history (system messages are excluded).
+  - Configure via **Settings → Tool Options → Search/Memory Tool**:
+    - **Enable Search Tool**: master toggle to enable/disable the tool.
+    - **Search Conversation History**: when enabled, searches past conversations in your history folder.
+    - **Search Directories**: comma-separated list of directories to search for text files (.txt, .md, .json, .log, .csv).
+    - **Result Limit**: maximum number of results to return (1-5).
+    - **Show Results in Chat**: when enabled, search results appear in the chat window; when disabled, results are only sent to the model silently.
+  - The current conversation is automatically excluded from search results to avoid circular references.
+  - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
+  - Example usage: "Do you remember what we discussed about Python decorators?" or "Search my notes for information about project deadlines".
+
 - **Web search (provider-native tools)**
   - Disabled by default; enable via **Enable Web Search** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
   - For **OpenAI models**, this uses the built-in `web_search` tool described in the OpenAI tools docs ([OpenAI web search guide](https://platform.openai.com/docs/guides/tools/web-search?api-mode=responses)).

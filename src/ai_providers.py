@@ -19,6 +19,8 @@ import subprocess
 
 from tools import (
     build_tools_for_provider,
+    build_enabled_tools_from_handlers,
+    process_tool_result,
     ToolContext,
     should_hide_tool_result,
     strip_hide_prefix,
@@ -328,15 +330,9 @@ class CustomProvider(AIProvider):
         url = self._url("/chat/completions")
         
         # Determine which tools are enabled
-        enabled_tools = set()
-        if image_tool_handler is not None:
-            enabled_tools.add("generate_image")
-        if music_tool_handler is not None:
-            enabled_tools.add("control_music")
-        if read_aloud_tool_handler is not None:
-            enabled_tools.add("read_aloud")
-        if search_tool_handler is not None:
-            enabled_tools.add("search_memory")
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
         
         # Build tool declarations for custom provider (uses OpenAI-compatible format)
         tools = build_tools_for_provider(enabled_tools, "custom")
@@ -778,15 +774,9 @@ class CustomProvider(AIProvider):
         input_items, instructions = self._build_responses_input(messages)
         
         # Determine which function tools are enabled
-        enabled_tools = set()
-        if image_tool_handler is not None:
-            enabled_tools.add("generate_image")
-        if music_tool_handler is not None:
-            enabled_tools.add("control_music")
-        if read_aloud_tool_handler is not None:
-            enabled_tools.add("read_aloud")
-        if search_tool_handler is not None:
-            enabled_tools.add("search_memory")
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
         
         # Build tools array
         tools = self._build_responses_tools(enabled_tools)
@@ -1390,15 +1380,9 @@ class OpenAIProvider(AIProvider):
         input_items, instructions = self._build_responses_input(messages)
         
         # Determine which function tools are enabled
-        enabled_tools = set()
-        if image_tool_handler is not None:
-            enabled_tools.add("generate_image")
-        if music_tool_handler is not None:
-            enabled_tools.add("control_music")
-        if read_aloud_tool_handler is not None:
-            enabled_tools.add("read_aloud")
-        if search_tool_handler is not None:
-            enabled_tools.add("search_memory")
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
         
         # Build tools array
         tools = self._build_responses_tools(enabled_tools, web_search_enabled, model)
@@ -1724,14 +1708,9 @@ class OpenAIProvider(AIProvider):
         # Build tools if model supports them and handlers are provided
         enabled_tools = set()
         if model_supports_tools:
-            if image_tool_handler is not None:
-                enabled_tools.add("generate_image")
-            if music_tool_handler is not None:
-                enabled_tools.add("control_music")
-            if read_aloud_tool_handler is not None:
-                enabled_tools.add("read_aloud")
-            if search_tool_handler is not None:
-                enabled_tools.add("search_memory")
+            enabled_tools = build_enabled_tools_from_handlers(
+                image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+            )
         
         tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else []
         if tools:
@@ -2374,15 +2353,9 @@ class GrokProvider(AIProvider):
         # Enable tools for Grok chat models when handlers are supplied. xAI's
         # API follows the OpenAI tools schema:
         # https://docs.x.ai/docs/guides/tools/overview
-        enabled_tools = set()
-        if image_tool_handler is not None:
-            enabled_tools.add("generate_image")
-        if music_tool_handler is not None:
-            enabled_tools.add("control_music")
-        if read_aloud_tool_handler is not None:
-            enabled_tools.add("read_aloud")
-        if search_tool_handler is not None:
-            enabled_tools.add("search_memory")
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
         tools = build_tools_for_provider(enabled_tools, "grok")
         if tools:
             params["tools"] = tools
@@ -2642,15 +2615,9 @@ class ClaudeProvider(AIProvider):
 
         # Enable tools for Claude chat models when handlers are supplied. The
         # compatibility layer supports the OpenAI tools schema.
-        enabled_tools = set()
-        if image_tool_handler is not None:
-            enabled_tools.add("generate_image")
-        if music_tool_handler is not None:
-            enabled_tools.add("control_music")
-        if read_aloud_tool_handler is not None:
-            enabled_tools.add("read_aloud")
-        if search_tool_handler is not None:
-            enabled_tools.add("search_memory")
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
         tools = build_tools_for_provider(enabled_tools, "claude")
         if tools:
             params["tools"] = tools
@@ -3091,15 +3058,9 @@ class GeminiProvider(AIProvider):
         # declarations to Gemini using its functionDeclarations schema,
         # mirroring the documented pattern in the Gemini function calling guide:
         # https://ai.google.dev/gemini-api/docs/function-calling?example=meeting
-        enabled_tools = set()
-        if image_tool_handler is not None:
-            enabled_tools.add("generate_image")
-        if music_tool_handler is not None:
-            enabled_tools.add("control_music")
-        if read_aloud_tool_handler is not None:
-            enabled_tools.add("read_aloud")
-        if search_tool_handler is not None:
-            enabled_tools.add("search_memory")
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
         function_declarations = build_tools_for_provider(enabled_tools, "gemini")
         if function_declarations:
             payload.setdefault("tools", []).append(
