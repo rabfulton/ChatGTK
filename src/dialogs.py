@@ -3946,13 +3946,6 @@ class PromptEditorDialog(Gtk.Dialog):
         vbox.set_margin_end(12)
         content.pack_start(vbox, True, True, 0)
 
-        # Optional hint label
-        label = Gtk.Label(
-            label="Compose a longer or multi-line prompt below.",
-            xalign=0,
-        )
-        vbox.pack_start(label, False, False, 0)
-
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
@@ -3966,10 +3959,29 @@ class PromptEditorDialog(Gtk.Dialog):
         self.textview.set_top_margin(8)
         self.textview.set_bottom_margin(8)
 
+        # Placeholder text support using an overlay label
+        self._placeholder_text = "Compose a longer or multi-line prompt below."
+
         buf = self.textview.get_buffer()
         buf.set_text(initial_text or "")
 
-        scroll.add(self.textview)
+        # Create overlay to show placeholder over the textview
+        overlay = Gtk.Overlay()
+        overlay.add(self.textview)
+
+        self._placeholder_label = Gtk.Label(label=self._placeholder_text)
+        self._placeholder_label.set_halign(Gtk.Align.START)
+        self._placeholder_label.set_valign(Gtk.Align.START)
+        self._placeholder_label.set_margin_start(8)
+        self._placeholder_label.set_margin_top(8)
+        self._placeholder_label.get_style_context().add_class("dim-label")
+        overlay.add_overlay(self._placeholder_label)
+
+        # Update placeholder visibility based on content
+        buf.connect("changed", self._on_buffer_changed)
+        self._update_placeholder_visibility()
+
+        scroll.add(overlay)
 
         # Bottom row with voice button on left and dialog buttons on right
         bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -4017,6 +4029,19 @@ class PromptEditorDialog(Gtk.Dialog):
             Gtk.IconSize.BUTTON
         )
         self.btn_voice.set_tooltip_text("Stop recording" if recording else "Start voice input")
+
+    def _update_placeholder_visibility(self):
+        """Show or hide placeholder based on buffer content."""
+        buf = self.textview.get_buffer()
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+        if text:
+            self._placeholder_label.hide()
+        else:
+            self._placeholder_label.show()
+
+    def _on_buffer_changed(self, buf):
+        """Update placeholder visibility when buffer content changes."""
+        self._update_placeholder_visibility()
 
     def get_text(self) -> str:
         """Return the full prompt text from the editor."""
