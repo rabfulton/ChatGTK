@@ -92,6 +92,19 @@ class CustomProvider(AIProvider):
         if os.environ.get("DEBUG_CHATGTK"):
             print(f"[DEBUG CustomProvider] {label}: {json.dumps(data, indent=2, default=str)}")
 
+    def _strip_think_content(self, text: str) -> str:
+        """Remove leading <think>...</think> blocks some models prepend."""
+        if not text:
+            return text
+        pattern = re.compile(r"^\s*<think>.*?</think>\s*", flags=re.DOTALL | re.IGNORECASE)
+        cleaned = text
+        while True:
+            new_cleaned = pattern.sub("", cleaned)
+            if new_cleaned == cleaned:
+                break
+            cleaned = new_cleaned
+        return cleaned
+
     def _headers(self):
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -157,8 +170,8 @@ class CustomProvider(AIProvider):
                 result = "".join(text_parts)
                 if image_tags:
                     result += "\n\n" + "\n\n".join(image_tags) if result else "\n\n".join(image_tags)
-                return result
-            return content
+                return self._strip_think_content(result)
+            return self._strip_think_content(content)
 
         # Try Responses API format
         # Responses API returns: {"output": [{"type": "message", "content": [{"text": "..."}]}]}
@@ -207,13 +220,13 @@ class CustomProvider(AIProvider):
                         text_content += "\n\n" + "\n\n".join(image_tags)
                     else:
                         text_content = "\n\n".join(image_tags)
-                
+                text_content = self._strip_think_content(text_content)
                 if text_content:
                     return text_content
         
         # Try Responses output_text (legacy/simple format)
         if "output_text" in data:
-            return data.get("output_text") or ""
+            return self._strip_think_content(data.get("output_text") or "")
         
         return ""
 
@@ -595,6 +608,7 @@ class CustomProvider(AIProvider):
             else:
                 text_content = "\n\n".join(image_tags)
         
+        text_content = self._strip_think_content(text_content)
         return text_content, function_calls
 
     def _build_responses_tools(self, enabled_tools: set) -> list:
