@@ -307,6 +307,8 @@ class OpenAIGTKClient(Gtk.Window):
 
         self.entry_question = Gtk.Entry()
         self.entry_question.set_placeholder_text("Enter your question here...")
+        self.entry_question.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
+        self.entry_question.connect("icon-press", self.on_question_icon_pressed)
         self.entry_question.connect("activate", self.on_submit)
 
         # Button to open a larger prompt editor dialog
@@ -1814,6 +1816,11 @@ class OpenAIGTKClient(Gtk.Window):
             self.entry_question.set_text(text)
 
         dialog.destroy()
+
+    def on_question_icon_pressed(self, entry, icon_pos, event):
+        """Clear the question entry when its clear icon is clicked."""
+        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
+            entry.set_text("")
 
     def _apply_api_keys(self, new_keys):
         """Apply API key changes: update stored keys, environment, and providers."""
