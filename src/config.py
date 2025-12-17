@@ -205,7 +205,7 @@ SETTINGS_CONFIG = {
     # Speech prompt template for Gemini TTS and audio-preview models. Use {text} as placeholder.
     'TTS_PROMPT_TEMPLATE': {'type': str, 'default': ''},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},
-    'REALTIME_PROMPT': {'type': str, 'default': 'Your name is {name}, speak quickly and professionally'},
+    'REALTIME_PROMPT': {'type': str, 'default': 'Your name is {name}, speak quickly and professionally. Respond in the same language as the user unless directed otherwise.'},
     'MUTE_MIC_DURING_PLAYBACK': {'type': bool, 'default': True},
     'SIDEBAR_VISIBLE': {'type': bool, 'default': True},
     'SIDEBAR_WIDTH': {'type': int, 'default': 200},
