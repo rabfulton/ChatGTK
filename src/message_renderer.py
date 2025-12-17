@@ -183,17 +183,7 @@ class MessageRenderer:
 
         # Username label
         username = getpass.getuser()
-        lbl_name = Gtk.Label()
-        lbl_name.set_xalign(0)
-        lbl_name.set_markup(f"<b>{username}:</b>")
-        
-        # Style label to match user color
-        css_label = (
-            f"label {{ color: {self.settings.user_color}; "
-            f"font-family: {self.settings.font_family}; "
-            f"font-size: {self.settings.font_size}pt; }}"
-        )
-        self._apply_css(lbl_name, css_label)
+        lbl_name = self._create_header_widget(username, is_user=True)
         
         content_container.pack_start(lbl_name, False, False, 0)
         
@@ -243,33 +233,21 @@ class MessageRenderer:
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
         
-        # AI name label
-        lbl_name = Gtk.Label()
-        lbl_name.set_selectable(True)
-        lbl_name.set_line_wrap(True)
-        lbl_name.set_line_wrap_mode(Gtk.WrapMode.WORD)
-        lbl_name.set_xalign(0)
-        css_ai = (
-            f"label {{ color: {self.settings.ai_color}; "
-            f"font-family: {self.settings.font_family}; "
-            f"font-size: {self.settings.font_size}pt; "
-            f"background-color: @theme_base_color;}}"
-        )
-        self._apply_css(lbl_name, css_ai)
-        lbl_name.set_text(f"{self.settings.ai_name}:")
-        content_container.pack_start(lbl_name, False, False, 0)
+        # AI name label (header box)
+        header_box = self._create_header_widget(f"{self.settings.ai_name}", is_user=False)
+        content_container.pack_start(header_box, False, False, 0)
         
         # Render markdown content
         full_text_segments = self._render_message_content(
             message_text, message_index, content_container, self.settings.ai_color
         )
                     
-        # Create speech button
+        # Create speech button and add to header
         speech_btn = self.callbacks.create_speech_button(full_text_segments)
+        header_box.pack_end(speech_btn, False, False, 0)
         
         # Pack containers
         response_container.pack_start(content_container, True, True, 0)
-        response_container.pack_end(speech_btn, False, False, 0)
 
         def on_response_button_press(widget, event):
             if event.button == 3:
@@ -436,6 +414,33 @@ class MessageRenderer:
     # -------------------------------------------------------------------------
     # Helper methods
     # -------------------------------------------------------------------------
+
+    def _create_header_widget(self, name: str, is_user: bool) -> Gtk.Box:
+        """Create a styled header widget for message names."""
+        container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        
+        label = Gtk.Label()
+        label.set_xalign(0.0)  # Center alignment
+        label.set_markup(f"<b>{name}</b>")
+        
+        # Determine color based on role
+        color = self.settings.user_color if is_user else self.settings.ai_color
+        
+        # Apply styling: font, size, color, and opacity
+        css = (
+            f"label {{ "
+            f"  color: {color}; "
+            f"  font-family: {self.settings.font_family}; "
+            f"  font-size: {self.settings.font_size}pt; "
+            f"  opacity: 0.7; "
+            f"}}"
+        )
+        self._apply_css(label, css)
+        
+        # Pack label with True/True to let it take available space and center itself
+        container.pack_start(label, True, True, 0)
+        
+        return container
 
     def _apply_css(self, widget, css_string: str):
         """Apply CSS to a widget."""
