@@ -40,6 +40,7 @@ from utils import (
     insert_resized_image,
     apply_settings,
     get_object_settings,
+    save_object_settings,
     convert_settings_for_save,
     load_api_keys,
     load_custom_models,
@@ -402,6 +403,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.connect("delete-event", self.on_delete_event)
         self.connect("window-state-event", self.on_window_state_event)
         self.connect("destroy", self.on_destroy)
+        self.connect("key-press-event", self._on_global_key_press)
 
     def _build_tray_menu(self):
         """
@@ -541,12 +543,16 @@ class OpenAIGTKClient(Gtk.Window):
         if hasattr(self, 'ws_provider'):
             self.ws_provider.stop_streaming()
             
-        # Save all settings including sidebar width
+        # Load existing settings first to preserve values we don't manage
+        existing = load_settings()
+        # Get settings from this object
         to_save = get_object_settings(self)
         to_save['WINDOW_WIDTH'] = self.current_geometry[0]
         to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
         to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
-        save_settings(convert_settings_for_save(to_save))
+        # Merge: existing settings + our updates
+        existing.update(to_save)
+        save_settings(convert_settings_for_save(existing))
         # Hide tray icon on exit (only for StatusIcon backend)
         if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
             try:
@@ -562,6 +568,91 @@ class OpenAIGTKClient(Gtk.Window):
             width, height = self.get_size()
             self.current_geometry = (width, height)
         return False
+
+    def _get_shortcuts(self) -> dict:
+        """Get keyboard shortcuts from settings, merged with defaults."""
+        from config import DEFAULT_SHORTCUTS
+        shortcuts_json = getattr(self, 'keyboard_shortcuts', '')
+        try:
+            shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
+        except json.JSONDecodeError:
+            shortcuts = {}
+        # Merge with defaults
+        for action, default_key in DEFAULT_SHORTCUTS.items():
+            if action not in shortcuts:
+                shortcuts[action] = default_key
+        return shortcuts
+
+    def _on_global_key_press(self, widget, event):
+        """Handle global keyboard shortcuts."""
+        shortcuts = self._get_shortcuts()
+        
+        # Build current key combo string
+        parts = []
+        if event.state & Gdk.ModifierType.CONTROL_MASK:
+            parts.append('<Ctrl>')
+        if event.state & Gdk.ModifierType.SHIFT_MASK:
+            parts.append('<Shift>')
+        if event.state & Gdk.ModifierType.MOD1_MASK:
+            parts.append('<Alt>')
+        
+        key_name = Gdk.keyval_name(event.keyval)
+        if key_name:
+            parts.append(key_name)
+        current_combo = ''.join(parts)
+        
+        # Find matching action
+        for action, shortcut in shortcuts.items():
+            if shortcut and shortcut.lower() == current_combo.lower():
+                return self._execute_shortcut_action(action)
+        
+        return False
+
+    def _execute_shortcut_action(self, action: str) -> bool:
+        """Execute a shortcut action. Returns True if handled."""
+        if action == 'new_chat':
+            self.on_new_chat(None)
+            return True
+        elif action == 'voice_input':
+            self.on_voice_input(None)
+            return True
+        elif action == 'prompt_editor':
+            self._open_prompt_editor()
+            return True
+        elif action == 'focus_input':
+            self.entry_question.grab_focus()
+            return True
+        elif action == 'submit':
+            self.on_submit(None)
+            return True
+        elif action.startswith('model_'):
+            # Get configured model for this slot
+            model_shortcuts_json = getattr(self, 'model_shortcuts', '{}')
+            try:
+                model_shortcuts = json.loads(model_shortcuts_json) if model_shortcuts_json else {}
+            except json.JSONDecodeError:
+                model_shortcuts = {}
+            
+            target_model = model_shortcuts.get(action, '')
+            if target_model:
+                # Find and select the model in the combo
+                model_store = self.combo_model.get_model()
+                for i, row in enumerate(model_store):
+                    # Check both display name and model ID
+                    if row[0] == target_model or (hasattr(self, '_display_to_model_id') and 
+                        self._display_to_model_id.get(row[0]) == target_model):
+                        self.combo_model.set_active(i)
+                        return True
+        return False
+
+    def _open_prompt_editor(self):
+        """Open the prompt editor dialog."""
+        current_text = self.entry_question.get_text()
+        dialog = PromptEditorDialog(self, current_text, on_voice_input=self.on_voice_input)
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            self.entry_question.set_text(dialog.get_text())
+        dialog.destroy()
 
     def _get_model_id_from_combo(self):
         """Get the actual model_id from the combo box, mapping display text back to model_id."""
@@ -869,7 +960,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.conversation_history[0]["content"] = prompt["content"]
         
         # Persist the change
-        save_settings(convert_settings_for_save(get_object_settings(self)))
+        save_object_settings(self)
 
     def fetch_models_async(self):
         """Fetch available models asynchronously."""
@@ -1795,7 +1886,7 @@ class OpenAIGTKClient(Gtk.Window):
         if response == Gtk.ResponseType.OK:
             new_settings = dialog.get_settings()
             apply_settings(self, new_settings)
-            save_settings(convert_settings_for_save(get_object_settings(self)))
+            save_object_settings(self)
 
             # Update message renderer settings and refresh existing message colors
             self._update_message_renderer_settings()
@@ -1922,7 +2013,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
             self.tool_manager.search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
             # Persist all settings, including the updated tool flags.
-            save_settings(convert_settings_for_save(get_object_settings(self)))
+            save_object_settings(self)
         dialog.destroy()
 
 
@@ -3375,7 +3466,7 @@ class OpenAIGTKClient(Gtk.Window):
             # Save the last active chat to settings (remove .json extension for storage)
             chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
             self.last_active_chat = chat_id
-            save_settings(convert_settings_for_save(get_object_settings(self)))
+            save_object_settings(self)
             
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:
@@ -3501,7 +3592,7 @@ class OpenAIGTKClient(Gtk.Window):
             
             # Update the last active chat to the current one
             self.last_active_chat = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
-            save_settings(convert_settings_for_save(get_object_settings(self)))
+            save_object_settings(self)
             
             self.refresh_history_list()
 

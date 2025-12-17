@@ -47,6 +47,7 @@ from config import (
     DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX,
     DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX,
     DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX,
+    DEFAULT_SHORTCUTS,
 )
 from ai_providers import CustomProvider
 
@@ -1006,7 +1007,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Advanced"]
+    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
@@ -1081,6 +1082,7 @@ class SettingsDialog(Gtk.Dialog):
         # Model Whitelist page is built lazily when that category is selected
         # to avoid slow dialog startup caused by provider model listing calls.
         self._build_api_keys_page()
+        self._build_keyboard_shortcuts_page()
         self._build_advanced_page()
 
         # Connect sidebar selection to stack switching
@@ -2372,8 +2374,198 @@ class SettingsDialog(Gtk.Dialog):
             self._update_delete_button_sensitivity()
 
     # -----------------------------------------------------------------------
-    # Advanced page
+    # Keyboard Shortcuts page
     # -----------------------------------------------------------------------
+    def _build_keyboard_shortcuts_page(self):
+        """Build the Keyboard Shortcuts configuration page."""
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        vbox.set_margin_start(12)
+        vbox.set_margin_end(12)
+
+        # Load current shortcuts
+        shortcuts_json = getattr(self, 'keyboard_shortcuts', '')
+        try:
+            self._shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
+        except json.JSONDecodeError:
+            self._shortcuts = {}
+        
+        # Merge with defaults
+        for action, default_key in DEFAULT_SHORTCUTS.items():
+            if action not in self._shortcuts:
+                self._shortcuts[action] = default_key
+
+        # Load model shortcut assignments
+        model_shortcuts_json = getattr(self, 'model_shortcuts', '{}')
+        try:
+            self._model_shortcuts = json.loads(model_shortcuts_json) if model_shortcuts_json else {}
+        except json.JSONDecodeError:
+            self._model_shortcuts = {}
+
+        # Get whitelisted models
+        self._all_models = self._get_whitelisted_models()
+
+        # Scrolled window for the list
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+
+        list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._shortcut_buttons = {}
+        self._model_combos = {}
+
+        # Group shortcuts by category
+        categories = [
+            ("Global", ['new_chat', 'voice_input', 'prompt_editor', 'focus_input', 'submit']),
+            ("Model Switching", ['model_1', 'model_2', 'model_3', 'model_4', 'model_5']),
+            ("Prompt Editor", ['editor_bold', 'editor_italic', 'editor_code', 'editor_h1', 
+                              'editor_h2', 'editor_h3', 'editor_bullet_list', 
+                              'editor_numbered_list', 'editor_code_block', 'editor_quote',
+                              'editor_emoji']),
+        ]
+
+        action_labels = {
+            'new_chat': 'New Chat',
+            'voice_input': 'Voice Input',
+            'prompt_editor': 'Open Prompt Editor',
+            'focus_input': 'Focus Input Field',
+            'submit': 'Submit Message',
+            'model_1': 'Model Slot 1',
+            'model_2': 'Model Slot 2',
+            'model_3': 'Model Slot 3',
+            'model_4': 'Model Slot 4',
+            'model_5': 'Model Slot 5',
+            'editor_bold': 'Bold',
+            'editor_italic': 'Italic',
+            'editor_code': 'Inline Code',
+            'editor_h1': 'Heading 1',
+            'editor_h2': 'Heading 2',
+            'editor_h3': 'Heading 3',
+            'editor_bullet_list': 'Bullet List',
+            'editor_numbered_list': 'Numbered List',
+            'editor_code_block': 'Code Block',
+            'editor_quote': 'Quote',
+            'editor_emoji': 'Insert Emoji',
+        }
+
+        for cat_name, actions in categories:
+            # Category header
+            header = Gtk.Label(xalign=0)
+            header.set_markup(f"<b>{cat_name}</b>")
+            header.set_margin_top(8)
+            list_box.pack_start(header, False, False, 0)
+
+            for action in actions:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                
+                label = Gtk.Label(label=action_labels.get(action, action), xalign=0)
+                label.set_size_request(120, -1)
+                row.pack_start(label, False, False, 0)
+
+                btn = Gtk.Button(label=self._format_shortcut(self._shortcuts.get(action, '')))
+                btn.set_size_request(120, -1)
+                btn.connect("clicked", self._on_shortcut_button_clicked, action)
+                self._shortcut_buttons[action] = btn
+                row.pack_start(btn, False, False, 0)
+
+                # Clear button
+                clear_btn = Gtk.Button.new_from_icon_name("edit-clear-symbolic", Gtk.IconSize.BUTTON)
+                clear_btn.set_tooltip_text("Clear shortcut")
+                clear_btn.connect("clicked", self._on_clear_shortcut, action)
+                row.pack_start(clear_btn, False, False, 0)
+
+                # Add model dropdown for model switching shortcuts
+                if action.startswith('model_'):
+                    combo = Gtk.ComboBoxText()
+                    combo.append("", "(none)")
+                    for model_id in self._all_models:
+                        combo.append(model_id, model_id)
+                    # Set current selection
+                    current_model = self._model_shortcuts.get(action, '')
+                    if current_model and current_model in self._all_models:
+                        combo.set_active_id(current_model)
+                    else:
+                        combo.set_active(0)
+                    combo.set_size_request(200, -1)
+                    self._model_combos[action] = combo
+                    row.pack_start(combo, False, False, 0)
+
+                list_box.pack_start(row, False, False, 0)
+
+        scroll.add(list_box)
+        vbox.pack_start(scroll, True, True, 0)
+
+        # Reset to defaults button
+        btn_reset = Gtk.Button(label="Reset to Defaults")
+        btn_reset.connect("clicked", self._on_reset_shortcuts)
+        vbox.pack_start(btn_reset, False, False, 0)
+
+        self.stack.add_titled(vbox, "Keyboard Shortcuts", "Keyboard Shortcuts")
+
+    def _get_whitelisted_models(self) -> list:
+        """Get all whitelisted models from settings."""
+        models = []
+        settings = load_settings()
+        for key in ['OPENAI_MODEL_WHITELIST', 'GEMINI_MODEL_WHITELIST', 'GROK_MODEL_WHITELIST', 
+                    'CLAUDE_MODEL_WHITELIST', 'PERPLEXITY_MODEL_WHITELIST', 'CUSTOM_MODEL_WHITELIST']:
+            whitelist = settings.get(key, '')
+            if whitelist:
+                models.extend([m.strip() for m in whitelist.split(',') if m.strip()])
+        return sorted(set(models))
+
+    def _format_shortcut(self, shortcut: str) -> str:
+        """Format shortcut string for display."""
+        if not shortcut:
+            return "(none)"
+        # Convert GTK format to readable format
+        return shortcut.replace('<', '').replace('>', '+').rstrip('+')
+
+    def _on_shortcut_button_clicked(self, button, action):
+        """Handle shortcut button click - capture new key combo."""
+        button.set_label("Press keys...")
+        button.grab_focus()
+        
+        def on_key_press(widget, event):
+            # Ignore modifier-only presses
+            if event.keyval in (Gdk.KEY_Control_L, Gdk.KEY_Control_R,
+                               Gdk.KEY_Shift_L, Gdk.KEY_Shift_R,
+                               Gdk.KEY_Alt_L, Gdk.KEY_Alt_R,
+                               Gdk.KEY_Super_L, Gdk.KEY_Super_R):
+                return True
+            
+            # Build shortcut string
+            parts = []
+            if event.state & Gdk.ModifierType.CONTROL_MASK:
+                parts.append('<Ctrl>')
+            if event.state & Gdk.ModifierType.SHIFT_MASK:
+                parts.append('<Shift>')
+            if event.state & Gdk.ModifierType.MOD1_MASK:  # Alt
+                parts.append('<Alt>')
+            
+            key_name = Gdk.keyval_name(event.keyval)
+            if key_name:
+                parts.append(key_name)
+                shortcut = ''.join(parts)
+                self._shortcuts[action] = shortcut
+                button.set_label(self._format_shortcut(shortcut))
+            
+            button.disconnect(handler_id)
+            return True
+        
+        handler_id = button.connect("key-press-event", on_key_press)
+
+    def _on_clear_shortcut(self, button, action):
+        """Clear a shortcut."""
+        self._shortcuts[action] = ''
+        self._shortcut_buttons[action].set_label("(none)")
+
+    def _on_reset_shortcuts(self, button):
+        """Reset all shortcuts to defaults."""
+        self._shortcuts = dict(DEFAULT_SHORTCUTS)
+        for action, btn in self._shortcut_buttons.items():
+            btn.set_label(self._format_shortcut(self._shortcuts.get(action, '')))
+
     # -----------------------------------------------------------------------
     # Advanced page
     # -----------------------------------------------------------------------
@@ -3769,6 +3961,13 @@ class SettingsDialog(Gtk.Dialog):
             'music_tool_prompt_appendix': get_buf_text('music_tool_prompt_appendix'),
             'read_aloud_tool_prompt_appendix': get_buf_text('read_aloud_tool_prompt_appendix'),
             'search_tool_prompt_appendix': get_buf_text('search_tool_prompt_appendix'),
+            # Keyboard shortcuts
+            'keyboard_shortcuts': json.dumps(getattr(self, '_shortcuts', {})),
+            # Model shortcuts (model_1..model_5 -> model_id)
+            'model_shortcuts': json.dumps({
+                action: combo.get_active_id() or ''
+                for action, combo in getattr(self, '_model_combos', {}).items()
+            }),
         }
 
     def get_api_keys(self):
@@ -4223,17 +4422,21 @@ class PromptEditorDialog(Gtk.Dialog):
         self.show_all()
 
     def _on_configure_event(self, widget, event):
-        """Save the dialog size when it changes."""
-        width = event.width
-        height = event.height
+        """Track the dialog size when it changes (saved on close)."""
+        self._current_width = event.width
+        self._current_height = event.height
+        return False
 
-        # Load current settings and update dialog size
-        settings_dict = load_settings()
-        settings_dict['PROMPT_EDITOR_DIALOG_WIDTH'] = width
-        settings_dict['PROMPT_EDITOR_DIALOG_HEIGHT'] = height
-        save_settings(convert_settings_for_save(settings_dict))
-
-        return False  # Allow the event to continue
+    def run(self):
+        """Override run to save size on close."""
+        response = super().run()
+        # Save size when dialog closes
+        if hasattr(self, '_current_width') and hasattr(self, '_current_height'):
+            settings_dict = load_settings()
+            settings_dict['PROMPT_EDITOR_DIALOG_WIDTH'] = self._current_width
+            settings_dict['PROMPT_EDITOR_DIALOG_HEIGHT'] = self._current_height
+            save_settings(convert_settings_for_save(settings_dict))
+        return response
 
     def _on_voice_clicked(self, widget):
         """Handle voice button click by invoking the callback with the textview buffer."""
@@ -4622,53 +4825,54 @@ class PromptEditorDialog(Gtk.Dialog):
         self._wrap_selection("```\n", "\n```")
 
     def _on_key_press(self, widget, event):
-        """Handle keyboard shortcuts."""
-        ctrl = event.state & Gdk.ModifierType.CONTROL_MASK
-        shift = event.state & Gdk.ModifierType.SHIFT_MASK
-        keyval = event.keyval
-        
-        if ctrl and not shift:
-            if keyval == Gdk.KEY_b:
-                self._on_bold_clicked(None)
-                return True
-            elif keyval == Gdk.KEY_i:
-                self._on_italic_clicked(None)
-                return True
-            elif keyval == Gdk.KEY_grave: # `
-                self._on_inline_code_clicked(None)
-                return True
-            elif keyval == Gdk.KEY_1:
-                self._on_heading_clicked(1)
-                return True
-            elif keyval == Gdk.KEY_2:
-                self._on_heading_clicked(2)
-                return True
-            elif keyval == Gdk.KEY_3:
-                self._on_heading_clicked(3)
-                return True
-                
-        if ctrl and shift:
-            # Gtk keyvals can be tricky for Shift+Number -> Symbol
-            # But usually we check the keyval directly.
-            # 7 is &, 8 is * on US layout. 
-            # Let's rely on the char if possible or just explicit keycode checks for US standard
-            
-            # Using simple keyvals for now assuming US layout for defaults
-            # or common behaviors.
-            if keyval == Gdk.KEY_8 or keyval == Gdk.KEY_asterisk: # * for bullet
-                self._on_list_clicked(False)
-                return True
-            elif keyval == Gdk.KEY_7 or keyval == Gdk.KEY_ampersand: # & (7) - let's map to ordered? 
-                # EDITOR.md said Ctrl+Shift+7 for Numbered. 
-                self._on_list_clicked(True)
-                return True
-            elif keyval == Gdk.KEY_c or keyval == Gdk.KEY_C:
-                self._on_code_block_clicked(None)
-                return True
-            elif keyval == Gdk.KEY_period or keyval == Gdk.KEY_greater: # > for quote
-                self._on_quote_clicked(None)
-                return True
+        """Handle keyboard shortcuts using configurable bindings."""
+        # Load shortcuts
+        settings = load_settings()
+        shortcuts_json = settings.get('KEYBOARD_SHORTCUTS', '')
+        try:
+            shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
+        except json.JSONDecodeError:
+            shortcuts = {}
+        # Merge with defaults
+        for action, default_key in DEFAULT_SHORTCUTS.items():
+            if action not in shortcuts:
+                shortcuts[action] = default_key
 
+        # Build current key combo
+        parts = []
+        if event.state & Gdk.ModifierType.CONTROL_MASK:
+            parts.append('<Ctrl>')
+        if event.state & Gdk.ModifierType.SHIFT_MASK:
+            parts.append('<Shift>')
+        if event.state & Gdk.ModifierType.MOD1_MASK:
+            parts.append('<Alt>')
+        key_name = Gdk.keyval_name(event.keyval)
+        if key_name:
+            parts.append(key_name)
+        current_combo = ''.join(parts)
+
+        # Map actions to handlers
+        action_handlers = {
+            'editor_bold': lambda: self._on_bold_clicked(None),
+            'editor_italic': lambda: self._on_italic_clicked(None),
+            'editor_code': lambda: self._on_inline_code_clicked(None),
+            'editor_h1': lambda: self._on_heading_clicked(1),
+            'editor_h2': lambda: self._on_heading_clicked(2),
+            'editor_h3': lambda: self._on_heading_clicked(3),
+            'editor_bullet_list': lambda: self._on_list_clicked(False),
+            'editor_numbered_list': lambda: self._on_list_clicked(True),
+            'editor_code_block': lambda: self._on_code_block_clicked(None),
+            'editor_quote': lambda: self._on_quote_clicked(None),
+            'editor_emoji': lambda: self._on_emoji_clicked(None),
+        }
+
+        # Find and execute matching action
+        for action, shortcut in shortcuts.items():
+            if shortcut and shortcut.lower() == current_combo.lower():
+                if action in action_handlers:
+                    action_handlers[action]()
+                    return True
+        
         return False
 
 

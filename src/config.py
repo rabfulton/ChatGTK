@@ -291,4 +291,37 @@ SETTINGS_CONFIG = {
     'MUSIC_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX},
     'READ_ALOUD_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX},
     'SEARCH_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX},
+    # Keyboard shortcuts - JSON-encoded dict mapping action names to key combos
+    'KEYBOARD_SHORTCUTS': {'type': str, 'default': ''},
+    # Model shortcuts - JSON-encoded dict mapping model_1..model_5 to model IDs
+    'MODEL_SHORTCUTS': {'type': str, 'default': ''},
+}
+
+# Default keyboard shortcuts (action -> key combo string)
+# Format: "<Ctrl>n" or "<Ctrl><Shift>n" or "<Alt>1" etc.
+DEFAULT_SHORTCUTS = {
+    # Global shortcuts
+    'new_chat': '<Ctrl>n',
+    'voice_input': '<Ctrl>r',
+    'prompt_editor': '<Ctrl>e',
+    'focus_input': 'Escape',
+    'submit': '<Ctrl>Return',
+    # Model switching (Alt+1 through Alt+9)
+    'model_1': '<Alt>1',
+    'model_2': '<Alt>2',
+    'model_3': '<Alt>3',
+    'model_4': '<Alt>4',
+    'model_5': '<Alt>5',
+    # Prompt editor formatting
+    'editor_bold': '<Ctrl>b',
+    'editor_italic': '<Ctrl>i',
+    'editor_code': '<Ctrl>grave',
+    'editor_h1': '<Ctrl>1',
+    'editor_h2': '<Ctrl>2',
+    'editor_h3': '<Ctrl>3',
+    'editor_bullet_list': '<Ctrl><Shift>8',
+    'editor_numbered_list': '<Ctrl><Shift>7',
+    'editor_code_block': '<Ctrl><Shift>c',
+    'editor_quote': '<Ctrl><Shift>period',
+    'editor_emoji': '<Ctrl>period',
 }

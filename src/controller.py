@@ -392,12 +392,13 @@ class ChatController:
 
     def _save_settings(self) -> None:
         """Persist current settings to disk."""
-        to_save = {}
+        # Load existing to preserve dialog-managed settings
+        existing = load_settings()
         for key in self._settings.keys():
             attr = key.lower()
             if hasattr(self, attr):
-                to_save[key] = getattr(self, attr)
-        save_settings(convert_settings_for_save(to_save))
+                existing[key] = getattr(self, attr)
+        save_settings(convert_settings_for_save(existing))
 
     def update_tool_manager(self) -> None:
         """Update the ToolManager with current settings."""
