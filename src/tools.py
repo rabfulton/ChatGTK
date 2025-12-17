@@ -14,116 +14,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
-import subprocess
 
 from model_cards import get_card
+from utils import load_settings
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# Guidance appended to system prompts for math formatting.
-SYSTEM_PROMPT_APPENDIX = (
-    "When writing mathematical equations use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
-    "You always format your responses using markdown."
-)
-
-# Guidance appended to system prompts when the image tool is enabled.
-IMAGE_TOOL_PROMPT_APPENDIX = (
-    "You have access to a generate_image tool that can create actual images for the user "
-    "from a natural language description. Use this tool when the user explicitly asks for "
-    "an image or when a diagram, illustration, or example image would significantly help "
-    "them understand the answer. After using the tool, describe the generated image in "
-    "your reply so the user knows what it contains."
-)
-
-# Guidance appended to system prompts when the music tool is enabled.
-
-
-def _has_playerctl() -> bool:
-    """
-    Return True if playerctl is available on this system.
-
-    This mirrors the runtime check used in ChatGTK._control_music_via_beets,
-    but is evaluated once at import time to tailor the tool guidance.
-    """
-    try:
-        subprocess.run(
-            ["playerctl", "--version"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return True
-    except (FileNotFoundError, subprocess.CalledProcessError, OSError, ValueError):
-        return False
-
-
-_MUSIC_TOOL_PROMPT_BASE = (
-    "You have access to a control_music tool that can play music from the user's local "
-    "beets-managed music library using a local player. Use this tool when the "
-    "user asks to play music.\n\n"
-    "For 'play' actions, construct a **beets query string** in the 'keyword' parameter. "
-    "Beets queries support fields like artist, album, title, genre, year, etc. Examples:\n"
-    "  - 'year:1980..1989' for music from the 1980s\n"
-    "  - 'genre:rock year:1990..1999' for 90s rock\n"
-    "  - 'artist:\"Miles Davis\" year:1959' for Miles Davis tracks from 1959\n"
-    "  - 'genre:jazz' for jazz music\n"
-    "  - 'album:\"Kind of Blue\"' for a specific album\n"
-    "  - 'artist:Beatles' for Beatles songs\n\n"
-    "Translate natural language requests into beets queries. For example:\n"
-    "  - 'Play some 80s music' → keyword='year:1980..1989'\n"
-    "  - 'Play jazz from the 1950s' → keyword='genre:jazz year:1950..1959'\n"
-    "  - 'Play something by Pink Floyd' → keyword='artist:\"Pink Floyd\"'\n\n"
-)
-
-if _has_playerctl():
-    _MUSIC_TOOL_PROMPT_PLAYERCTL = (
-        "On this system, non-play actions (pause, resume, stop, next, previous, volume_up, "
-        "volume_down, set_volume) are available via MPRIS using the external 'playerctl' "
-        "command targeting the configured player. Use these actions when the user explicitly "
-        "asks to control currently playing music (for example, to pause, resume, or adjust "
-        "volume).\n\n"
-    )
-else:
-    _MUSIC_TOOL_PROMPT_PLAYERCTL = (
-        "On this system, non-play actions (pause, resume, stop, next, previous, volume_up, "
-        "volume_down, set_volume) require the external 'playerctl' command for MPRIS control, "
-        "which does not appear to be installed. Prefer using 'play' with an explicit beets "
-        "query, and avoid other actions unless the user insists—if they do, explain that they "
-        "need to install 'playerctl' for advanced playback control.\n\n"
-    )
-
-_MUSIC_TOOL_PROMPT_ARTISTS = (
-    "Convert artist names to their correct international spelling (e.g., bjork → Björk)."
-)
-
-MUSIC_TOOL_PROMPT_APPENDIX = (
-    _MUSIC_TOOL_PROMPT_BASE + _MUSIC_TOOL_PROMPT_PLAYERCTL + _MUSIC_TOOL_PROMPT_ARTISTS
-)
-
-# Guidance appended to system prompts when the read aloud tool is enabled.
-READ_ALOUD_TOOL_PROMPT_APPENDIX = (
-    "You have access to a read_aloud tool that can speak text aloud to the user "
-    "using text-to-speech. Use this tool when the user asks you to read something "
-    "out loud, announce something, or when audible output would enhance the user's "
-    "experience (e.g. reading a poem, story, or important announcement)."
-)
-
-# Guidance appended to system prompts when the search/memory tool is enabled.
-SEARCH_TOOL_PROMPT_APPENDIX = (
-    "You have access to a search_memory tool that can search the user's past "
-    "conversations and configured document directories for relevant context. "
-    "Use this tool when:\n"
-    "  - The user asks about something they mentioned before\n"
-    "  - You need context from previous conversations\n"
-    "  - The user references past discussions or decisions\n"
-    "  - Finding relevant information from the user's documents would help\n\n"
-    "The search uses word-boundary matching, so searching for 'dog' will match "
-    "'dog', 'dog,', 'dog.' but not 'doggedly' or 'hotdog'. You can search "
-    "'history' (past conversations), 'documents' (configured directories), or 'all'."
-)
+# Constants have been moved to config.py and are now loaded via settings.
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +61,7 @@ IMAGE_TOOL_SPEC = ToolSpec(
                 ),
             },
         },
-        "required": ["prompt"],
     },
-    prompt_appendix=IMAGE_TOOL_PROMPT_APPENDIX,
 )
 
 MUSIC_TOOL_SPEC = ToolSpec(
@@ -201,9 +99,7 @@ MUSIC_TOOL_SPEC = ToolSpec(
                 ),
             },
         },
-        "required": ["action"],
     },
-    prompt_appendix=MUSIC_TOOL_PROMPT_APPENDIX,
 )
 
 READ_ALOUD_TOOL_SPEC = ToolSpec(
@@ -222,9 +118,7 @@ READ_ALOUD_TOOL_SPEC = ToolSpec(
                 ),
             },
         },
-        "required": ["text"],
     },
-    prompt_appendix=READ_ALOUD_TOOL_PROMPT_APPENDIX,
 )
 
 SEARCH_TOOL_SPEC = ToolSpec(
@@ -255,9 +149,7 @@ SEARCH_TOOL_SPEC = ToolSpec(
                 ),
             },
         },
-        "required": ["keyword"],
     },
-    prompt_appendix=SEARCH_TOOL_PROMPT_APPENDIX,
 )
 
 # Registry mapping tool name to spec for easy lookup.
@@ -311,17 +203,35 @@ def append_tool_guidance(
         The system prompt with relevant guidance appended.
     """
     result = system_prompt.rstrip() if system_prompt else ""
+    settings = load_settings()
 
-    if include_math and SYSTEM_PROMPT_APPENDIX not in result:
-        if result:
-            result = f"{result}\n\n{SYSTEM_PROMPT_APPENDIX}"
-        else:
-            result = SYSTEM_PROMPT_APPENDIX
+    if include_math:
+        math_appendix = settings.get("SYSTEM_PROMPT_APPENDIX", "")
+        if math_appendix and math_appendix not in result:
+            if result:
+                result = f"{result}\n\n{math_appendix}"
+            else:
+                result = math_appendix
 
     for tool_name in sorted(enabled_tools):
-        spec = TOOL_REGISTRY.get(tool_name)
-        if spec and spec.prompt_appendix and spec.prompt_appendix not in result:
-            result = f"{result}\n\n{spec.prompt_appendix}"
+        appendix = ""
+        if tool_name == "generate_image":
+            appendix = settings.get("IMAGE_TOOL_PROMPT_APPENDIX", "")
+        elif tool_name == "control_music":
+            appendix = settings.get("MUSIC_TOOL_PROMPT_APPENDIX", "")
+        elif tool_name == "read_aloud":
+            appendix = settings.get("READ_ALOUD_TOOL_PROMPT_APPENDIX", "")
+        elif tool_name == "search_memory":
+            appendix = settings.get("SEARCH_TOOL_PROMPT_APPENDIX", "")
+        
+        # Fallback to spec if available (though now specs default to empty)
+        if not appendix:
+            spec = TOOL_REGISTRY.get(tool_name)
+            if spec and spec.prompt_appendix:
+                appendix = spec.prompt_appendix
+
+        if appendix and appendix not in result:
+            result = f"{result}\n\n{appendix}"
 
     return result
 

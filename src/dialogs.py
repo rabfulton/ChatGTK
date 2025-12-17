@@ -37,6 +37,17 @@ from utils import (
     get_object_settings,
     convert_settings_for_save,
 )
+from config import (
+    BASE_DIR,
+    PARENT_DIR,
+    SETTINGS_CONFIG,
+    MODEL_CACHE_FILE,
+    DEFAULT_SYSTEM_PROMPT_APPENDIX,
+    DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX,
+    DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX,
+    DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX,
+    DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX,
+)
 from ai_providers import CustomProvider
 
 
@@ -995,7 +1006,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Custom Models", "Model Whitelist", "API Keys"]
+    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Advanced"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
@@ -1070,6 +1081,7 @@ class SettingsDialog(Gtk.Dialog):
         # Model Whitelist page is built lazily when that category is selected
         # to avoid slow dialog startup caused by provider model listing calls.
         self._build_api_keys_page()
+        self._build_advanced_page()
 
         # Connect sidebar selection to stack switching
         self.sidebar_list.connect('row-selected', self._on_sidebar_row_selected)
@@ -2360,6 +2372,170 @@ class SettingsDialog(Gtk.Dialog):
             self._update_delete_button_sensitivity()
 
     # -----------------------------------------------------------------------
+    # Advanced page
+    # -----------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Advanced page
+    # -----------------------------------------------------------------------
+    def _build_advanced_page(self):
+        """Build the Advanced configuration page."""
+        # Main vertical container
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(0)
+        vbox.set_margin_start(12)
+        vbox.set_margin_end(12)
+        
+        # Header Label
+        label_header = Gtk.Label(xalign=0)
+        label_header.set_markup("<b>Model Guide Prompts</b>")
+        vbox.pack_start(label_header, False, False, 0)
+        
+        # Defines
+        # (Title, Description, Key, Default Value)
+        # Note: DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX is a composite string in config.py,
+        # so it will be loaded fully.
+        self._advanced_specs = [
+            (
+                "System Prompt Appendix",
+                "Guidance appended to every system prompt to help with formatting.",
+                "system_prompt_appendix",
+                DEFAULT_SYSTEM_PROMPT_APPENDIX
+            ),
+            (
+                "Image Tool Guidance",
+                "Guidance appended when the image tool is enabled.",
+                "image_tool_prompt_appendix",
+                DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX
+            ),
+            (
+                "Music Tool Guidance",
+                "Guidance appended when the music tool is enabled.",
+                "music_tool_prompt_appendix",
+                DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX
+            ),
+            (
+                "Read Aloud Tool Guidance",
+                "Guidance appended when the read aloud tool is enabled.",
+                "read_aloud_tool_prompt_appendix",
+                DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX
+            ),
+            (
+                "Search Tool Guidance",
+                "Guidance appended when the search tool is enabled.",
+                "search_tool_prompt_appendix",
+                DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX
+            ),
+        ]
+        
+        # Initialize Buffers
+        self._advanced_buffers = {}
+        for title, desc, key, default_val in self._advanced_specs:
+            buffer = Gtk.TextBuffer()
+            current_value = getattr(self, key, default_val)
+            if current_value is None:
+                current_value = default_val
+            buffer.set_text(current_value)
+            self._advanced_buffers[key] = buffer
+            
+        # Top Row: Combo + Reset Button
+        hbox_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        vbox.pack_start(hbox_top, False, False, 0)
+        
+        # Combo Box
+        self.combo_advanced_prompt = Gtk.ComboBoxText()
+        for i, (title, _, _, _) in enumerate(self._advanced_specs):
+            self.combo_advanced_prompt.append(str(i), title)
+        hbox_top.pack_start(self.combo_advanced_prompt, True, True, 0)
+        
+        # Reset Button (far right)
+        self.btn_advanced_reset = Gtk.Button(label="Reset to Default")
+        self.btn_advanced_reset.connect("clicked", self._on_advanced_reset_clicked)
+        # Using pack_start with pack_type=END effectively pushes it to the right 
+        # but Gtk.Box doesn't support pack_end in the same way for sorting. 
+        # Instead, we pack the combo with expand=True so it pushes the button.
+        hbox_top.pack_start(self.btn_advanced_reset, False, False, 0)
+        
+        # Description Label
+        self.label_advanced_desc = Gtk.Label(xalign=0)
+        self.label_advanced_desc.set_line_wrap(True)
+        self.label_advanced_desc.set_max_width_chars(80)
+        self.label_advanced_desc.get_style_context().add_class("dim-label")
+        vbox.pack_start(self.label_advanced_desc, False, False, 0)
+        
+        # Editor Area
+        frame = Gtk.Frame()
+        frame.set_shadow_type(Gtk.ShadowType.IN)
+        self.tv_advanced_editor = Gtk.TextView()
+        self.tv_advanced_editor.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.tv_advanced_editor.set_left_margin(8)
+        self.tv_advanced_editor.set_right_margin(8)
+        self.tv_advanced_editor.set_top_margin(8)
+        self.tv_advanced_editor.set_bottom_margin(8)
+        
+        # Create a scrolled window for the text view
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.add(self.tv_advanced_editor)
+        
+        frame.add(scrolled)
+        frame.set_size_request(-1, 200) # Minimum height
+        vbox.pack_start(frame, True, True, 0)
+
+        # Connect change handler and Select first item
+        self.combo_advanced_prompt.connect("changed", self._on_advanced_combo_changed)
+        self.combo_advanced_prompt.set_active(0)
+        
+        self.stack.add_named(vbox, "Advanced")
+
+    def _on_advanced_combo_changed(self, combo):
+        """Update editor when selection changes."""
+        # Avoid recursion during reordering
+        if getattr(self, '_advanced_reordering', False):
+            return
+
+        active_id = combo.get_active_id()
+        if not active_id:
+            return
+            
+        idx = int(active_id)
+        title, desc, key, default_val = self._advanced_specs[idx]
+        
+        # Update description
+        self.label_advanced_desc.set_text(desc)
+        
+        # Swap buffer
+        buffer = self._advanced_buffers[key]
+        self.tv_advanced_editor.set_buffer(buffer)
+        
+        # Reorder list so selected item is at top (forces dropdown to open down)
+        self._advanced_reordering = True
+        try:
+            combo.remove_all()
+            # Add selected item first
+            combo.append(str(idx), title)
+            # Add others in original order
+            for i, (t, _, _, _) in enumerate(self._advanced_specs):
+                if i != idx:
+                    combo.append(str(i), t)
+            # Restore selection (ID 0 in strict sense of newly added? No, rely on ID)
+            combo.set_active_id(str(idx))
+        finally:
+            self._advanced_reordering = False
+
+    def _on_advanced_reset_clicked(self, widget):
+        """Reset the currently selected prompt to default."""
+        active_id = self.combo_advanced_prompt.get_active_id()
+        if not active_id:
+            return
+            
+        idx = int(active_id)
+        title, desc, key, default_val = self._advanced_specs[idx]
+        buffer = self._advanced_buffers[key]
+        # default_val comes from config.py constants which are complete
+        buffer.set_text(default_val)
+
+    # -----------------------------------------------------------------------
     # Custom Models page
     # -----------------------------------------------------------------------
     def _build_custom_models_page(self):
@@ -3526,6 +3702,12 @@ class SettingsDialog(Gtk.Dialog):
             cbs = self.model_checkboxes.get(provider_key, {})
             return ",".join(sorted(mid for mid, cb in cbs.items() if cb.get_active()))
 
+        def get_buf_text(key):
+            if hasattr(self, '_advanced_buffers') and key in self._advanced_buffers:
+                buf = self._advanced_buffers[key]
+                return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+            return ""
+
         return {
             'ai_name': self.entry_ai_name.get_text(),
             'font_family': self.entry_font.get_text(),
@@ -3579,6 +3761,14 @@ class SettingsDialog(Gtk.Dialog):
             # Model display names - preserve what was saved during the dialog session
             # Load current value from settings file (already in JSON string format)
             'model_display_names': load_settings().get('MODEL_DISPLAY_NAMES', ''),
+            
+            # Advanced / Prompt Appendices
+            # Helper to get text from stored buffers
+            'system_prompt_appendix': get_buf_text('system_prompt_appendix'),
+            'image_tool_prompt_appendix': get_buf_text('image_tool_prompt_appendix'),
+            'music_tool_prompt_appendix': get_buf_text('music_tool_prompt_appendix'),
+            'read_aloud_tool_prompt_appendix': get_buf_text('read_aloud_tool_prompt_appendix'),
+            'search_tool_prompt_appendix': get_buf_text('search_tool_prompt_appendix'),
         }
 
     def get_api_keys(self):

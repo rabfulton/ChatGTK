@@ -1,8 +1,25 @@
 import os
 from pathlib import Path
+import subprocess
 
 # Base directory of the project source files (location of ChatGTK.py, icon.png, etc.)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _has_playerctl() -> bool:
+    """
+    Return True if playerctl is available on this system.
+    """
+    try:
+        subprocess.run(
+            ["playerctl", "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError, ValueError):
+        return False
 
 
 def _default_data_root() -> str:
@@ -51,6 +68,86 @@ CUSTOM_MODELS_FILE = os.path.join(PARENT_DIR, "custom_models.json")
 # User overrides for model cards (capabilities, quirks, etc.)
 MODEL_CARD_OVERRIDES_FILE = os.path.join(PARENT_DIR, "model_card_overrides.json")
 CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
+
+# ---------------------------------------------------------------------------
+# Default Appendix Constants (formerly in tools.py)
+# ---------------------------------------------------------------------------
+
+DEFAULT_SYSTEM_PROMPT_APPENDIX = (
+    "When writing mathematical equations use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
+    "You always format your responses using markdown."
+)
+
+DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX = (
+    "You have access to a generate_image tool that can create actual images for the user "
+    "from a natural language description. Use this tool when the user explicitly asks for "
+    "an image or when a diagram, illustration, or example image would significantly help "
+    "them understand the answer. After using the tool, describe the generated image in "
+    "your reply so the user knows what it contains."
+)
+
+_MUSIC_TOOL_PROMPT_BASE = (
+    "You have access to a control_music tool that can play music from the user's local "
+    "beets-managed music library using a local player. Use this tool when the "
+    "user asks to play music.\n\n"
+    "For 'play' actions, construct a **beets query string** in the 'keyword' parameter. "
+    "Beets queries support fields like artist, album, title, genre, year, etc. Examples:\n"
+    "  - 'year:1980..1989' for music from the 1980s\n"
+    "  - 'genre:rock year:1990..1999' for 90s rock\n"
+    "  - 'artist:\"Miles Davis\" year:1959' for Miles Davis tracks from 1959\n"
+    "  - 'genre:jazz' for jazz music\n"
+    "  - 'album:\"Kind of Blue\"' for a specific album\n"
+    "  - 'artist:Beatles' for Beatles songs\n\n"
+    "Translate natural language requests into beets queries. For example:\n"
+    "  - 'Play some 80s music' → keyword='year:1980..1989'\n"
+    "  - 'Play jazz from the 1950s' → keyword='genre:jazz year:1950..1959'\n"
+    "  - 'Play something by Pink Floyd' → keyword='artist:\"Pink Floyd\"'\n\n"
+)
+
+if _has_playerctl():
+    _MUSIC_TOOL_PROMPT_PLAYERCTL = (
+        "On this system, non-play actions (pause, resume, stop, next, previous, volume_up, "
+        "volume_down, set_volume) are available via MPRIS using the external 'playerctl' "
+        "command targeting the configured player. Use these actions when the user explicitly "
+        "asks to control currently playing music (for example, to pause, resume, or adjust "
+        "volume).\n\n"
+    )
+else:
+    _MUSIC_TOOL_PROMPT_PLAYERCTL = (
+        "On this system, non-play actions (pause, resume, stop, next, previous, volume_up, "
+        "volume_down, set_volume) require the external 'playerctl' command for MPRIS control, "
+        "which does not appear to be installed. Prefer using 'play' with an explicit beets "
+        "query, and avoid other actions unless the user insists—if they do, explain that they "
+        "need to install 'playerctl' for advanced playback control.\n\n"
+    )
+
+_MUSIC_TOOL_PROMPT_ARTISTS = (
+    "Convert artist names to their correct international spelling (e.g., bjork → Björk)."
+)
+
+DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX = (
+    _MUSIC_TOOL_PROMPT_BASE + _MUSIC_TOOL_PROMPT_PLAYERCTL + _MUSIC_TOOL_PROMPT_ARTISTS
+)
+
+DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX = (
+    "You have access to a read_aloud tool that can speak text aloud to the user "
+    "using text-to-speech. Use this tool when the user asks you to read something "
+    "out loud, announce something, or when audible output would enhance the user's "
+    "experience (e.g. reading a poem, story, or important announcement)."
+)
+
+DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX = (
+    "You have access to a search_memory tool that can search the user's past "
+    "conversations and configured document directories for relevant context. "
+    "Use this tool when:\n"
+    "  - The user asks about something they mentioned before\n"
+    "  - You need context from previous conversations\n"
+    "  - The user references past discussions or decisions\n"
+    "  - Finding relevant information from the user's documents would help\n\n"
+    "The search uses word-boundary matching, so searching for 'dog' will match "
+    "'dog', 'dog,', 'dog.' but not 'doggedly' or 'hotdog'. You can search "
+    "'history' (past conversations), 'documents' (configured directories), or 'all'."
+)
 
 # Define settings configuration with their types and defaults
 SETTINGS_CONFIG = {
@@ -187,4 +284,10 @@ SETTINGS_CONFIG = {
     # system tray instead of keeping it in the taskbar. A tray icon is shown
     # which can be used to restore or quit the application.
     'MINIMIZE_TO_TRAY_ENABLED': {'type': bool, 'default': False},
+    # Prompt Appendices
+    'SYSTEM_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SYSTEM_PROMPT_APPENDIX},
+    'IMAGE_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX},
+    'MUSIC_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX},
+    'READ_ALOUD_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX},
+    'SEARCH_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX},
 }

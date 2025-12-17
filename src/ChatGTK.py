@@ -62,9 +62,6 @@ from tools import (
     ToolManager,
     is_chat_completion_model,
     append_tool_guidance,
-    SYSTEM_PROMPT_APPENDIX,
-    IMAGE_TOOL_PROMPT_APPENDIX,
-    MUSIC_TOOL_PROMPT_APPENDIX,
 )
 from dialogs import SettingsDialog, ToolsDialog, PromptEditorDialog
 from conversation import (

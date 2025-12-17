@@ -139,6 +139,9 @@ def load_settings():
                             # Special handling for boolean values
                             if SETTINGS_CONFIG[key]['type'] == bool:
                                 settings[key] = value.lower() == 'true'
+                            elif SETTINGS_CONFIG[key]['type'] == str:
+                                # Unescape newlines for string values
+                                settings[key] = value.replace('\\n', '\n').replace('\\r', '')
                             else:
                                 settings[key] = SETTINGS_CONFIG[key]['type'](value)
                         except ValueError:
@@ -160,6 +163,9 @@ def save_settings(settings_dict):
         with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
             f.write("# Application settings\n")
             for key, value in settings_dict.items():
+                # Escape newlines for string values to keep them on one line in the file
+                if isinstance(value, str):
+                    value = value.replace('\n', '\\n').replace('\r', '')
                 f.write(f"{key}={value}\n")
     except Exception as e:
         print(f"Error saving settings: {e}")
