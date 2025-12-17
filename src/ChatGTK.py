@@ -2138,7 +2138,12 @@ class OpenAIGTKClient(Gtk.Window):
                 display_text = question + f"\n[Error attaching file]"
 
         msg_index = len(self.conversation_history)
-        self.append_message('user', display_text, msg_index)
+        
+        # Apply formatting (Markdown preprocessing like code blocks/tables) to the user message
+        # just like we do for AI responses, so that code blocks render correctly.
+        formatted_display_text = format_response(display_text)
+        
+        self.append_message('user', formatted_display_text, msg_index)
         
         # Store user message in the chat history
         user_msg = create_user_message(
@@ -3333,7 +3338,8 @@ class OpenAIGTKClient(Gtk.Window):
                 if message['role'] != 'system':  # Skip system message
                     message_index = idx
                     if message['role'] == 'user':
-                        self.append_message('user', message['content'], message_index)
+                        formatted_content = format_response(message['content'])
+                        self.append_message('user', formatted_content, message_index)
                     elif message['role'] == 'assistant':
                         formatted_content = format_response(message['content'])
                         self.append_message('ai', formatted_content, message_index)

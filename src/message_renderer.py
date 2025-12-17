@@ -164,35 +164,43 @@ class MessageRenderer:
             self.append_ai_message(text, index)
 
     def append_user_message(self, text: str, message_index: int):
-        """Add a user message as a label with user style and tracking."""
+        """Add a user message as a styled box with markdown support."""
         # Wrap in EventBox to receive button events
         event_box = Gtk.EventBox()
         event_box.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         event_box.message_index = message_index
 
-        lbl = Gtk.Label()
-        lbl.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        lbl.message_index = message_index
-        lbl.set_selectable(True)
-        lbl.set_line_wrap(True)
-        lbl.set_line_wrap_mode(Gtk.WrapMode.WORD)
-        lbl.set_xalign(0)
-        lbl.set_margin_start(0)
-        lbl.set_margin_end(0)
-        lbl.set_margin_top(5)
-        lbl.set_margin_bottom(5)
+        # Create vertical box for content with similar styling to AI messages but simplified
+        content_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         
         css = (
-            f"label {{ color: {self.settings.user_color}; "
+            f"box {{ color: {self.settings.user_color}; "
             f"font-family: {self.settings.font_family}; "
             f"font-size: {self.settings.font_size}pt; "
             f"background-color: @theme_base_color; border-radius: 12px; padding: 10px; }}"
         )
-        self._apply_css(lbl, css)
+        self._apply_css_override(content_container, css)
 
+        # Username label
         username = getpass.getuser()
-        lbl.set_text(f"{username}: {text}")
-        event_box.add(lbl)
+        lbl_name = Gtk.Label()
+        lbl_name.set_xalign(0)
+        lbl_name.set_markup(f"<b>{username}:</b>")
+        
+        # Style label to match user color
+        css_label = (
+            f"label {{ color: {self.settings.user_color}; "
+            f"font-family: {self.settings.font_family}; "
+            f"font-size: {self.settings.font_size}pt; }}"
+        )
+        self._apply_css(lbl_name, css_label)
+        
+        content_container.pack_start(lbl_name, False, False, 0)
+        
+        # Render markdown content
+        self._render_message_content(text, message_index, content_container, self.settings.user_color)
+
+        event_box.add(content_container)
 
         def on_button_press(widget, event):
             if event.button == 3:  # Right click
@@ -205,8 +213,7 @@ class MessageRenderer:
             return False
 
         event_box.connect("button-press-event", on_button_press)
-        lbl.connect("button-press-event", on_button_press)
-
+        
         self.conversation_box.pack_start(event_box, False, False, 0)
         self.message_widgets.append(event_box)
         self.conversation_box.show_all()
@@ -252,127 +259,13 @@ class MessageRenderer:
         lbl_name.set_text(f"{self.settings.ai_name}:")
         content_container.pack_start(lbl_name, False, False, 0)
         
-        # Attach popup to text views
-        def attach_popup_to_text_view(text_view: Gtk.TextView):
-            text_view.message_index = message_index
-
-            def on_text_view_populate_popup(view, menu):
-                if menu is None:
-                    return
-                separator = Gtk.SeparatorMenuItem()
-                delete_item = Gtk.MenuItem(label="Delete Message")
-                delete_item.connect("activate", lambda w: self.callbacks.on_delete(w, view.message_index))
-                menu.append(separator)
-                menu.append(delete_item)
-                menu.show_all()
-
-            text_view.connect("populate-popup", on_text_view_populate_popup)
-
-        # Process message segments
-        full_text = []
-        pattern = r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---|--- Table Start ---\n.*?\n--- Table End ---|---HORIZONTAL-LINE---)'
-        segments = re.split(pattern, message_text, flags=re.DOTALL)
-        
-        for seg in segments:
-            if seg.startswith('--- Code Block Start ('):
-                lang_match = re.search(r'^--- Code Block Start \((.*?)\) ---', seg)
-                code_lang = lang_match.group(1) if lang_match else "plaintext"
-                code_content = re.sub(r'^--- Code Block Start \(.*?\) ---', '', seg)
-                code_content = re.sub(r'--- Code Block End ---$', '', code_content).strip('\n')
-                source_view = create_source_view(
-                    code_content, code_lang, 
-                    self.settings.font_size, self.settings.source_theme
-                )
-                
-                scrolled_sw = Gtk.ScrolledWindow()
-                scrolled_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-                scrolled_sw.set_propagate_natural_height(True)
-                scrolled_sw.set_shadow_type(Gtk.ShadowType.NONE)
-                scrolled_sw.add(source_view)
-                
-                frame = Gtk.Frame()
-                frame.add(scrolled_sw)
-                content_container.pack_start(frame, False, False, 5)
-                full_text.append("Code block follows.")
-                
-            elif seg.startswith('--- Table Start ---'):
-                table_content = re.sub(r'^--- Table Start ---\n?', '', seg)
-                table_content = re.sub(r'\n?--- Table End ---$', '', table_content).strip()
-                table_widget = self.create_table_widget(table_content)
-                if table_widget:
-                    content_container.pack_start(table_widget, False, False, 0)
-                else:
-                    fallback_label = Gtk.Label()
-                    fallback_label.set_selectable(True)
-                    fallback_label.set_line_wrap(True)
-                    fallback_label.set_line_wrap_mode(Gtk.WrapMode.WORD)
-                    fallback_label.set_xalign(0)
-                    self._apply_css(fallback_label, css_ai)
-                    fallback_label.set_text(table_content)
-                    content_container.pack_start(fallback_label, False, False, 0)
-                full_text.append(table_content)
-                
-            elif seg.strip() == '---HORIZONTAL-LINE---':
-                separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-                separator_css = f"""
-                    separator {{
-                        background-color: {self.settings.ai_color};
-                        color: {self.settings.ai_color};
-                        min-height: 2px;
-                        margin-top: 8px;
-                        margin-bottom: 8px;
-                    }}
-                """
-                css_provider = Gtk.CssProvider()
-                css_provider.load_from_data(separator_css.encode())
-                separator.get_style_context().add_provider(
-                    css_provider, 
-                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-                )
-                content_container.pack_start(separator, False, False, 10)
-                full_text.append("Horizontal line.")
-                
-            else:
-                # Text segment
-                if seg.startswith('\n'):
-                    seg = seg[1:]
-                if seg.endswith('\n'):
-                    seg = seg[:-1]
-                    
-                if seg.strip():
-                    processed = process_tex_markup(
-                        seg, self.settings.latex_color, 
-                        self.current_chat_id, self.settings.source_theme,
-                        self.settings.latex_dpi
-                    )
-                    
-                    if "<img" in processed:
-                        text_view = self._create_text_view("", self.settings.ai_color)
-                        attach_popup_to_text_view(text_view)
-                        buffer = text_view.get_buffer()
-                        parts = re.split(r'(<img src="[^"]+"/>)', processed)
-                        for part in parts:
-                            if part.startswith('<img src="'):
-                                img_path = re.search(r'src="([^"]+)"', part).group(1)
-                                insert_iter = buffer.get_end_iter()
-                                if self._is_latex_math_image(img_path):
-                                    insert_tex_image(buffer, insert_iter, img_path, text_view, self.window, is_math_image=True)
-                                else:
-                                    insert_resized_image(buffer, insert_iter, img_path, text_view, self.window)
-                            else:
-                                text = process_text_formatting(part, self.settings.font_size)
-                                self._insert_markup_with_links(buffer, text, getattr(buffer, "link_rgba", None))
-                        self._apply_bullet_hanging_indent(buffer)
-                        content_container.pack_start(text_view, False, False, 0)
-                    else:
-                        processed = process_inline_markup(processed, self.settings.font_size)
-                        text_view = self._create_text_view(processed, self.settings.ai_color)
-                        attach_popup_to_text_view(text_view)
-                        content_container.pack_start(text_view, False, False, 0)
-                    full_text.append(seg)
+        # Render markdown content
+        full_text_segments = self._render_message_content(
+            message_text, message_index, content_container, self.settings.ai_color
+        )
                     
         # Create speech button
-        speech_btn = self.callbacks.create_speech_button(full_text)
+        speech_btn = self.callbacks.create_speech_button(full_text_segments)
         
         # Pack containers
         response_container.pack_start(content_container, True, True, 0)
@@ -410,6 +303,135 @@ class MessageRenderer:
             return False
         
         GLib.idle_add(scroll_to_response)
+
+    def _attach_popup_to_text_view(self, text_view: Gtk.TextView, message_index: int):
+        """Attach right-click popup menu to text view."""
+        text_view.message_index = message_index
+
+        def on_text_view_populate_popup(view, menu):
+            if menu is None:
+                return
+            separator = Gtk.SeparatorMenuItem()
+            delete_item = Gtk.MenuItem(label="Delete Message")
+            delete_item.connect("activate", lambda w: self.callbacks.on_delete(w, view.message_index))
+            menu.append(separator)
+            menu.append(delete_item)
+            menu.show_all()
+
+        text_view.connect("populate-popup", on_text_view_populate_popup)
+
+    def _render_message_content(self, message_text: str, message_index: int, 
+                              container: Gtk.Box, text_color: str) -> List[str]:
+        """Render message text into a container, supporting code blocks, tables, etc."""
+        full_text = [] # To accumulate text for speech synthesis
+        
+        pattern = r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---|--- Table Start ---\n.*?\n--- Table End ---|---HORIZONTAL-LINE---)'
+        segments = re.split(pattern, message_text, flags=re.DOTALL)
+        
+        for seg in segments:
+            if seg.startswith('--- Code Block Start ('):
+                lang_match = re.search(r'^--- Code Block Start \((.*?)\) ---', seg)
+                code_lang = lang_match.group(1) if lang_match else "plaintext"
+                code_content = re.sub(r'^--- Code Block Start \(.*?\) ---', '', seg)
+                code_content = re.sub(r'--- Code Block End ---$', '', code_content).strip('\n')
+                source_view = create_source_view(
+                    code_content, code_lang, 
+                    self.settings.font_size, self.settings.source_theme
+                )
+                
+                scrolled_sw = Gtk.ScrolledWindow()
+                scrolled_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+                scrolled_sw.set_propagate_natural_height(True)
+                scrolled_sw.set_shadow_type(Gtk.ShadowType.NONE)
+                scrolled_sw.add(source_view)
+                
+                frame = Gtk.Frame()
+                frame.add(scrolled_sw)
+                container.pack_start(frame, False, False, 5)
+                full_text.append("Code block follows.")
+                
+            elif seg.startswith('--- Table Start ---'):
+                table_content = re.sub(r'^--- Table Start ---\n?', '', seg)
+                table_content = re.sub(r'\n?--- Table End ---$', '', table_content).strip()
+                table_widget = self.create_table_widget(table_content)
+                if table_widget:
+                    container.pack_start(table_widget, False, False, 0)
+                else:
+                    fallback_label = Gtk.Label()
+                    fallback_label.set_selectable(True)
+                    fallback_label.set_line_wrap(True)
+                    fallback_label.set_line_wrap_mode(Gtk.WrapMode.WORD)
+                    fallback_label.set_xalign(0)
+                    css = (
+                        f"label {{ color: {text_color}; "
+                        f"font-family: {self.settings.font_family}; "
+                        f"font-size: {self.settings.font_size}pt; }}"
+                    )
+                    self._apply_css(fallback_label, css)
+                    fallback_label.set_text(table_content)
+                    container.pack_start(fallback_label, False, False, 0)
+                full_text.append(table_content)
+                
+            elif seg.strip() == '---HORIZONTAL-LINE---':
+                separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                separator_css = f"""
+                    separator {{
+                        background-color: {text_color};
+                        color: {text_color};
+                        min-height: 2px;
+                        margin-top: 8px;
+                        margin-bottom: 8px;
+                    }}
+                """
+                css_provider = Gtk.CssProvider()
+                css_provider.load_from_data(separator_css.encode())
+                separator.get_style_context().add_provider(
+                    css_provider, 
+                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                )
+                container.pack_start(separator, False, False, 10)
+                full_text.append("Horizontal line.")
+                
+            else:
+                # Text segment
+                if seg.startswith('\n'):
+                    seg = seg[1:]
+                if seg.endswith('\n'):
+                    seg = seg[:-1]
+                    
+                if seg.strip():
+                    processed = process_tex_markup(
+                        seg, self.settings.latex_color, 
+                        self.current_chat_id, self.settings.source_theme,
+                        self.settings.latex_dpi
+                    )
+                    
+                    if "<img" in processed:
+                        text_view = self._create_text_view("", text_color)
+                        self._attach_popup_to_text_view(text_view, message_index)
+                        buffer = text_view.get_buffer()
+                        parts = re.split(r'(<img src="[^"]+"/>)', processed)
+                        for part in parts:
+                            if part.startswith('<img src="'):
+                                img_path = re.search(r'src="([^"]+)"', part).group(1)
+                                insert_iter = buffer.get_end_iter()
+                                if self._is_latex_math_image(img_path):
+                                    insert_tex_image(buffer, insert_iter, img_path, text_view, self.window, is_math_image=True)
+                                else:
+                                    insert_resized_image(buffer, insert_iter, img_path, text_view, self.window)
+                            else:
+                                text = process_text_formatting(part, self.settings.font_size)
+                                self._insert_markup_with_links(buffer, text, getattr(buffer, "link_rgba", None))
+                        self._apply_bullet_hanging_indent(buffer)
+                        container.pack_start(text_view, False, False, 0)
+                    else:
+                        processed = process_inline_markup(processed, self.settings.font_size)
+                        text_view = self._create_text_view(processed, text_color)
+                        self._attach_popup_to_text_view(text_view, message_index)
+                        container.pack_start(text_view, False, False, 0)
+                    full_text.append(seg)
+        
+        return full_text
 
     # -------------------------------------------------------------------------
     # Helper methods

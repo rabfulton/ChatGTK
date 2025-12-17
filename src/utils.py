@@ -339,10 +339,23 @@ def ensure_history_dir():
     """Ensure the history directory exists."""
     Path(HISTORY_DIR).mkdir(parents=True, exist_ok=True)
 
+def clean_display_text(text):
+    """Strip markdown and normalize whitespace for sidebars and titles."""
+    if not text:
+        return ""
+    # Remove markdown headers (### ), bold (**), italic (*), code (`)
+    text = re.sub(r'[#*`]', '', text)
+    # Remove list markers (- , 1. ) at start of lines (though we flatten lines anyway)
+    text = re.sub(r'^\s*[-*]\s+', '', text)
+    # Normalize unicode whitespace and newlines to single space
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
 def generate_chat_name(first_message):
     """Generate a filename for the chat based on first message and timestamp."""
-    # Truncate first message to 40 chars for filename
-    truncated_msg = first_message[:20].strip()
+    # Use clean_display_text to normalize whitespace and strip markdown
+    clean_msg = clean_display_text(first_message)
+    truncated_msg = clean_msg[:20].strip()
     # Remove any characters that might be problematic in filenames
     safe_msg = re.sub(r'[^\w\s-]', '', truncated_msg)
     safe_msg = safe_msg.replace(' ', '_')
@@ -466,7 +479,7 @@ def get_chat_title(chat_name):
     
     if messages and len(messages) > 1:  # Skip system message
         first_msg = messages[1].get("content", "")  # Get first user message
-        return first_msg[:40] + ("..." if len(first_msg) > 40 else "")
+        return clean_display_text(first_msg)[:40] + ("..." if len(first_msg) > 40 else "")
     return "Untitled Chat"
 
 def list_chat_histories():
@@ -485,9 +498,13 @@ def list_chat_histories():
                         messages = data.get("messages", []) if isinstance(data, dict) else data
                         # Get first user message for display
                         first_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), "Empty chat")
+                        
+                        # Clean display text (strip markdown and newlines)
+                        display_text = clean_display_text(first_message)
+                        
                         histories.append({
                             'filename': file,
-                            'first_message': first_message[:50] + '...' if len(first_message) > 50 else first_message
+                            'first_message': display_text[:50] + '...' if len(display_text) > 50 else display_text
                         })
                 except Exception as e:
                     print(f"Error reading history file {file}: {e}")
