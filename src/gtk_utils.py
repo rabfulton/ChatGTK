@@ -96,7 +96,7 @@ def insert_resized_image(buffer, iter, img_path, text_view=None, window=None):
                 return
 
             # Target width: fit within TextView, but never exceed original width
-            target_width = max(min(allocated_width - 20, original_width), 100)
+            target_width = max(min(allocated_width, original_width), 100)
 
             # If the target width is effectively the same as the original, keep original pixbuf
             if target_width == original_width:
