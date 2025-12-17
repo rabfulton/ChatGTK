@@ -4383,6 +4383,7 @@ class PromptEditorDialog(Gtk.Dialog):
         self._placeholder_label.set_margin_start(8)
         self._placeholder_label.set_margin_top(8)
         self._placeholder_label.get_style_context().add_class("dim-label")
+        self._placeholder_label.set_visible(not initial_text)
         overlay.add_overlay(self._placeholder_label)
 
         # Update placeholder visibility based on content
@@ -4420,6 +4421,7 @@ class PromptEditorDialog(Gtk.Dialog):
         bottom_box.pack_start(btn_ok, False, False, 0)
 
         self.show_all()
+        self._update_placeholder_visibility()
 
     def _on_configure_event(self, widget, event):
         """Track the dialog size when it changes (saved on close)."""
