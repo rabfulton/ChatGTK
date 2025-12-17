@@ -4074,6 +4074,78 @@ class PromptEditorDialog(Gtk.Dialog):
     def _on_buffer_changed(self, buf):
         """Update placeholder visibility when buffer content changes."""
         self._update_placeholder_visibility()
+        
+        # Ensure cursor remains visible while typing
+        # Defer slightly to allow layout to update
+        GLib.idle_add(self._scroll_to_cursor)
+
+    def _scroll_to_cursor(self):
+        """Scroll the textview to make the cursor visible."""
+        if not self.textview:
+            return False
+            
+        buf = self.textview.get_buffer()
+        insert_mark = buf.get_insert()
+        iter_ = buf.get_iter_at_mark(insert_mark)
+        
+        # Get Y coordinate of cursor in buffer coordinates
+        # get_line_yrange returns (y, height)
+        y, height = self.textview.get_line_yrange(iter_)
+        
+        # Get the scrolling adjustments
+        # Since TextView is inside Overlay -> Viewport -> ScrolledWindow,
+        # we need to find the specific vertical adjustment controlling this view.
+        # But wait, we didn't save 'scroll' widget pointer. Let's traverse up.
+        
+        widget = self.textview
+        adj = None
+        while widget:
+            if isinstance(widget, Gtk.ScrolledWindow):
+                adj = widget.get_vadjustment()
+                break
+            # Also check if it's a viewport calling the shots (optional but usually ScrolledWindow holds the adj)
+            if hasattr(widget, 'get_vadjustment'):
+                 # Viewport also has get_vadjustment, which might be the one we want
+                 possible_adj = widget.get_vadjustment()
+                 if possible_adj:
+                     adj = possible_adj
+                     # Don't break yet, finding the ScrolledWindow is usually safest 
+                     # but Viewport's adj is usually the same object.
+            
+            # Gtk.Widget.get_parent() 
+            widget = widget.get_parent()
+            
+        if not adj:
+            return False
+            
+        # Current visible window height
+        page_size = adj.get_page_size()
+        value = adj.get_value()
+        
+        # Convert buffer Y to widget coordinates?
+        # TextView inside Viewport: Viewport handles the scrolling window.
+        # get_line_yrange gives buffer coords.
+        # For a textview in a viewport, buffer Y ~= Y offset in viewport? 
+        # Actually, self.textview.get_line_yrange returns coordinates relative to the textview's window.
+        # If textview is expanded, textview window == full content size.
+        
+        if y + height > value + page_size:
+            # Cursor is below view
+             new_value = y + height - page_size
+             # Add a little margin
+             new_value += 10 # optional padding
+             # Clamp
+             if new_value > adj.get_upper() - page_size:
+                 new_value = adj.get_upper() - page_size
+             adj.set_value(new_value)
+        elif y < value:
+            # Cursor is above view (unlikely when typing at bottom, but possible)
+            new_value = y - 10 # optional padding
+            if new_value < 0:
+                new_value = 0
+            adj.set_value(new_value)
+            
+        return False
 
     def get_text(self) -> str:
         """Return the full prompt text from the editor."""
