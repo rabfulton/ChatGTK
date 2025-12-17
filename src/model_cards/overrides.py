@@ -13,9 +13,15 @@ from typing import Optional, Dict, Any
 
 from .schema import ModelCard, Capabilities
 
-# Define the default path for model card overrides
-_PARENT_DIR = os.path.join(os.path.expanduser("~"), ".local", "share", "chatgtk")
-MODEL_CARD_OVERRIDES_FILE = os.path.join(_PARENT_DIR, "model_card_overrides.json")
+
+def _get_overrides_file_path() -> str:
+    """Get the path to the model card overrides file, using the app's data directory."""
+    try:
+        from config import PARENT_DIR
+        return os.path.join(PARENT_DIR, "model_card_overrides.json")
+    except ImportError:
+        # Fallback if config not available
+        return os.path.join(os.path.expanduser("~"), ".local", "share", "chatgtk", "model_card_overrides.json")
 
 
 def load_overrides() -> Dict[str, Dict[str, Any]]:
@@ -27,9 +33,10 @@ def load_overrides() -> Dict[str, Dict[str, Any]]:
     capabilities (dict), quirks (dict), max_tokens, context_window.
     """
     try:
-        if not Path(MODEL_CARD_OVERRIDES_FILE).exists():
+        overrides_file = _get_overrides_file_path()
+        if not Path(overrides_file).exists():
             return {}
-        with open(MODEL_CARD_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+        with open(overrides_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, dict):
             return data
@@ -48,8 +55,9 @@ def save_overrides(overrides: Dict[str, Dict[str, Any]]) -> None:
         Dict mapping model_id -> override data.
     """
     try:
-        Path(MODEL_CARD_OVERRIDES_FILE).parent.mkdir(parents=True, exist_ok=True)
-        with open(MODEL_CARD_OVERRIDES_FILE, 'w', encoding='utf-8') as f:
+        overrides_file = _get_overrides_file_path()
+        Path(overrides_file).parent.mkdir(parents=True, exist_ok=True)
+        with open(overrides_file, 'w', encoding='utf-8') as f:
             json.dump(overrides or {}, f, indent=2)
     except Exception as e:
         print(f"Error saving model card overrides: {e}")

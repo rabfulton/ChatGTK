@@ -485,7 +485,8 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         display_name="GPT-5.2",
         api_family="responses",
         capabilities=Capabilities(
-            text=True, vision=True, files=True, tool_use=True, web_search=True
+            text=True, vision=True, files=True, tool_use=True, web_search=True,
+            image_gen=True, image_edit=True
         ),
         quirks={"no_temperature": True},
     ),
@@ -495,7 +496,8 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         display_name="GPT-5.2 (2025-12-11)",
         api_family="responses",
         capabilities=Capabilities(
-            text=True, vision=True, files=True, tool_use=True, web_search=True
+            text=True, vision=True, files=True, tool_use=True, web_search=True,
+            image_gen=True, image_edit=True
         ),
         quirks={"no_temperature": True},
     ),
@@ -505,7 +507,8 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         display_name="GPT-5.2 Chat Latest",
         api_family="responses",
         capabilities=Capabilities(
-            text=True, vision=True, files=True, tool_use=True, web_search=True
+            text=True, vision=True, files=True, tool_use=True, web_search=True,
+            image_gen=True, image_edit=True
         ),
         quirks={"no_temperature": True},
     ),
@@ -515,7 +518,8 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         display_name="GPT-5.2 Pro",
         api_family="responses",
         capabilities=Capabilities(
-            text=True, vision=True, files=True, tool_use=True, web_search=True
+            text=True, vision=True, files=True, tool_use=True, web_search=True,
+            image_gen=True, image_edit=True
         ),
         quirks={"no_temperature": True},
     ),
@@ -525,7 +529,8 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         display_name="GPT-5.2 Pro (2025-12-11)",
         api_family="responses",
         capabilities=Capabilities(
-            text=True, vision=True, files=True, tool_use=True, web_search=True
+            text=True, vision=True, files=True, tool_use=True, web_search=True,
+            image_gen=True, image_edit=True
         ),
         quirks={"no_temperature": True},
     ),

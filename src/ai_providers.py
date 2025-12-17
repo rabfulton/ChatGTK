@@ -614,14 +614,26 @@ class CustomProvider(AIProvider):
         text_content = self._strip_think_content(text_content)
         return text_content, function_calls
 
-    def _build_responses_tools(self, enabled_tools: set) -> list:
+    def _build_responses_tools(self, enabled_tools: set, model: str = None) -> list:
         """
         Build the tools array for the Responses API.
         
         The Responses API uses a format where each function tool has:
         {"type": "function", "name": ..., "description": ..., "parameters": ...}
+        
+        If the generate_image function tool is enabled, it takes precedence.
+        Otherwise, if the model supports image gen/edit, add the native image_generation tool.
         """
         tools = []
+        
+        # Add native image_generation tool if model supports it AND function tool not enabled
+        if "generate_image" not in enabled_tools:
+            model_id = model or self.model_name
+            card = get_card(model_id)
+            if card and (card.capabilities.image_gen or card.capabilities.image_edit):
+                tools.append({"type": "image_generation"})
+                print(f"[CustomProvider] Native image_generation tool enabled for model: {model_id}")
+        
         from tools import TOOL_REGISTRY
         for tool_name in sorted(enabled_tools):
             spec = TOOL_REGISTRY.get(tool_name)
@@ -779,7 +791,7 @@ class CustomProvider(AIProvider):
         )
         
         # Build tools array
-        tools = self._build_responses_tools(enabled_tools)
+        tools = self._build_responses_tools(enabled_tools, self.model_name)
         
         # Build base params
         params = {
@@ -1252,6 +1264,9 @@ class OpenAIProvider(AIProvider):
         
         Includes both function tools (image/music/read_aloud) and the built-in
         web_search tool when enabled and supported.
+        
+        If the generate_image function tool is enabled, it takes precedence.
+        Otherwise, if the model supports image gen/edit, add the native image_generation tool.
         """
         tools = []
         
@@ -1262,6 +1277,12 @@ class OpenAIProvider(AIProvider):
                 print(f"[OpenAIProvider] Web search enabled for model: {model}")
             else:
                 print(f"[OpenAIProvider] Web search requested but not supported for model: {model}")
+        
+        # Add native image_generation tool if model supports it AND function tool not enabled
+        card = get_card(model)
+        if "generate_image" not in enabled_tools:
+            if card and (card.capabilities.image_gen or card.capabilities.image_edit):
+                tools.append({"type": "image_generation"})
         
         # Add function tools for image/music/read_aloud
         # The Responses API uses a similar but slightly different format than
@@ -1291,6 +1312,7 @@ class OpenAIProvider(AIProvider):
         """
         text_content = ""
         function_calls = []
+        image_tags = []
         
         if hasattr(response, "output") and response.output:
             for item in response.output:
@@ -1313,8 +1335,79 @@ class OpenAIProvider(AIProvider):
                             "name": name,
                             "arguments": arguments,
                         })
+                
+                # Handle image_generation_call (native image generation tool)
+                elif item_type == "image_generation_call":
+                    result = getattr(item, "result", None)
+                    if result:
+                        # Result is raw base64, convert to data URL format
+                        image_tags.append(f"__IMAGE_DATA__:data:image/png;base64,{result}")
+        
+        # Append image placeholders to text (will be processed later with chat_id)
+        if image_tags:
+            if text_content:
+                text_content += "\n\n"
+            text_content += "\n\n".join(image_tags)
         
         return text_content, function_calls
+
+    def _save_image_from_response(self, image_item: dict, chat_id: str = None) -> str:
+        """Save an image from a Responses API image item and return an <img> tag."""
+        if not chat_id:
+            chat_id = "temp"
+        
+        image_url = image_item.get("image_url") or image_item.get("url")
+        if isinstance(image_url, dict):
+            image_url = image_url.get("url", "")
+        
+        final_image_bytes = None
+        
+        if image_url and image_url.startswith("data:"):
+            try:
+                header, encoded = image_url.split(",", 1)
+                final_image_bytes = base64.b64decode(encoded)
+            except Exception as e:
+                print(f"[OpenAIProvider] Error decoding data URL: {e}")
+                return ""
+        elif image_url and image_url.startswith("http"):
+            try:
+                resp = requests.get(image_url, timeout=30)
+                resp.raise_for_status()
+                final_image_bytes = resp.content
+            except Exception as e:
+                print(f"[OpenAIProvider] Error downloading image: {e}")
+                return ""
+        else:
+            return ""
+        
+        try:
+            images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
+            images_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            image_path = images_dir / f"responses_{timestamp}.png"
+            image_path.write_bytes(final_image_bytes)
+            return f'<img src="{image_path}"/>'
+        except Exception as e:
+            print(f"[OpenAIProvider] Error saving image: {e}")
+            return ""
+
+    def _process_image_data_placeholders(self, text: str, chat_id: str) -> str:
+        """Process __IMAGE_DATA__: placeholders and save images to disk."""
+        import re
+        if "__IMAGE_DATA__:" not in text:
+            return text
+        
+        parts = re.split(r'(__IMAGE_DATA__:[^\s]+)', text)
+        result_parts = []
+        for part in parts:
+            if part.startswith("__IMAGE_DATA__:"):
+                data_url = part[len("__IMAGE_DATA__:"):]
+                img_tag = self._save_image_from_response({"image_url": data_url}, chat_id)
+                if img_tag:
+                    result_parts.append(img_tag)
+            else:
+                result_parts.append(part)
+        return "".join(result_parts)
 
     def _generate_with_responses_api(
         self,
@@ -1322,6 +1415,7 @@ class OpenAIProvider(AIProvider):
         model: str,
         temperature: float = None,
         max_tokens: int = None,
+        chat_id: str = None,
         web_search_enabled: bool = False,
         image_tool_handler=None,
         music_tool_handler=None,
@@ -1415,6 +1509,8 @@ class OpenAIProvider(AIProvider):
         if not enabled_tools:
             response = self.client.responses.create(**params)
             text_content, _ = self._extract_responses_output(response)
+            # Process any image data placeholders from native image_generation tool
+            text_content = self._process_image_data_placeholders(text_content, chat_id)
             return text_content
         
         # Tool-aware flow: allow the model to call tools, route those through
@@ -1437,6 +1533,9 @@ class OpenAIProvider(AIProvider):
             })
             
             text_content, function_calls = self._extract_responses_output(response)
+            
+            # Process any image data placeholders from native image_generation tool
+            text_content = self._process_image_data_placeholders(text_content, chat_id)
             
             if not function_calls:
                 # No function calls - this is the final answer
@@ -1530,23 +1629,26 @@ class OpenAIProvider(AIProvider):
         """
         Determine if a model requires the chat.completions API instead of Responses.
         
+        The api_family in the model card is the source of truth for routing.
+        Quirks like needs_developer_role affect message formatting, not API choice.
+        
         Returns
         -------
         tuple
             (requires_chat_completions: bool, reason: str)
             reason is one of: "audio", "reasoning", or ""
         """
-        # Card-first: check model card for API routing hints
         card = get_card(model)
         if card:
-            if card.quirks.get("requires_audio_modality"):
-                return True, "audio"
-            if card.quirks.get("needs_developer_role"):
-                return True, "reasoning"
-            # If card explicitly specifies chat.completions, use it
+            # api_family is the source of truth for routing
             if card.api_family == "chat.completions":
+                # Determine the reason for chat.completions
+                if card.quirks.get("requires_audio_modality"):
+                    return True, "audio"
+                if card.quirks.get("needs_developer_role"):
+                    return True, "reasoning"
                 return True, ""
-            # Card exists but doesn't require chat.completions
+            # Any other api_family (responses, images, etc.) doesn't need chat.completions
             return False, ""
 
         # Unknown model - default to not requiring chat.completions
@@ -1846,6 +1948,7 @@ class OpenAIProvider(AIProvider):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            chat_id=chat_id,
             web_search_enabled=web_search_enabled,
             image_tool_handler=image_tool_handler,
             music_tool_handler=music_tool_handler,
@@ -1864,6 +1967,7 @@ class OpenAIProvider(AIProvider):
         supports_edit = card.capabilities.image_edit if card else False
         
         if supports_edit and image_data:
+            print(f"[OpenAIProvider] Using images.edit API for model: {model}")
             # Image edit: decode the attached image and send it to the images.edit endpoint
             raw_bytes = base64.b64decode(image_data)
             
@@ -1885,6 +1989,7 @@ class OpenAIProvider(AIProvider):
             image_b64 = response.data[0].b64_json
             final_image_bytes = base64.b64decode(image_b64)
         else:
+            print(f"[OpenAIProvider] Using images.generate API for model: {model}")
             # Standard image generation (no source image)
             response = self.client.images.generate(
                 model=model,

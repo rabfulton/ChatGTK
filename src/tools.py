@@ -349,7 +349,12 @@ def run_tool_call(
         prompt_arg = args.get("prompt", "")
         image_path_arg = args.get("image_path")
         try:
-            return context.image_handler(prompt_arg, image_path_arg)
+            result = context.image_handler(prompt_arg, image_path_arg)
+            # Hide the img tag from the model but still show it in UI
+            # This prevents the model from echoing the file path
+            if result and result.startswith("<img"):
+                return HIDE_TOOL_RESULT_PREFIX + result
+            return result
         except Exception as e:
             print(f"Error in image_handler: {e}")
             return f"Error generating image: {e}"
@@ -554,7 +559,15 @@ class ToolManager:
 
     def is_image_model_for_provider(self, model_name: str, provider_name: str, custom_models: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
-        Return True if the given model is an image-generation model.
+        Return True if the given model should be routed to an image generation endpoint
+        (i.e., the images API or a multimodal image generation API).
+        
+        This returns True for:
+        - Dedicated image models with api_family="images" (dall-e-3, gpt-image-1)
+        - Multimodal image models with the "multimodal_image_gen" quirk (Gemini image models)
+        
+        This returns False for:
+        - Chat models that can generate images via tools (gpt-5.x with responses API)
         
         Parameters
         ----------
@@ -563,18 +576,20 @@ class ToolManager:
         provider_name : str
             The provider name.
         custom_models : Optional[Dict[str, Dict[str, Any]]]
-            Optional dict of custom model configurations. If provided and provider_name is "custom",
-            checks if the model has api_type "images".
+            Optional dict of custom model configurations.
         """
         if not model_name:
             return False
 
-        # Check model card for image_gen capability
-        # Note: We check image_gen directly, not is_image_model(), because multimodal
-        # models (like Gemini image models) have both text=True and image_gen=True
         card = get_card(model_name, custom_models)
         if card:
-            return card.capabilities.image_gen
+            # Check for dedicated image API models
+            if card.api_family == "images":
+                return True
+            # Check for multimodal image generation models (Gemini)
+            if card.quirks.get("multimodal_image_gen"):
+                return True
+            return False
 
         # Unknown model - default to not an image model
         return False

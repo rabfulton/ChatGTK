@@ -2,6 +2,7 @@ settings.cfg
 api_keys.json
 model_cache.json
 custom_models.json
+model_card_overrides.json
 music_library.db
 ChatGTK.code-workspace
 Backups/
