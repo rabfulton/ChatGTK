@@ -39,6 +39,7 @@ class RenderCallbacks:
     on_context_menu: Callable[[Any, int, Any], None]  # (widget, index, event)
     on_delete: Callable[[Any, int], None]              # (widget, index)
     create_speech_button: Callable[[List[str]], Gtk.Widget]  # (text) -> button
+    create_edit_button: Optional[Callable[[str, int], Gtk.Widget]] = None  # (image_path, msg_index) -> button
 
 
 class MessageRenderer:
@@ -245,6 +246,15 @@ class MessageRenderer:
         # Create speech button and add to header
         speech_btn = self.callbacks.create_speech_button(full_text_segments)
         header_box.pack_end(speech_btn, False, False, 0)
+        
+        # Add edit button if message contains a generated image (not LaTeX math)
+        if self.callbacks.create_edit_button:
+            img_matches = re.findall(r'<img src="([^"]+)"/>', message_text)
+            for img_path in img_matches:
+                if not self._is_latex_math_image(img_path):
+                    edit_btn = self.callbacks.create_edit_button(img_path, message_index)
+                    header_box.pack_end(edit_btn, False, False, 0)
+                    break  # Only add one edit button per message
         
         # Pack containers
         response_container.pack_start(content_container, True, True, 0)

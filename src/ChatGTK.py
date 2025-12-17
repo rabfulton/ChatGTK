@@ -331,6 +331,9 @@ class OpenAIGTKClient(Gtk.Window):
         # Voice input button with recording state
         self.recording = False
         self.attached_file_path = None
+        self.pending_edit_image = None  # Image path selected for editing
+        self.pending_edit_message_index = None  # Message index of the image
+        self._edit_buttons = []  # Track edit buttons for clearing
         self.btn_voice = Gtk.Button(label="Start Voice Input")
         self.btn_voice.connect("clicked", self.on_voice_input)
         
@@ -718,6 +721,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_context_menu=self.create_message_context_menu,
             on_delete=self.on_delete_message,
             create_speech_button=self.create_speech_button,
+            create_edit_button=self.create_edit_button,
         )
         self.message_renderer = MessageRenderer(
             settings=settings,
@@ -1182,14 +1186,19 @@ class OpenAIGTKClient(Gtk.Window):
 
         raise ValueError(f"Image generation not supported for provider: {provider_name}")
 
-    def generate_image_via_preferred_model(self, prompt, last_msg):
+    def generate_image_via_preferred_model(self, prompt, last_msg, image_path=None):
         """
-        Generate an image using the user-configured preferred image model,
+        Generate or edit an image using the user-configured preferred image model,
         falling back to a safe OpenAI default if necessary.
         
         Note: We trust the user's selection here - if they've explicitly chosen
         a model as the image handler, we'll try to use it even if it's not
         recognized as a standard image model.
+        
+        Args:
+            prompt: The text prompt for image generation/editing
+            last_msg: The last user message dict
+            image_path: Optional path to source image for editing
         """
         preferred_model = getattr(self, "image_model", None) or "dall-e-3"
         provider_name = self.get_provider_name_for_model(preferred_model)
@@ -1205,15 +1214,32 @@ class OpenAIGTKClient(Gtk.Window):
             preferred_model = "dall-e-3"
             provider_name = "openai"
 
-        print(f"[Image Tool] Using model: {preferred_model} (provider: {provider_name})")
+        # If image_path is provided, create a synthetic last_msg with the image
+        effective_last_msg = last_msg
+        has_attached_images = "images" in last_msg and last_msg["images"]
+        
+        if image_path:
+            try:
+                with open(image_path, "rb") as f:
+                    file_data = f.read()
+                    encoded = base64.b64encode(file_data).decode('utf-8')
+                    effective_last_msg = {
+                        **last_msg,
+                        "images": [{"data": encoded, "mime_type": "image/png", "is_edit_source": True}]
+                    }
+                    has_attached_images = True
+            except Exception as e:
+                print(f"[Image Tool] Error loading image for editing: {e}")
+
+        print(f"[Image Tool] Using model: {preferred_model} (provider: {provider_name}), editing: {image_path is not None}")
         try:
             return self.generate_image_for_model(
                 model=preferred_model,
                 prompt=prompt or last_msg.get("content", "") or "",
-                last_msg=last_msg,
+                last_msg=effective_last_msg,
                 chat_id=self.current_chat_id or "temp",
                 provider_name=provider_name,
-                has_attached_images="images" in last_msg and last_msg["images"],
+                has_attached_images=has_attached_images,
             )
         except Exception as e:
             # If the preferred provider/model fails (e.g., missing key), fall
@@ -2053,6 +2079,24 @@ class OpenAIGTKClient(Gtk.Window):
         files = []
         display_text = question
         
+        # Add pending edit image if selected
+        if getattr(self, 'pending_edit_image', None):
+            try:
+                with open(self.pending_edit_image, "rb") as f:
+                    file_data = f.read()
+                    encoded = base64.b64encode(file_data).decode('utf-8')
+                    images.append({
+                        "data": encoded,
+                        "mime_type": "image/png",
+                        "is_edit_source": True,  # Mark as edit source
+                    })
+                display_text = f"[Editing image]\n{question}" if question else "[Editing image]"
+            except Exception as e:
+                print(f"Error loading edit image: {e}")
+            finally:
+                # Clear the pending edit image after use
+                self._clear_pending_edit_image()
+        
         if getattr(self, 'attached_file_path', None):
             try:
                 mime_type, _ = mimetypes.guess_type(self.attached_file_path)
@@ -2263,8 +2307,8 @@ class OpenAIGTKClient(Gtk.Window):
                 search_tool_handler = None
 
                 if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+                    def image_tool_handler(prompt_arg, image_path=None):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
@@ -2309,8 +2353,8 @@ class OpenAIGTKClient(Gtk.Window):
                 search_tool_handler = None
 
                 if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+                    def image_tool_handler(prompt_arg, image_path=None):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
@@ -2355,8 +2399,8 @@ class OpenAIGTKClient(Gtk.Window):
                 search_tool_handler = None
 
                 if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+                    def image_tool_handler(prompt_arg, image_path=None):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
@@ -2403,8 +2447,8 @@ class OpenAIGTKClient(Gtk.Window):
                 search_tool_handler = None
 
                 if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+                    def image_tool_handler(prompt_arg, image_path=None):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
@@ -2450,8 +2494,8 @@ class OpenAIGTKClient(Gtk.Window):
                 search_tool_handler = None
 
                 if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg)
+                    def image_tool_handler(prompt_arg, image_path=None):
+                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
 
                 if self._supports_music_tools(model):
                     def music_tool_handler(action, keyword=None, volume=None):
@@ -3051,6 +3095,10 @@ class OpenAIGTKClient(Gtk.Window):
         self.current_chat_id = None
         self.history_list.unselect_all()
         
+        # Clear pending edit image
+        self._clear_pending_edit_image()
+        self._edit_buttons.clear()
+        
         # Clear the conversation display
         for child in self.conversation_box.get_children():
             child.destroy()
@@ -3329,6 +3377,10 @@ class OpenAIGTKClient(Gtk.Window):
             for child in self.conversation_box.get_children():
                 child.destroy()
             self.message_widgets.clear()
+            
+            # Clear pending edit image state
+            self._clear_pending_edit_image()
+            self._edit_buttons.clear()
             
             # Rebuild conversation display with formatting
             for idx, message in enumerate(history):
@@ -4053,6 +4105,78 @@ class OpenAIGTKClient(Gtk.Window):
         
         btn_speak.connect("clicked", on_speak_clicked)
         return btn_speak
+
+    def create_edit_button(self, image_path: str, message_index: int):
+        """
+        Create an edit button for generated images.
+        
+        When clicked, the button stays depressed and the image will be sent
+        with the next question for editing.
+        """
+        btn_edit = Gtk.ToggleButton()
+        button_size = self.font_size * 2
+        btn_edit.set_size_request(button_size, button_size)
+        
+        icon_edit = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        btn_edit.set_image(icon_edit)
+        btn_edit.set_tooltip_text("Edit this image with your next message")
+        
+        def on_edit_toggled(widget):
+            if widget.get_active():
+                # Check if current model supports image editing
+                model = self._get_model_id_from_combo()
+                from model_cards import get_card
+                card = get_card(model, getattr(self, 'custom_models', {}))
+                supports_edit = card and card.capabilities.image_edit if card else False
+                
+                if not supports_edit:
+                    widget.set_active(False)
+                    dialog = Gtk.MessageDialog(
+                        transient_for=self,
+                        modal=True,
+                        message_type=Gtk.MessageType.WARNING,
+                        buttons=Gtk.ButtonsType.OK,
+                        text="Model does not support image editing",
+                    )
+                    dialog.format_secondary_text(
+                        f"The current model '{model}' does not support image editing.\n\n"
+                        "Either switch to a model that supports editing (e.g., gpt-image-1), "
+                        "or enable 'Image Edit' for this model in Settings → Model Whitelist."
+                    )
+                    dialog.run()
+                    dialog.destroy()
+                    return
+                
+                # Deactivate any other edit buttons
+                self._clear_pending_edit_image(except_path=image_path)
+                self.pending_edit_image = image_path
+                self.pending_edit_message_index = message_index
+                widget.set_tooltip_text("Image selected for editing (click to deselect)")
+            else:
+                if getattr(self, 'pending_edit_image', None) == image_path:
+                    self.pending_edit_image = None
+                    self.pending_edit_message_index = None
+                widget.set_tooltip_text("Edit this image with your next message")
+        
+        btn_edit.connect("toggled", on_edit_toggled)
+        
+        # Store reference for clearing
+        btn_edit.image_path = image_path
+        if not hasattr(self, '_edit_buttons'):
+            self._edit_buttons = []
+        self._edit_buttons.append(btn_edit)
+        
+        return btn_edit
+
+    def _clear_pending_edit_image(self, except_path: str = None):
+        """Clear pending edit image and deactivate all edit buttons except the specified one."""
+        if hasattr(self, '_edit_buttons'):
+            for btn in self._edit_buttons:
+                if btn.get_active() and getattr(btn, 'image_path', None) != except_path:
+                    btn.set_active(False)
+        if except_path is None:
+            self.pending_edit_image = None
+            self.pending_edit_message_index = None
 
     # -----------------------------------------------------------------------
     # TTS Helpers – synthesize and play text via TTS or audio-preview

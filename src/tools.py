@@ -46,9 +46,11 @@ class ToolSpec:
 IMAGE_TOOL_SPEC = ToolSpec(
     name="generate_image",
     description=(
-        "Generate an image for the user based on a textual description. "
+        "Generate or edit an image based on a textual description. "
         "Use this when the user explicitly asks for an image or when an "
-        "image would significantly help them understand something."
+        "image would significantly help them understand something. "
+        "To edit an existing image, provide the image_path parameter with "
+        "the path to the source image."
     ),
     parameters={
         "type": "object",
@@ -56,8 +58,15 @@ IMAGE_TOOL_SPEC = ToolSpec(
             "prompt": {
                 "type": "string",
                 "description": (
-                    "A concise but detailed description of the image to generate, "
-                    "in natural language."
+                    "A concise but detailed description of the image to generate "
+                    "or the edits to make to an existing image, in natural language."
+                ),
+            },
+            "image_path": {
+                "type": "string",
+                "description": (
+                    "Optional: Path to an existing image to edit. If provided, "
+                    "the prompt describes the desired modifications to this image."
                 ),
             },
         },
@@ -306,7 +315,7 @@ class ToolContext:
     Handlers are stored as callables. The dispatcher will invoke the appropriate
     handler based on the tool name.
     """
-    image_handler: Optional[Callable[[str], str]] = None
+    image_handler: Optional[Callable[[str, Optional[str]], str]] = None  # (prompt, image_path) -> result
     music_handler: Optional[Callable[[str, Optional[str], Optional[float]], str]] = None
     read_aloud_handler: Optional[Callable[[str], str]] = None
     search_handler: Optional[Callable[[str, Optional[str]], str]] = None
@@ -338,8 +347,9 @@ def run_tool_call(
         if context.image_handler is None:
             return "Error: image tool is not available."
         prompt_arg = args.get("prompt", "")
+        image_path_arg = args.get("image_path")
         try:
-            return context.image_handler(prompt_arg)
+            return context.image_handler(prompt_arg, image_path_arg)
         except Exception as e:
             print(f"Error in image_handler: {e}")
             return f"Error generating image: {e}"

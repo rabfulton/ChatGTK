@@ -79,11 +79,12 @@ DEFAULT_SYSTEM_PROMPT_APPENDIX = (
 )
 
 DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX = (
-    "You have access to a generate_image tool that can create actual images for the user "
+    "You have access to a generate_image tool that can create or edit images for the user "
     "from a natural language description. Use this tool when the user explicitly asks for "
     "an image or when a diagram, illustration, or example image would significantly help "
-    "them understand the answer. After using the tool, describe the generated image in "
-    "your reply so the user knows what it contains."
+    "them understand the answer. To edit an existing image, provide the image_path parameter "
+    "with the path to the source image (e.g., from a previous generation). After using the "
+    "tool, describe the generated or edited image in your reply so the user knows what it contains."
 )
 
 _MUSIC_TOOL_PROMPT_BASE = (
