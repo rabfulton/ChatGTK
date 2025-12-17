@@ -306,9 +306,8 @@ class CustomModelDialog(Gtk.Dialog):
         self.voice_row.pack_start(voice_box, True, True, 0)
         box.pack_start(self.voice_row, False, False, 0)
         
-        # Show/hide voice row based on api_type
+        # Show/hide voice row based on api_type (connected here, called after show_all)
         self.combo_api_type.connect("changed", self._on_api_type_changed)
-        self._on_api_type_changed(self.combo_api_type)  # Set initial visibility
 
         # Store initial data for editing existing models
         self._initial_model_id = str(data.get("model_id", data.get("model_name", "")))
@@ -338,6 +337,7 @@ class CustomModelDialog(Gtk.Dialog):
         box.pack_start(row, False, False, 0)
 
         self.show_all()
+        self._on_api_type_changed(self.combo_api_type)  # Set initial visibility
 
     def get_data(self) -> dict:
         model_id = self.entry_model_id.get_text().strip()
