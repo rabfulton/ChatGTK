@@ -238,7 +238,6 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Add sidebar toggle button to top bar
         self.sidebar_button = Gtk.Button()
-        self.sidebar_button.set_relief(Gtk.ReliefStyle.NONE)
         # Set arrow direction based on initial sidebar visibility state
         # LEFT arrow = sidebar is visible (clicking will hide it)
         # RIGHT arrow = sidebar is hidden (clicking will show it)
@@ -246,6 +245,12 @@ class OpenAIGTKClient(Gtk.Window):
         arrow = Gtk.Arrow(arrow_type=initial_arrow_type, shadow_type=Gtk.ShadowType.NONE)
         self.sidebar_button.add(arrow)
         self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
+        # Style to match other buttons
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(b"button { background: @theme_bg_color; }")
+        self.sidebar_button.get_style_context().add_provider(
+            css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
         hbox_top.pack_start(self.sidebar_button, False, False, 0)
 
         # Initialize model combo before trying to use it
