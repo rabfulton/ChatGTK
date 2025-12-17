@@ -1953,6 +1953,22 @@ class OpenAIGTKClient(Gtk.Window):
         dialog.run()
         dialog.destroy()
 
+    def _show_large_file_warning(self, size_info: str) -> bool:
+        """Show warning about large file uploads. Returns True if user wants to continue."""
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Large File Warning",
+        )
+        dialog.format_secondary_text(
+            f"{size_info}. Large file uploads can use a lot of tokens. Continue?"
+        )
+        response = dialog.run()
+        dialog.destroy()
+        return response == Gtk.ResponseType.YES
+
     def display_error(self, message: str):
         """Backward-compatible alias used by legacy call sites."""
         self.show_error_dialog(message)
@@ -2109,6 +2125,7 @@ class OpenAIGTKClient(Gtk.Window):
                     mime_type = "application/octet-stream"
                 
                 filename = os.path.basename(self.attached_file_path)
+                original_question = question  # Save for display (don't show file content)
                 
                 # Determine if this is an image or a document based on MIME type
                 is_image = mime_type.startswith("image/")
@@ -2139,6 +2156,13 @@ class OpenAIGTKClient(Gtk.Window):
                     
                     # For PDFs, pass the file through to the provider via the Responses API.
                     if mime_type == "application/pdf":
+                        # Warn about large PDFs (>1MB)
+                        if file_size > 1024 * 1024:
+                            size_mb = file_size / (1024 * 1024)
+                            if not self._show_large_file_warning(f"PDF file is {size_mb:.1f} MB"):
+                                self.attached_file_path = None
+                                self.btn_attach.set_label("Attach File")
+                                return
                         files.append({
                             "path": self.attached_file_path,
                             "mime_type": mime_type,
@@ -2147,6 +2171,14 @@ class OpenAIGTKClient(Gtk.Window):
                     else:
                         # For other text-like documents (e.g. .txt, .md), inline the
                         # content into the user message instead of uploading a file.
+                        # Warn about large text files (>100KB)
+                        if file_size > 100 * 1024:
+                            size_kb = file_size / 1024
+                            if not self._show_large_file_warning(f"Text file is {size_kb:.0f} KB"):
+                                self.attached_file_path = None
+                                self.btn_attach.set_label("Attach File")
+                                return
+                        
                         try:
                             with open(self.attached_file_path, "r", encoding="utf-8", errors="ignore") as f:
                                 file_text = f.read()
@@ -2158,8 +2190,8 @@ class OpenAIGTKClient(Gtk.Window):
                             return
 
                         # Optionally truncate very large text files to avoid extremely
-                        # long prompts. Here we cap at ~32k characters.
-                        max_chars = 32_000
+                        # long prompts. Here we cap at ~100k characters.
+                        max_chars = 100_000
                         if len(file_text) > max_chars:
                             file_text = file_text[:max_chars] + "\n\n[File content truncated]"
 
@@ -2168,12 +2200,9 @@ class OpenAIGTKClient(Gtk.Window):
                             question = question + "\n\n" + header + file_text
                         else:
                             question = header + file_text
-                        display_text = question
                     
-                # If this was a real attachment (PDF or image), show a simple marker.
-                if not display_text or display_text == question:
-                    # Only add an attachment marker when we didn't already inline content.
-                    display_text = (question + f"\n[Attached: {filename}]") if question else f"[Attached: {filename}]"
+                # Show attachment marker in display (without file content)
+                display_text = (original_question + f"\n[Attached: {filename}]") if original_question else f"[Attached: {filename}]"
                 
                 # Reset attachment
                 self.attached_file_path = None
@@ -2904,10 +2933,28 @@ class OpenAIGTKClient(Gtk.Window):
 
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            self.attached_file_path = dialog.get_filename()
-            filename = os.path.basename(self.attached_file_path)
+            filepath = dialog.get_filename()
+            dialog.destroy()
+            
+            # Check file size and warn for large files
+            try:
+                size = os.path.getsize(filepath)
+                mime_type, _ = mimetypes.guess_type(filepath)
+                is_pdf = mime_type == "application/pdf"
+                
+                # Warn for PDFs > 1MB or text files > 100KB
+                if (is_pdf and size > 1_000_000) or (not is_pdf and size > 100_000):
+                    size_str = f"{size / 1_000_000:.1f}MB" if size > 1_000_000 else f"{size / 1000:.0f}KB"
+                    if not self._show_large_file_warning(f"File is {size_str}"):
+                        return
+            except OSError:
+                pass
+            
+            self.attached_file_path = filepath
+            filename = os.path.basename(filepath)
             self.btn_attach.set_label(f"Attached: {filename}")
             print(f"File selected: {self.attached_file_path}")
+            return
         
         dialog.destroy()
 

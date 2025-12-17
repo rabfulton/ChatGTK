@@ -1217,7 +1217,7 @@ class OpenAIProvider(AIProvider):
                     "text": content_text,
                 })
             
-            # Add file attachments
+            # Add file attachments (PDFs only - text files are inlined by the UI)
             for file_info in files:
                 file_path = file_info.get("path")
                 mime_type = file_info.get("mime_type", "application/octet-stream")
@@ -1227,7 +1227,11 @@ class OpenAIProvider(AIProvider):
                 
                 if not file_id and file_path:
                     # Upload the file and get the file_id
-                    file_id = self._upload_file(file_path, mime_type)
+                    try:
+                        file_id = self._upload_file(file_path, mime_type)
+                    except Exception as e:
+                        print(f"[OpenAIProvider] Error uploading file: {e}")
+                        continue
                 
                 if file_id:
                     content_parts.append({
