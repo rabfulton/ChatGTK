@@ -30,6 +30,16 @@ from tools import (
 from config import HISTORY_DIR
 from model_cards import get_card
 
+
+def _get_image_data(img: dict) -> str:
+    """Get base64 image data from an image dict, loading from path if needed."""
+    if "data" in img:
+        return img["data"]
+    if "path" in img:
+        with open(img["path"], "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    return ""
+
 class AIProvider(ABC):
     """Abstract base class for AI providers."""
     
@@ -1241,7 +1251,7 @@ class OpenAIProvider(AIProvider):
             
             # Add image attachments (convert to base64 data URL format)
             for img in images:
-                img_data = img.get("data", "")
+                img_data = _get_image_data(img)
                 img_mime = img.get("mime_type", "image/jpeg")
                 content_parts.append({
                     "type": "input_image",
@@ -1684,7 +1694,7 @@ class OpenAIProvider(AIProvider):
                     content_parts.append({
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{mime_type};base64,{img['data']}",
+                            "url": f"data:{mime_type};base64,{_get_image_data(img)}",
                             "detail": "auto"
                         }
                     })
@@ -2434,7 +2444,7 @@ class GrokProvider(AIProvider):
                     content_parts.append({
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{mime_type};base64,{img['data']}",
+                            "url": f"data:{mime_type};base64,{_get_image_data(img)}",
                             "detail": "auto"
                         }
                     })
@@ -2694,7 +2704,7 @@ class ClaudeProvider(AIProvider):
                     content_parts.append({
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{mime_type};base64,{img['data']}",
+                            "url": f"data:{mime_type};base64,{_get_image_data(img)}",
                             "detail": "auto"
                         }
                     })
@@ -3020,7 +3030,7 @@ class GeminiProvider(AIProvider):
                     parts.append({
                         "inlineData": {
                             "mimeType": img.get("mime_type", "image/jpeg"),
-                            "data": img["data"]
+                            "data": _get_image_data(img)
                         }
                     })
             

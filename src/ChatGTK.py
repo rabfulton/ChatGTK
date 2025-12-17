@@ -1225,14 +1225,11 @@ class OpenAIGTKClient(Gtk.Window):
         
         if image_path:
             try:
-                with open(image_path, "rb") as f:
-                    file_data = f.read()
-                    encoded = base64.b64encode(file_data).decode('utf-8')
-                    effective_last_msg = {
-                        **last_msg,
-                        "images": [{"data": encoded, "mime_type": "image/png", "is_edit_source": True}]
-                    }
-                    has_attached_images = True
+                effective_last_msg = {
+                    **last_msg,
+                    "images": [{"path": image_path, "mime_type": "image/png", "is_edit_source": True}]
+                }
+                has_attached_images = True
             except Exception as e:
                 print(f"[Image Tool] Error loading image for editing: {e}")
 
@@ -2103,14 +2100,12 @@ class OpenAIGTKClient(Gtk.Window):
         # Add pending edit image if selected
         if getattr(self, 'pending_edit_image', None):
             try:
-                with open(self.pending_edit_image, "rb") as f:
-                    file_data = f.read()
-                    encoded = base64.b64encode(file_data).decode('utf-8')
-                    images.append({
-                        "data": encoded,
-                        "mime_type": "image/png",
-                        "is_edit_source": True,  # Mark as edit source
-                    })
+                # Store path instead of data - data will be loaded when sending to API
+                images.append({
+                    "path": self.pending_edit_image,
+                    "mime_type": "image/png",
+                    "is_edit_source": True,
+                })
                 display_text = f"[Editing image]\n{question}" if question else "[Editing image]"
             except Exception as e:
                 print(f"Error loading edit image: {e}")

@@ -4447,6 +4447,13 @@ class PromptEditorDialog(Gtk.Dialog):
         spacer.set_hexpand(True)
         toolbar.pack_start(spacer, True, True, 0)
 
+        # Emoji Button
+        btn_emoji = Gtk.Button()
+        btn_emoji.set_tooltip_text("Insert Emoji (Ctrl+.)")
+        btn_emoji.add(Gtk.Image.new_from_icon_name("face-smile-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
+        btn_emoji.connect("clicked", self._on_emoji_clicked)
+        toolbar.pack_start(btn_emoji, False, False, 0)
+
         # Help Button
         btn_help = Gtk.Button()
         btn_help.set_tooltip_text("Keyboard Shortcuts")
@@ -4461,6 +4468,10 @@ class PromptEditorDialog(Gtk.Dialog):
         dialog = ShortcutsHelpDialog(self)
         dialog.run()
         dialog.destroy()
+
+    def _on_emoji_clicked(self, widget):
+        """Show GTK emoji chooser and insert selected emoji."""
+        self.textview.emit("insert-emoji")
 
     def _wrap_selection(self, prefix: str, suffix: str):
         """Wrap the current selection with prefix/suffix or insert template."""
