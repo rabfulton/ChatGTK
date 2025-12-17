@@ -3478,6 +3478,10 @@ class OpenAIWebSocketProvider:
         self.api_key = None  # Allow callers to inject key directly
         self.mute_mic_during_playback = True
         
+        # Transcript callbacks
+        self.on_user_transcript = None  # Called with user's transcribed speech
+        self.on_assistant_transcript = None  # Called with assistant's response transcript
+        
         # Audio configuration
         self.input_sample_rate = 48000  # Input from mic
         self.output_sample_rate = 24000  # Server rate
@@ -3744,6 +3748,22 @@ class OpenAIWebSocketProvider:
                                 self.is_ai_speaking = True
                             elif response.get("type") in ("response.output_item.done", "response.done"):
                                 self.is_ai_speaking = False
+                            
+                            # Handle user speech transcript
+                            if response.get("type") == "conversation.item.input_audio_transcription.completed":
+                                transcript = response.get("transcript", "")
+                                if transcript and self.on_user_transcript:
+                                    self._schedule_callback(self.on_user_transcript, transcript)
+                            
+                            # Handle assistant response transcript
+                            elif response.get("type") == "response.done":
+                                resp_data = response.get("response", {})
+                                for output in resp_data.get("output", []):
+                                    if output.get("type") == "message" and output.get("role") == "assistant":
+                                        for content in output.get("content", []):
+                                            transcript = content.get("transcript", "")
+                                            if transcript and self.on_assistant_transcript:
+                                                self._schedule_callback(self.on_assistant_transcript, transcript)
                             
                             if "text" in response:
                                 self._schedule_callback(callback, response["text"])

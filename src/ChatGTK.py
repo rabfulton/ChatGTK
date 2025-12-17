@@ -2073,6 +2073,28 @@ class OpenAIGTKClient(Gtk.Window):
         GLib.idle_add(lambda idx=msg_index, msg=formatted: self.append_message('ai', msg, idx))
         GLib.idle_add(self.save_current_chat)
 
+    def _on_realtime_user_transcript(self, transcript: str):
+        """Handle user speech transcript from realtime conversation."""
+        if not transcript:
+            return
+        msg_index = len(self.conversation_history)
+        user_msg = create_user_message(transcript)
+        self.conversation_history.append(user_msg)
+        formatted = format_response(transcript)
+        GLib.idle_add(lambda idx=msg_index, msg=formatted: self.append_message('user', msg, idx))
+        GLib.idle_add(self.save_current_chat)
+
+    def _on_realtime_assistant_transcript(self, transcript: str):
+        """Handle assistant response transcript from realtime conversation."""
+        if not transcript:
+            return
+        msg_index = len(self.conversation_history)
+        assistant_msg = create_assistant_message(transcript)
+        self.conversation_history.append(assistant_msg)
+        formatted = format_response(transcript)
+        GLib.idle_add(lambda idx=msg_index, msg=formatted: self.append_message('ai', msg, idx))
+        GLib.idle_add(self.save_current_chat)
+
     def append_message(self, sender, message_text, message_index: int = None):
         if message_index is None:
             if sender == 'ai':
@@ -2159,6 +2181,8 @@ class OpenAIGTKClient(Gtk.Window):
         if "realtime" in target_model.lower():
             if not hasattr(self, 'ws_provider'):
                 self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
+                self.ws_provider.on_user_transcript = self._on_realtime_user_transcript
+                self.ws_provider.on_assistant_transcript = self._on_realtime_assistant_transcript
                 # Connect to WebSocket server
                 success = self.ws_provider.connect(
                     model=target_model,
@@ -3070,6 +3094,8 @@ class OpenAIGTKClient(Gtk.Window):
                     if not hasattr(self, 'ws_provider'):
                         self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
                         self.ws_provider.microphone = self.microphone  # Pass selected microphone
+                        self.ws_provider.on_user_transcript = self._on_realtime_user_transcript
+                        self.ws_provider.on_assistant_transcript = self._on_realtime_assistant_transcript
                 
                     # Connect to WebSocket before starting stream
                     api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
