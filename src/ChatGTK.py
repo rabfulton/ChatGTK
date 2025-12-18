@@ -71,6 +71,7 @@ from conversation import (
     get_first_user_content,
 )
 from controller import ChatController
+from events import EventType, Event
 from message_renderer import MessageRenderer, RenderSettings, RenderCallbacks, create_source_view
 
 gi.require_version("Gtk", "3.0")
@@ -99,6 +100,9 @@ class OpenAIGTKClient(Gtk.Window):
         # Must be created before apply_settings since property setters delegate to controller
         self.controller = ChatController()
         self.controller.initialize_providers_from_env()
+
+        # Subscribe to events for reactive UI updates
+        self._init_event_subscriptions()
 
         # Load and apply settings (for UI settings like window_width, font_size, etc.)
         # Note: settings like system_message will be routed to controller via properties
@@ -943,6 +947,65 @@ class OpenAIGTKClient(Gtk.Window):
         # Let controller parse/init
         if hasattr(self.controller, '_init_system_prompts_from_settings'):
             self.controller._init_system_prompts_from_settings()
+
+    # -----------------------------------------------------------------------
+    # Event subscriptions for reactive UI updates
+    # -----------------------------------------------------------------------
+
+    def _init_event_subscriptions(self):
+        """Subscribe to events from controller/services for reactive UI updates."""
+        bus = self.controller.event_bus
+        
+        # Chat events
+        bus.subscribe(EventType.CHAT_LOADED, self._on_chat_loaded_event)
+        bus.subscribe(EventType.CHAT_SAVED, self._on_chat_saved_event)
+        bus.subscribe(EventType.CHAT_DELETED, self._on_chat_deleted_event)
+        
+        # Settings events
+        bus.subscribe(EventType.SETTINGS_CHANGED, self._on_settings_changed_event)
+        
+        # Error events
+        bus.subscribe(EventType.ERROR_OCCURRED, self._on_error_event)
+
+    def _on_chat_loaded_event(self, event):
+        """Handle CHAT_LOADED event - refresh UI."""
+        GLib.idle_add(self.refresh_history_list)
+
+    def _on_chat_saved_event(self, event):
+        """Handle CHAT_SAVED event - refresh history list."""
+        GLib.idle_add(self.refresh_history_list)
+
+    def _on_chat_deleted_event(self, event):
+        """Handle CHAT_DELETED event - refresh history list."""
+        GLib.idle_add(self.refresh_history_list)
+
+    def _on_settings_changed_event(self, event):
+        """Handle SETTINGS_CHANGED event - update UI if needed."""
+        key = event.data.get('key', '')
+        value = event.data.get('value')
+        
+        # Update local attribute for settings that affect UI
+        if key:
+            attr = key.lower()
+            if hasattr(self, attr):
+                setattr(self, attr, value)
+        
+        # Handle specific settings that need UI updates
+        if key == 'FONT_SIZE':
+            GLib.idle_add(self._update_message_renderer_settings)
+        elif key == 'LATEX_DPI':
+            GLib.idle_add(self._update_message_renderer_settings)
+
+    def _on_error_event(self, event):
+        """Handle ERROR_OCCURRED event - show error to user."""
+        error = event.data.get('error', 'Unknown error')
+        context = event.data.get('context', '')
+        message = f"{context}: {error}" if context else error
+        GLib.idle_add(self.display_error, message)
+
+    # -----------------------------------------------------------------------
+    # System prompt management
+    # -----------------------------------------------------------------------
 
     def _refresh_system_prompt_combo(self):
         """
