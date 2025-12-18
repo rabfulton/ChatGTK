@@ -48,10 +48,7 @@ def test_services_instantiation():
         chat_history_repo=chat_history_repo,
     )
     
-    audio_service = AudioService(
-        chat_history_repo=chat_history_repo,
-        settings_repo=settings_repo,
-    )
+    audio_service = AudioService()
     
     tool_manager = ToolManager()
     tool_service = ToolService(
@@ -133,14 +130,11 @@ def test_audio_service():
     settings_repo = SettingsRepository()
     chat_history_repo = ChatHistoryRepository()
     
-    audio_service = AudioService(
-        chat_history_repo=chat_history_repo,
-        settings_repo=settings_repo,
-    )
+    audio_service = AudioService()
     
-    # Test list audio (should not crash even if no audio)
-    audio_files = audio_service.list_chat_audio("test_chat")
-    print(f"✓ Listed {len(audio_files)} audio files for test chat")
+    # Test that service instantiates correctly
+    # (actual recording/TTS requires hardware and API keys)
+    print("✓ AudioService instantiated successfully")
     
     return True
 
@@ -203,10 +197,7 @@ def test_service_coordination():
         chat_history_repo=chat_history_repo,
     )
     
-    audio_service = AudioService(
-        chat_history_repo=chat_history_repo,
-        settings_repo=settings_repo,
-    )
+    audio_service = AudioService()
     
     tool_manager = ToolManager()
     tool_service = ToolService(
@@ -226,9 +217,8 @@ def test_service_coordination():
     images = image_service.list_chat_images(chat_id)
     print(f"✓ ImageService accessed chat directory ({len(images)} images)")
     
-    # Audio service can access chat directory
-    audio_files = audio_service.list_chat_audio(chat_id)
-    print(f"✓ AudioService accessed chat directory ({len(audio_files)} files)")
+    # Audio service instantiated (no longer has list_chat_audio)
+    print("✓ AudioService instantiated")
     
     # All services share the same repository instances
     print("✓ Services coordinate through shared repositories")

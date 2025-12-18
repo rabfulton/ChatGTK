@@ -4,11 +4,15 @@ Audio service for handling recording, transcription, and text-to-speech.
 
 import os
 import threading
+import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, Tuple
 from datetime import datetime
 
-from repositories import ChatHistoryRepository, SettingsRepository
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+
 from config import HISTORY_DIR
 from events import EventBus, EventType, Event
 
@@ -17,444 +21,418 @@ class AudioService:
     """
     Service for managing audio operations.
     
-    This service handles audio recording, transcription, text-to-speech synthesis,
-    and audio playback coordination.
+    Handles recording, transcription, TTS synthesis, and playback.
+    GTK-free - can be used with any UI framework.
     """
     
-    def __init__(
-        self,
-        chat_history_repo: ChatHistoryRepository,
-        settings_repo: SettingsRepository,
-        event_bus: Optional[EventBus] = None,
-    ):
-        """
-        Initialize the audio service.
-        
-        Parameters
-        ----------
-        chat_history_repo : ChatHistoryRepository
-            Repository for accessing chat directories.
-        settings_repo : SettingsRepository
-            Repository for audio settings.
-        event_bus : Optional[EventBus]
-            Event bus for publishing events.
-        """
-        self._chat_history_repo = chat_history_repo
-        self._settings_repo = settings_repo
+    def __init__(self, event_bus: Optional[EventBus] = None):
         self._event_bus = event_bus
-        self._recording_thread: Optional[threading.Thread] = None
-        self._playback_thread: Optional[threading.Thread] = None
-        self._stop_recording = False
-        self._stop_playback = False
+        self._current_playback_stop = None
     
     def _emit(self, event_type: EventType, **data) -> None:
         """Emit an event if event bus is configured."""
         if self._event_bus:
             self._event_bus.publish(Event(type=event_type, data=data, source='audio_service'))
     
-    def _get_chat_audio_dir(self, chat_id: str) -> Path:
-        """
-        Get the audio directory for a chat.
-        
-        Parameters
-        ----------
-        chat_id : str
-            The chat identifier.
-            
-        Returns
-        -------
-        Path
-            Path to the chat's audio directory.
-        """
-        chat_dir = Path(HISTORY_DIR) / chat_id
-        audio_dir = chat_dir / 'audio'
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        return audio_dir
+    # -------------------------------------------------------------------------
+    # Recording
+    # -------------------------------------------------------------------------
     
     def record_audio(
         self,
-        duration: Optional[float] = None,
-        chat_id: Optional[str] = None,
-        callback: Optional[Callable[[str], None]] = None,
-    ) -> Dict[str, Any]:
+        microphone: Any,
+        stop_event: threading.Event,
+    ) -> Tuple[Optional[np.ndarray], Optional[int]]:
         """
-        Record audio from the microphone.
+        Record audio from microphone until stop_event is set.
         
         Parameters
         ----------
-        duration : Optional[float]
-            Recording duration in seconds. If None, records until stopped.
-        chat_id : Optional[str]
-            Chat ID for organizing recorded audio.
-        callback : Optional[Callable[[str], None]]
-            Callback function called when recording completes with file path.
+        microphone : Any
+            Name or index of input device.
+        stop_event : threading.Event
+            Event to signal recording should stop.
             
         Returns
         -------
-        Dict[str, Any]
-            Dictionary containing:
-            - 'success': Whether recording started successfully
-            - 'audio_path': Path where audio will be saved
-            - 'error': Error message (if failed)
+        Tuple[Optional[np.ndarray], Optional[int]]
+            (recording_data, sample_rate) or (None, None) on error.
         """
         try:
-            import sounddevice as sd
-            import soundfile as sf
-            import numpy as np
+            recorded_chunks = []
+            os.environ['AUDIODEV'] = 'pulse'
             
-            # Get recording settings
-            sample_rate = self._settings_repo.get('AUDIO_SAMPLE_RATE', 44100)
-            channels = self._settings_repo.get('AUDIO_CHANNELS', 1)
+            device_info = sd.query_devices(microphone, 'input')
+            if device_info is None:
+                print(f"Warning: Could not find microphone '{microphone}', using default")
+                device_info = sd.query_devices(sd.default.device[0], 'input')
             
-            # Determine save location
-            if chat_id:
-                audio_dir = self._get_chat_audio_dir(chat_id)
-            else:
-                audio_dir = Path(HISTORY_DIR) / 'temp_audio'
-                audio_dir.mkdir(parents=True, exist_ok=True)
+            sample_rate = int(device_info['default_samplerate'])
             
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            audio_path = audio_dir / f"recording_{timestamp}.wav"
+            def audio_callback(indata, frames, time, status):
+                if status:
+                    print(f'Status: {status}')
+                recorded_chunks.append(indata.copy())
             
-            def record_thread():
-                """Thread function for recording."""
-                try:
-                    if duration:
-                        # Fixed duration recording
-                        recording = sd.rec(
-                            int(duration * sample_rate),
-                            samplerate=sample_rate,
-                            channels=channels,
-                            dtype='float32'
-                        )
-                        sd.wait()
-                    else:
-                        # Manual stop recording
-                        recording_chunks = []
-                        chunk_duration = 0.1  # 100ms chunks
-                        chunk_samples = int(chunk_duration * sample_rate)
-                        
-                        with sd.InputStream(
-                            samplerate=sample_rate,
-                            channels=channels,
-                            dtype='float32'
-                        ) as stream:
-                            while not self._stop_recording:
-                                chunk, _ = stream.read(chunk_samples)
-                                recording_chunks.append(chunk)
-                        
-                        recording = np.concatenate(recording_chunks, axis=0)
-                    
-                    # Save recording
-                    sf.write(str(audio_path), recording, sample_rate)
-                    
-                    # Call callback if provided
-                    if callback:
-                        callback(str(audio_path))
-                        
-                except Exception as e:
-                    print(f"Error during recording: {e}")
+            stream = sd.InputStream(
+                device=microphone,
+                channels=1,
+                samplerate=sample_rate,
+                callback=audio_callback,
+                dtype=np.float32
+            )
             
-            # Start recording thread
-            self._stop_recording = False
-            self._recording_thread = threading.Thread(target=record_thread, daemon=True)
-            self._recording_thread.start()
+            self._emit(EventType.RECORDING_STARTED, microphone=str(microphone))
             
-            self._emit(EventType.RECORDING_STARTED, audio_path=str(audio_path), chat_id=chat_id)
+            with stream:
+                print(f"Recording started at {sample_rate} Hz")
+                while stop_event.is_set():
+                    sd.sleep(100)
             
-            return {
-                'success': True,
-                'audio_path': str(audio_path),
-            }
+            self._emit(EventType.RECORDING_STOPPED)
+            
+            if recorded_chunks:
+                recording = np.concatenate(recorded_chunks, axis=0)
+                return recording, sample_rate
+            
+            return None, None
             
         except Exception as e:
+            print(f"Error recording audio: {e}")
             self._emit(EventType.ERROR_OCCURRED, error=str(e), context='recording')
-            return {
-                'success': False,
-                'error': str(e),
-            }
+            return None, None
     
-    def stop_recording(self) -> bool:
-        """
-        Stop the current recording.
+    def save_recording(
+        self,
+        recording: np.ndarray,
+        sample_rate: int,
+        path: Optional[Path] = None,
+    ) -> Path:
+        """Save recording to file, return path."""
+        if path is None:
+            path = Path(tempfile.gettempdir()) / "voice_input.wav"
         
-        Returns
-        -------
-        bool
-            True if recording was stopped, False if no recording in progress.
-        """
-        if self._recording_thread and self._recording_thread.is_alive():
-            self._stop_recording = True
-            self._recording_thread.join(timeout=2.0)
-            self._emit(EventType.RECORDING_STOPPED)
-            return True
-        return False
+        if len(recording.shape) == 1:
+            recording = recording.reshape(-1, 1)
+        
+        sf.write(str(path), recording, sample_rate)
+        return path
+    
+    # -------------------------------------------------------------------------
+    # Transcription
+    # -------------------------------------------------------------------------
     
     def transcribe(
         self,
-        audio_path: str,
+        audio_path: Path,
         provider: Any,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        model: str = "whisper-1",
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> Optional[str]:
         """
-        Transcribe audio to text.
+        Transcribe audio file to text.
         
         Parameters
         ----------
-        audio_path : str
-            Path to the audio file.
+        audio_path : Path
+            Path to audio file.
         provider : Any
-            The AI provider instance with transcription capability.
-        model : Optional[str]
-            The transcription model to use.
-        language : Optional[str]
-            Language code for transcription (e.g., 'en').
+            AI provider with transcribe_audio method.
+        model : str
+            Transcription model.
+        base_url : Optional[str]
+            Custom base URL for API.
+        api_key : Optional[str]
+            Custom API key.
             
         Returns
         -------
-        Dict[str, Any]
-            Dictionary containing:
-            - 'success': Whether transcription succeeded
-            - 'text': Transcribed text (if successful)
-            - 'error': Error message (if failed)
+        Optional[str]
+            Transcribed text or None on error.
         """
         try:
-            # Check if provider supports transcription
-            if not hasattr(provider, 'transcribe_audio'):
-                return {
-                    'success': False,
-                    'error': 'Provider does not support transcription',
-                }
+            with open(audio_path, "rb") as audio_file:
+                transcript = provider.transcribe_audio(
+                    audio_file,
+                    model=model,
+                    prompt="Please transcribe this audio file. Return only the transcribed text.",
+                    base_url=base_url,
+                    api_key=api_key,
+                )
             
-            # Transcribe audio
-            kwargs = {}
-            if model:
-                kwargs['model'] = model
-            if language:
-                kwargs['language'] = language
-            
-            text = provider.transcribe_audio(audio_path, **kwargs)
-            
-            self._emit(EventType.TRANSCRIPTION_COMPLETE, text=text, audio_path=audio_path)
-            
-            return {
-                'success': True,
-                'text': text,
-            }
+            self._emit(EventType.TRANSCRIPTION_COMPLETE, text=transcript[:100] if transcript else '')
+            return transcript
             
         except Exception as e:
+            print(f"Transcription error: {e}")
             self._emit(EventType.ERROR_OCCURRED, error=str(e), context='transcription')
-            return {
-                'success': False,
-                'error': str(e),
-            }
+            return None
     
-    def synthesize_speech(
+    # -------------------------------------------------------------------------
+    # TTS Synthesis
+    # -------------------------------------------------------------------------
+    
+    def synthesize_openai_tts(
+        self,
+        text: str,
+        provider: Any,
+        voice: str = "alloy",
+        model: str = "tts-1",
+        chat_id: Optional[str] = None,
+    ) -> Optional[Path]:
+        """
+        Synthesize speech using OpenAI TTS.
+        
+        Returns path to audio file or None on error.
+        """
+        try:
+            audio_data = provider.generate_speech(text, voice, model=model)
+            return self._save_tts_audio(audio_data, chat_id, "openai_tts")
+        except Exception as e:
+            print(f"OpenAI TTS error: {e}")
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='tts_openai')
+            return None
+    
+    def synthesize_gemini_tts(
+        self,
+        text: str,
+        provider: Any,
+        voice: str = "Kore",
+        chat_id: Optional[str] = None,
+    ) -> Optional[Path]:
+        """
+        Synthesize speech using Gemini TTS.
+        
+        Returns path to audio file or None on error.
+        """
+        try:
+            audio_data = provider.generate_speech(text, voice)
+            return self._save_tts_audio(audio_data, chat_id, "gemini_tts")
+        except Exception as e:
+            print(f"Gemini TTS error: {e}")
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='tts_gemini')
+            return None
+    
+    def synthesize_audio_preview(
+        self,
+        text: str,
+        provider: Any,
+        model_id: str,
+        prompt_template: str,
+        chat_id: Optional[str] = None,
+    ) -> Optional[Path]:
+        """
+        Synthesize speech using audio-preview models.
+        
+        Returns path to audio file or None on error.
+        """
+        try:
+            prompt = prompt_template.replace("{text}", text) if "{text}" in prompt_template else text
+            audio_data = provider.generate_audio_response(prompt, model=model_id)
+            return self._save_tts_audio(audio_data, chat_id, "audio_preview")
+        except Exception as e:
+            print(f"Audio preview TTS error: {e}")
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='tts_audio_preview')
+            return None
+    
+    def synthesize_custom_tts(
         self,
         text: str,
         provider: Any,
         chat_id: Optional[str] = None,
-        voice: Optional[str] = None,
-        model: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Path]:
         """
-        Synthesize speech from text.
+        Synthesize speech using custom TTS provider.
+        
+        Returns path to audio file or None on error.
+        """
+        try:
+            audio_data = provider.generate_speech(text, voice=provider.voice or "default")
+            return self._save_tts_audio(audio_data, chat_id, "custom_tts")
+        except Exception as e:
+            print(f"Custom TTS error: {e}")
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='tts_custom')
+            return None
+    
+    def _save_tts_audio(
+        self,
+        audio_data: bytes,
+        chat_id: Optional[str],
+        prefix: str,
+    ) -> Optional[Path]:
+        """Save TTS audio data to file."""
+        if not audio_data:
+            return None
+        
+        # Determine directory
+        if chat_id:
+            audio_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'audio'
+        else:
+            audio_dir = Path(tempfile.gettempdir())
+        
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Detect format from header
+        if audio_data[:4] == b'RIFF':
+            ext = '.wav'
+        elif audio_data[:3] == b'ID3' or audio_data[:2] == b'\xff\xfb':
+            ext = '.mp3'
+        else:
+            ext = '.wav'
+        
+        audio_path = audio_dir / f"{prefix}_{timestamp}{ext}"
+        
+        with open(audio_path, 'wb') as f:
+            f.write(audio_data)
+        
+        self._emit(EventType.TTS_COMPLETE, audio_path=str(audio_path))
+        return audio_path
+    
+    # -------------------------------------------------------------------------
+    # Playback
+    # -------------------------------------------------------------------------
+    
+    def play_audio(
+        self,
+        audio_path: Path,
+        stop_event: Optional[threading.Event] = None,
+        callback: Optional[Callable[[], None]] = None,
+    ) -> bool:
+        """
+        Play audio file. Blocks until complete or stopped.
+        
+        Parameters
+        ----------
+        audio_path : Path
+            Path to audio file.
+        stop_event : Optional[threading.Event]
+            Event to signal playback should stop.
+        callback : Optional[Callable]
+            Called when playback completes.
+            
+        Returns
+        -------
+        bool
+            True if played successfully.
+        """
+        try:
+            self._emit(EventType.PLAYBACK_STARTED, audio_path=str(audio_path))
+            
+            data, sample_rate = sf.read(str(audio_path))
+            
+            # Track current stop event for external stop
+            self._current_playback_stop = stop_event
+            
+            # Play with ability to stop
+            sd.play(data, sample_rate)
+            
+            while sd.get_stream().active:
+                if stop_event and stop_event.is_set():
+                    sd.stop()
+                    break
+                sd.sleep(100)
+            
+            sd.wait()
+            
+            self._current_playback_stop = None
+            self._emit(EventType.PLAYBACK_STOPPED, audio_path=str(audio_path))
+            
+            if callback:
+                callback()
+            
+            return True
+            
+        except Exception as e:
+            print(f"Playback error: {e}")
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='playback')
+            return False
+    
+    def stop_playback(self) -> None:
+        """Stop current playback."""
+        try:
+            sd.stop()
+            if self._current_playback_stop:
+                self._current_playback_stop.set()
+        except Exception as e:
+            print(f"Error stopping playback: {e}")
+    
+    # -------------------------------------------------------------------------
+    # Convenience: Synthesize and Play
+    # -------------------------------------------------------------------------
+    
+    def synthesize_and_play(
+        self,
+        text: str,
+        provider_type: str,
+        provider: Any,
+        stop_event: Optional[threading.Event] = None,
+        chat_id: Optional[str] = None,
+        **kwargs,
+    ) -> bool:
+        """
+        Synthesize speech and play it.
         
         Parameters
         ----------
         text : str
-            The text to synthesize.
+            Text to synthesize.
+        provider_type : str
+            One of: 'openai', 'gemini', 'audio_preview', 'custom'
         provider : Any
-            The AI provider instance with TTS capability.
+            The AI provider instance.
+        stop_event : Optional[threading.Event]
+            Event to signal stop.
         chat_id : Optional[str]
-            Chat ID for organizing audio files.
-        voice : Optional[str]
-            Voice to use for synthesis.
-        model : Optional[str]
-            TTS model to use.
+            Chat ID for caching audio.
+        **kwargs
+            Additional arguments for synthesis (voice, model, etc.)
             
-        Returns
-        -------
-        Dict[str, Any]
-            Dictionary containing:
-            - 'success': Whether synthesis succeeded
-            - 'audio_path': Path to synthesized audio (if successful)
-            - 'error': Error message (if failed)
-        """
-        try:
-            # Get TTS settings
-            if voice is None:
-                voice = self._settings_repo.get('TTS_VOICE', 'alloy')
-            if model is None:
-                model = self._settings_repo.get('TTS_MODEL', 'tts-1')
-            
-            # Determine save location
-            if chat_id:
-                audio_dir = self._get_chat_audio_dir(chat_id)
-            else:
-                audio_dir = Path(HISTORY_DIR) / 'temp_audio'
-                audio_dir.mkdir(parents=True, exist_ok=True)
-            
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            audio_path = audio_dir / f"tts_{timestamp}.mp3"
-            
-            # Check if provider supports TTS
-            if not hasattr(provider, 'generate_speech'):
-                return {
-                    'success': False,
-                    'error': 'Provider does not support text-to-speech',
-                }
-            
-            # Generate speech
-            audio_data = provider.generate_speech(
-                text=text,
-                voice=voice,
-                model=model,
-            )
-            
-            # Save audio data
-            if isinstance(audio_data, bytes):
-                with open(audio_path, 'wb') as f:
-                    f.write(audio_data)
-            elif isinstance(audio_data, str):
-                # Provider returned a file path
-                audio_path = Path(audio_data)
-            else:
-                return {
-                    'success': False,
-                    'error': f'Unexpected audio data type: {type(audio_data)}',
-                }
-            
-            self._emit(EventType.TTS_COMPLETE, audio_path=str(audio_path), text=text[:100])
-            
-            return {
-                'success': True,
-                'audio_path': str(audio_path),
-            }
-            
-        except Exception as e:
-            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='tts')
-            return {
-                'success': False,
-                'error': str(e),
-            }
-    
-    def play_audio(
-        self,
-        audio_path: str,
-        callback: Optional[Callable[[], None]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Play an audio file.
-        
-        Parameters
-        ----------
-        audio_path : str
-            Path to the audio file.
-        callback : Optional[Callable[[], None]]
-            Callback function called when playback completes.
-            
-        Returns
-        -------
-        Dict[str, Any]
-            Dictionary containing:
-            - 'success': Whether playback started successfully
-            - 'error': Error message (if failed)
-        """
-        try:
-            def playback_thread():
-                """Thread function for audio playback."""
-                try:
-                    # Try using pygame for playback
-                    try:
-                        import pygame
-                        pygame.mixer.init()
-                        pygame.mixer.music.load(audio_path)
-                        pygame.mixer.music.play()
-                        
-                        while pygame.mixer.music.get_busy() and not self._stop_playback:
-                            pygame.time.Clock().tick(10)
-                        
-                        pygame.mixer.music.stop()
-                        pygame.mixer.quit()
-                        
-                    except ImportError:
-                        # Fallback to system command
-                        import subprocess
-                        if os.name == 'posix':
-                            # Linux/Mac
-                            subprocess.run(['aplay' if audio_path.endswith('.wav') else 'mpg123', audio_path])
-                        else:
-                            # Windows
-                            os.startfile(audio_path)
-                    
-                    self._emit(EventType.PLAYBACK_STOPPED, audio_path=audio_path)
-                    
-                    # Call callback if provided
-                    if callback:
-                        callback()
-                        
-                except Exception as e:
-                    print(f"Error during playback: {e}")
-            
-            # Start playback thread
-            self._stop_playback = False
-            self._playback_thread = threading.Thread(target=playback_thread, daemon=True)
-            self._playback_thread.start()
-            
-            self._emit(EventType.PLAYBACK_STARTED, audio_path=audio_path)
-            
-            return {
-                'success': True,
-            }
-            
-        except Exception as e:
-            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='playback')
-            return {
-                'success': False,
-                'error': str(e),
-            }
-    
-    def stop_playback(self) -> bool:
-        """
-        Stop the current audio playback.
-        
         Returns
         -------
         bool
-            True if playback was stopped, False if no playback in progress.
+            True if successful.
         """
-        if self._playback_thread and self._playback_thread.is_alive():
-            self._stop_playback = True
-            self._playback_thread.join(timeout=2.0)
-            return True
-        return False
-    
-    def list_chat_audio(self, chat_id: str) -> list:
-        """
-        List all audio files for a chat.
+        # Check for stop before starting
+        if stop_event and stop_event.is_set():
+            return False
         
-        Parameters
-        ----------
-        chat_id : str
-            The chat identifier.
-            
-        Returns
-        -------
-        list
-            List of audio file paths.
-        """
-        audio_dir = self._get_chat_audio_dir(chat_id)
+        # Synthesize based on provider type
+        audio_path = None
         
-        if not audio_dir.exists():
-            return []
+        if provider_type == 'openai':
+            audio_path = self.synthesize_openai_tts(
+                text, provider,
+                voice=kwargs.get('voice', 'alloy'),
+                model=kwargs.get('model', 'tts-1'),
+                chat_id=chat_id,
+            )
+        elif provider_type == 'gemini':
+            audio_path = self.synthesize_gemini_tts(
+                text, provider,
+                voice=kwargs.get('voice', 'Kore'),
+                chat_id=chat_id,
+            )
+        elif provider_type == 'audio_preview':
+            audio_path = self.synthesize_audio_preview(
+                text, provider,
+                model_id=kwargs.get('model_id', 'gpt-4o-audio-preview'),
+                prompt_template=kwargs.get('prompt_template', '{text}'),
+                chat_id=chat_id,
+            )
+        elif provider_type == 'custom':
+            audio_path = self.synthesize_custom_tts(
+                text, provider,
+                chat_id=chat_id,
+            )
         
-        audio_files = []
-        for file in audio_dir.iterdir():
-            if file.is_file() and file.suffix.lower() in ['.wav', '.mp3', '.ogg', '.flac', '.m4a']:
-                audio_files.append(str(file))
+        if not audio_path:
+            return False
         
-        # Sort by modification time, newest first
-        audio_files.sort(key=lambda p: Path(p).stat().st_mtime, reverse=True)
-        return audio_files
+        # Check for stop before playing
+        if stop_event and stop_event.is_set():
+            return False
+        
+        return self.play_audio(audio_path, stop_event)

@@ -51,7 +51,6 @@ from markup_utils import (
 from gi.repository import Gdk
 from datetime import datetime
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG
-from audio import record_audio
 from tools import (
     ToolManager,
     is_chat_completion_model,
@@ -2933,22 +2932,16 @@ class OpenAIGTKClient(Gtk.Window):
                 
                 def record_thread():
                     try:
-                        # Create a temporary file
-                        temp_dir = Path(tempfile.gettempdir())
-                        temp_file = temp_dir / "voice_input.wav"
+                        # Record audio using AudioService
+                        audio_service = self.controller.audio_service
+                        recording, sample_rate = audio_service.record_audio(
+                            self.microphone, self.recording_event
+                        )
                         
-                        # Record audio using the function from audio.py
-                        recording, sample_rate = record_audio(self.microphone, self.recording_event)
-                        
-                        # Only proceed if recording was successful
                         if recording is not None and sample_rate is not None:
                             try:
-                                # Ensure recording is the right shape
-                                if len(recording.shape) == 1:
-                                    recording = recording.reshape(-1, 1)
-                                
-                                # Save to temporary file
-                                sf.write(temp_file, recording, sample_rate)
+                                # Save recording
+                                temp_file = audio_service.save_recording(recording, sample_rate)
                                 
                                 # Transcribe with selected model (fallback to whisper-1)
                                 transcript = None
@@ -2957,29 +2950,21 @@ class OpenAIGTKClient(Gtk.Window):
                                     models_to_try.append("whisper-1")
 
                                 for model in models_to_try:
-                                    try:
-                                        with open(temp_file, "rb") as audio_file:
-                                            transcript = openai_provider.transcribe_audio(
-                                                audio_file,
-                                                model=model,
-                                                prompt="Please transcribe this audio file. Return only the transcribed text.",
-                                                base_url=stt_base_url,
-                                                api_key=stt_api_key,
-                                            )
+                                    transcript = audio_service.transcribe(
+                                        temp_file, openai_provider,
+                                        model=model,
+                                        base_url=stt_base_url,
+                                        api_key=stt_api_key,
+                                    )
+                                    if transcript:
                                         print(f"[Audio STT] Transcribed with model: {model}")
                                         break
-                                    except Exception as e:
-                                        print(f"[Audio STT] Model {model} failed: {e}")
-                                        transcript = None
-                                        continue
+                                    print(f"[Audio STT] Model {model} failed")
 
                                 if transcript:
                                     GLib.idle_add(self.entry_question.set_text, transcript)
                                 else:
                                     print("[Audio STT] No transcript produced; keeping input unchanged.")
-                            
-                            except Exception as e:
-                                print(f"[Audio STT] Error saving audio: {e}")
                             
                             finally:
                                 # Clean up temp file
@@ -3055,16 +3040,15 @@ class OpenAIGTKClient(Gtk.Window):
 
                 def record_thread():
                     try:
-                        temp_dir = Path(tempfile.gettempdir())
-                        temp_file = temp_dir / "voice_input.wav"
-
-                        recording, sample_rate = record_audio(self.microphone, self.recording_event)
+                        # Record audio using AudioService
+                        audio_service = self.controller.audio_service
+                        recording, sample_rate = audio_service.record_audio(
+                            self.microphone, self.recording_event
+                        )
 
                         if recording is not None and sample_rate is not None:
                             try:
-                                if len(recording.shape) == 1:
-                                    recording = recording.reshape(-1, 1)
-                                sf.write(temp_file, recording, sample_rate)
+                                temp_file = audio_service.save_recording(recording, sample_rate)
 
                                 transcript = None
                                 models_to_try = [stt_model]
@@ -3072,21 +3056,16 @@ class OpenAIGTKClient(Gtk.Window):
                                     models_to_try.append("whisper-1")
 
                                 for model in models_to_try:
-                                    try:
-                                        with open(temp_file, "rb") as audio_file:
-                                            transcript = openai_provider.transcribe_audio(
-                                                audio_file,
-                                                model=model,
-                                                prompt="Please transcribe this audio file. Return only the transcribed text.",
-                                                base_url=stt_base_url,
-                                                api_key=stt_api_key,
-                                            )
+                                    transcript = audio_service.transcribe(
+                                        temp_file, openai_provider,
+                                        model=model,
+                                        base_url=stt_base_url,
+                                        api_key=stt_api_key,
+                                    )
+                                    if transcript:
                                         print(f"[Audio STT] Transcribed with model: {model}")
                                         break
-                                    except Exception as e:
-                                        print(f"[Audio STT] Model {model} failed: {e}")
-                                        transcript = None
-                                        continue
+                                    print(f"[Audio STT] Model {model} failed")
 
                                 if transcript:
                                     def insert_transcript():
@@ -3095,8 +3074,6 @@ class OpenAIGTKClient(Gtk.Window):
                                     GLib.idle_add(insert_transcript)
                                 else:
                                     print("[Audio STT] No transcript produced.")
-                            except Exception as e:
-                                print(f"[Audio STT] Error saving audio: {e}")
                             finally:
                                 temp_file.unlink(missing_ok=True)
                         else:

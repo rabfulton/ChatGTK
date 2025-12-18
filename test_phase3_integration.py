@@ -94,11 +94,7 @@ def test_services_have_event_bus():
     assert image_service._event_bus is bus
     print("✓ ImageGenerationService accepts event bus")
     
-    audio_service = AudioService(
-        chat_history_repo=history_repo,
-        settings_repo=settings_repo,
-        event_bus=bus,
-    )
+    audio_service = AudioService(event_bus=bus)
     assert audio_service._event_bus is bus
     print("✓ AudioService accepts event bus")
     

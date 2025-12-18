@@ -110,11 +110,7 @@ class ChatController:
             chat_history_repo=self._chat_history_repo,
             event_bus=self._event_bus,
         )
-        self._audio_service = AudioService(
-            chat_history_repo=self._chat_history_repo,
-            settings_repo=self._settings_repo,
-            event_bus=self._event_bus,
-        )
+        self._audio_service = AudioService(event_bus=self._event_bus)
         
         # Load settings and apply as attributes for backward compatibility
         self._settings: Dict[str, Any] = self._settings_manager.get_all()
