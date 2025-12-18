@@ -2030,11 +2030,11 @@ class OpenAIGTKClient(Gtk.Window):
             if self.conversation_history and self.conversation_history[0].get("role") == "system":
                 self.conversation_history[0]["content"] = self.system_message
 
-            # Keep the ToolManager in sync with any updated tool options.
-            self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
-            self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
-            self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
-            self.tool_manager.search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
+            # Keep tools in sync via service
+            self.controller.tool_service.enable_tool('image', bool(getattr(self, "image_tool_enabled", True)))
+            self.controller.tool_service.enable_tool('music', bool(getattr(self, "music_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
 
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()
@@ -2136,11 +2136,11 @@ class OpenAIGTKClient(Gtk.Window):
             # Enforce mutual exclusivity: if read_aloud_tool is enabled, disable auto-read
             if getattr(self, "read_aloud_tool_enabled", False) and getattr(self, "read_aloud_enabled", False):
                 self.read_aloud_enabled = False
-            # Update the ToolManager with the new settings.
-            self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
-            self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
-            self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
-            self.tool_manager.search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
+            # Update tools via service
+            self.controller.tool_service.enable_tool('image', bool(getattr(self, "image_tool_enabled", True)))
+            self.controller.tool_service.enable_tool('music', bool(getattr(self, "music_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
             # Persist all settings, including the updated tool flags.
             save_object_settings(self)
         dialog.destroy()
