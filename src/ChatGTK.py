@@ -160,15 +160,21 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Track sidebar width in memory
         self.current_sidebar_width = int(getattr(self, 'sidebar_width', 200))
-        self.paned.set_position(self.current_sidebar_width)
+        self._sidebar_initialized = False
 
         # Update memory value without saving to file
         def on_paned_position_changed(paned, param):
-            if not self.is_maximized():
+            if self._sidebar_initialized and not self.is_maximized():
                 self.current_sidebar_width = paned.get_position()
                 self.sidebar_width = self.current_sidebar_width
 
         self.paned.connect('notify::position', on_paned_position_changed)
+        
+        # Set paned position after window is realized
+        def set_initial_position(widget):
+            self.paned.set_position(self.current_sidebar_width)
+            self._sidebar_initialized = True
+        self.connect('realize', set_initial_position)
 
         # Toolbar component
         from ui import Toolbar
@@ -445,7 +451,9 @@ class OpenAIGTKClient(Gtk.Window):
         to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
         to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
         for key, value in convert_settings_for_save(to_save).items():
-            self.controller.settings_manager.set(key, value)
+            self.controller.settings_manager.set(key, value, emit_event=False)
+        # Persist to disk
+        self.controller.settings_manager.save()
         
         # Hide tray icon on exit (only for StatusIcon backend)
         if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
@@ -614,10 +622,6 @@ class OpenAIGTKClient(Gtk.Window):
         if hasattr(self, '_model_selector'):
             self._display_to_model_id = self._model_selector._display_to_model_id
             self._model_id_to_display = self._model_selector._model_id_to_display
-
-    def on_model_changed(self, combo):
-        """Handle model selection changes - legacy, now handled by component."""
-        pass  # Component handles this now
 
     def _init_message_renderer(self):
         """Initialize the MessageRenderer with current settings and callbacks."""
@@ -793,11 +797,8 @@ class OpenAIGTKClient(Gtk.Window):
         """Subscribe to events from controller/services for reactive UI updates."""
         bus = self.controller.event_bus
         
-        # Chat events
+        # Chat events - CHAT_LOADED/SAVED/DELETED handled by HistorySidebar
         bus.subscribe(EventType.CHAT_CREATED, self._on_chat_created_event)
-        bus.subscribe(EventType.CHAT_LOADED, self._on_chat_loaded_event)
-        bus.subscribe(EventType.CHAT_SAVED, self._on_chat_saved_event)
-        bus.subscribe(EventType.CHAT_DELETED, self._on_chat_deleted_event)
         
         # Settings events
         bus.subscribe(EventType.SETTINGS_CHANGED, self._on_settings_changed_event)
@@ -805,9 +806,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Error events
         bus.subscribe(EventType.ERROR_OCCURRED, self._on_error_event)
         
-        # Thinking/processing state events
-        bus.subscribe(EventType.THINKING_STARTED, self._on_thinking_started_event)
-        bus.subscribe(EventType.THINKING_STOPPED, self._on_thinking_stopped_event)
+        # Note: THINKING_STARTED/STOPPED handled by ChatView component
         
         # Message events
         bus.subscribe(EventType.MESSAGE_SENT, self._on_message_sent_event)
@@ -832,18 +831,6 @@ class OpenAIGTKClient(Gtk.Window):
         bus.subscribe(EventType.TOOL_EXECUTED, self._on_tool_executed_event)
         bus.subscribe(EventType.TOOL_RESULT, self._on_tool_result_event)
 
-    def _on_chat_loaded_event(self, event):
-        """Handle CHAT_LOADED event - refresh UI."""
-        GLib.idle_add(self.refresh_history_list)
-
-    def _on_chat_saved_event(self, event):
-        """Handle CHAT_SAVED event - refresh history list."""
-        GLib.idle_add(self.refresh_history_list)
-
-    def _on_chat_deleted_event(self, event):
-        """Handle CHAT_DELETED event - refresh history list."""
-        GLib.idle_add(self.refresh_history_list)
-
     def _on_settings_changed_event(self, event):
         """Handle SETTINGS_CHANGED event - update UI if needed."""
         key = event.data.get('key', '')
@@ -867,14 +854,6 @@ class OpenAIGTKClient(Gtk.Window):
         context = event.data.get('context', '')
         message = f"{context}: {error}" if context else error
         GLib.idle_add(self.display_error, message)
-
-    def _on_thinking_started_event(self, event):
-        """Handle THINKING_STARTED event - delegated to ChatView component."""
-        pass  # ChatView handles this via event subscription
-
-    def _on_thinking_stopped_event(self, event):
-        """Handle THINKING_STOPPED event - delegated to ChatView component."""
-        pass  # ChatView handles this via event subscription
 
     def _on_thinking_cancelled(self):
         """Handle cancel button click from ChatView."""
@@ -1278,6 +1257,52 @@ class OpenAIGTKClient(Gtk.Window):
         Delegates to ToolService.
         """
         return self.controller.tool_service.supports_search_tools(model_name, self.model_provider_map, self.custom_models)
+
+    def _build_tool_handlers(self, model: str, last_msg: dict) -> dict:
+        """Build tool handler kwargs for a model."""
+        handlers = {}
+        
+        if self._supports_image_tools(model):
+            handlers["image_tool_handler"] = lambda prompt_arg, image_path=None: \
+                self.generate_image_via_preferred_model(prompt_arg, last_msg, image_path)
+        
+        if self._supports_music_tools(model):
+            handlers["music_tool_handler"] = lambda action, keyword=None, volume=None: \
+                self.control_music_via_beets(action, keyword=keyword, volume=volume)
+        
+        if self._supports_read_aloud_tools(model):
+            handlers["read_aloud_tool_handler"] = lambda text: self._handle_read_aloud_tool(text)
+        
+        if self._supports_search_tools(model):
+            handlers["search_tool_handler"] = lambda keyword, source=None: \
+                self._handle_search_memory_tool(keyword, source)
+        
+        return handlers
+
+    def _get_or_init_provider(self, model: str, provider_name: str):
+        """Get or initialize a provider for the given model."""
+        if provider_name == "custom":
+            provider = self.custom_providers.get(model)
+            if not provider:
+                config = (self.custom_models or {}).get(model, {})
+                if not config:
+                    raise ValueError(f"Custom model '{model}' is not configured")
+                provider = get_ai_provider("custom")
+                from utils import resolve_api_key
+                provider.initialize(
+                    api_key=resolve_api_key(config.get("api_key", "")).strip(),
+                    endpoint=config.get("endpoint"),
+                    model_name=config.get("model_name") or model,
+                    api_type=config.get("api_type") or "chat.completions",
+                    voice=config.get("voice"),
+                )
+                self.custom_providers[model] = provider
+            return provider
+        else:
+            provider = self.controller.get_provider(provider_name)
+            if not provider:
+                raise ValueError(f"{provider_name.title()} provider is not initialized")
+            return provider
 
     def _normalize_image_tags(self, text):
         """
@@ -2430,407 +2455,134 @@ class OpenAIGTKClient(Gtk.Window):
         ).start()
 
     def call_ai_api(self, model):
+        """Call AI API with the given model. Delegates to provider via unified flow."""
         try:
-            # Check if cancelled at start
-            if hasattr(self, 'request_cancelled') and self.request_cancelled:
+            # Check if cancelled
+            if getattr(self, 'request_cancelled', False):
                 return
             
-            # Ensure we have a valid model
+            # Ensure valid model
             if not model:
-                model = "gpt-3.5-turbo"  # Default fallback
+                model = "gpt-3.5-turbo"
                 print(f"No model selected, falling back to {model}")
-            provider_name = self.get_provider_name_for_model(model)
-            provider = None
             
-            # Check if cancelled after initial setup
-            if hasattr(self, 'request_cancelled') and self.request_cancelled:
+            provider_name = self.get_provider_name_for_model(model)
+            
+            # Check if cancelled after setup
+            if getattr(self, 'request_cancelled', False):
                 return
 
-            if provider_name == "custom":
-                # Custom providers are keyed per model ID
-                provider = self.custom_providers.get(model)
-                if not provider:
-                    config = (self.custom_models or {}).get(model, {})
-                    if not config:
-                        raise ValueError(f"Custom model '{model}' is not configured")
-                    provider = get_ai_provider("custom")
-                    from utils import resolve_api_key
-                    provider.initialize(
-                        api_key=resolve_api_key(config.get("api_key", "")).strip(),
-                        endpoint=config.get("endpoint"),
-                        model_name=config.get("model_name") or model,
-                        api_type=config.get("api_type") or "chat.completions",
-                        voice=config.get("voice"),
-                    )
-                    self.custom_providers[model] = provider
-            else:
-                # Get provider via controller
-                provider = self.controller.get_provider(provider_name)
-                if not provider:
-                    raise ValueError(f"{provider_name.title()} provider is not initialized")
+            # Get or initialize provider
+            provider = self._get_or_init_provider(model, provider_name)
             
-            model_temperature = self._get_temperature_for_model(model)
-            
-            # This will hold any provider-specific metadata for the assistant message
-            assistant_provider_meta = None
-
             last_msg = self.conversation_history[-1]
             prompt = last_msg.get("content", "")
-            has_attached_images = "images" in last_msg and last_msg["images"]
-            has_attached_files = "files" in last_msg and last_msg["files"]
+            has_attached_images = bool(last_msg.get("images"))
+            has_attached_files = bool(last_msg.get("files"))
 
-            # Check if files are attached to a non-OpenAI provider
+            # Warn about file attachments on non-OpenAI providers
             if has_attached_files and provider_name != 'openai':
-                # Show a warning that document analysis requires OpenAI
-                warning_msg = (
-                    f"Document attachments are currently only supported with OpenAI models. "
-                    f"The attached document(s) will be ignored when using {provider_name.title()} models."
-                )
-                print(f"[ChatGTK] Warning: {warning_msg}")
-                # We continue with the request but without the files
+                print(f"[ChatGTK] Warning: Document attachments only supported with OpenAI models")
 
-            # Route image models through a shared helper so that both manual model
-            # selection and tool-based invocations use the same behavior.
+            # Route image models to image generation
             if self._is_image_model_for_provider(model, provider_name):
                 answer = self.generate_image_for_model(
-                    model=model,
-                    prompt=prompt,
-                    last_msg=last_msg,
+                    model=model, prompt=prompt, last_msg=last_msg,
                     chat_id=self.current_chat_id or "temp",
-                    provider_name=provider_name,
-                    has_attached_images=has_attached_images,
+                    provider_name=provider_name, has_attached_images=has_attached_images,
                 )
-            elif provider_name == 'openai':
-                # Check if this is a realtime model via card
+                assistant_provider_meta = None
+            else:
+                # Check for realtime models (OpenAI WebSocket)
                 card = get_card(model, self.custom_models)
-                is_realtime = card.api_family == "realtime" if card else False
-                if is_realtime:
-                    # Realtime models are handled elsewhere (WebSocket provider).
+                if card and card.api_family == "realtime":
                     return
                 
+                # Prepare messages
                 messages_to_send = self._messages_for_model(model)
-
-                # Provide handlers so OpenAI models can call tools (image/music/read_aloud)
-                # autonomously when they decide it is helpful.
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-                    print(f"[ChatGTK] Search tool handler created for model {model}")
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-                print(f"[ChatGTK] Tool handlers in kwargs: {[k for k in kwargs if 'handler' in k]}")
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'custom':
-                messages_to_send = self._messages_for_model(model)
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'gemini':
-                # Chat completion (possibly with image input or tool-based image generation)
-                messages_to_send = self._messages_for_model(model)
+                if provider_name == 'perplexity':
+                    messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
+                
+                # Build common kwargs
                 response_meta = {}
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
-                    "temperature": model_temperature,
+                    "temperature": self._get_temperature_for_model(model),
                     "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
                     "chat_id": self.current_chat_id,
-                    "response_meta": response_meta,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
                 }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
+                
+                # Add tool handlers for providers that support them
+                if provider_name != 'perplexity':
+                    kwargs["web_search_enabled"] = bool(getattr(self, "web_search_enabled", False))
+                    kwargs.update(self._build_tool_handlers(model, last_msg))
+                
+                # Add response_meta for providers that use it
+                if provider_name in ('gemini', 'perplexity', 'claude'):
+                    kwargs["response_meta"] = response_meta
+                
+                # Call provider
                 answer = provider.generate_chat_completion(**kwargs)
+                assistant_provider_meta = response_meta if response_meta else None
+                
+                # Append Perplexity sources if present
+                if provider_name == 'perplexity':
+                    answer = self._append_perplexity_sources(answer, response_meta)
 
-                assistant_provider_meta = response_meta or None
-            elif provider_name == 'grok':
-                # Standard chat completion for Grok, optionally with tools.
-                messages_to_send = self._messages_for_model(model)
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'claude':
-                # Standard chat completion for Claude, optionally with tools,
-                # using the OpenAI SDK compatibility layer:
-                # `https://platform.claude.com/docs/en/api/openai-sdk`
-                messages_to_send = self._messages_for_model(model)
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "response_meta": assistant_provider_meta,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'perplexity':
-                # Chat completion for Perplexity Sonar models.
-                # Perplexity models have built-in web search and don't support
-                # function tools in the same way as other providers.
-                # See https://docs.perplexity.ai/guides/chat-completions-guide
-                messages_to_send = self._messages_for_model(model)
-
-                # This will collect provider-specific metadata such as web
-                # search results so we can persist them with the message.
-                response_meta = {}
-
-                # Perplexity requires strict alternation between user and assistant
-                # messages after the system message. Clean the messages to ensure
-                # proper format.
-                messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "response_meta": response_meta,
-                }
-
-                answer = provider.generate_chat_completion(**kwargs)
-                assistant_provider_meta = response_meta or None
-
-                # If Perplexity returned web search results, append a human-readable
-                # "Sources" section to the answer so users can see and click them.
-                perplexity_meta = (response_meta or {}).get("perplexity", {})
-                search_results = perplexity_meta.get("search_results") if isinstance(perplexity_meta, dict) else None
-                if search_results:
-                    lines = []
-                    for idx, res in enumerate(search_results, start=1):
-                        title = res.get("title") or "Source"
-                        url = res.get("url") or ""
-                        date = res.get("date") or ""
-
-                        line = f"{idx}. {title}"
-                        if date:
-                            line += f" ({date})"
-                        if url:
-                            line += f" — {url}"
-                        lines.append(line)
-
-                    if lines:
-                        suffix = "Sources:\n" + "\n".join(lines)
-                        # Keep a blank line between the model answer and the sources block.
-                        answer = (answer.rstrip() + "\n\n" + suffix).rstrip()
-            else:
-                raise ValueError(f"Unsupported provider: {provider_name}")
-
-            # Check if cancelled before processing result
-            if hasattr(self, 'request_cancelled') and self.request_cancelled:
+            # Check if cancelled before processing
+            if getattr(self, 'request_cancelled', False):
                 return
             
-            # Normalize any raw <img ...> tags so the UI can render them
-            # consistently without showing stray HTML.
+            # Process and display response
             answer = self._normalize_image_tags(answer)
-
             assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
             message_index = len(self.conversation_history)
             self.conversation_history.append(assistant_message)
 
-            # Update UI in main thread
             formatted_answer = format_response(answer)
             GLib.idle_add(self.emit_thinking_stopped)
             GLib.idle_add(lambda idx=message_index, msg=formatted_answer: self.append_message('ai', msg, idx))
             GLib.idle_add(self.save_current_chat)
             
-            # Read aloud the response if enabled (runs in background thread)
-            # Skip for audio models since they already play audio directly
+            # Read aloud if enabled (skip audio models)
             card = get_card(model, self.custom_models)
-            is_audio_model = card.capabilities.audio_out if card else False
-            if not is_audio_model:
+            if not (card and card.capabilities.audio_out):
                 self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
             
         except Exception as error:
-            # Only show error if not cancelled
-            if not (hasattr(self, 'request_cancelled') and self.request_cancelled):
+            if not getattr(self, 'request_cancelled', False):
                 print(f"\nAPI Call Error: {error}")
                 GLib.idle_add(self.emit_thinking_stopped)
                 error_message = f"** Error: {str(error)} **"
                 message_index = len(self.conversation_history)
                 self.conversation_history.append(create_assistant_message(error_message))
                 GLib.idle_add(lambda idx=message_index, msg=error_message: self.append_message('ai', msg, idx))
-            
         finally:
             GLib.idle_add(self.emit_thinking_stopped)
+
+    def _append_perplexity_sources(self, answer: str, response_meta: dict) -> str:
+        """Append Perplexity search results as sources section."""
+        perplexity_meta = (response_meta or {}).get("perplexity", {})
+        search_results = perplexity_meta.get("search_results") if isinstance(perplexity_meta, dict) else None
+        if not search_results:
+            return answer
+        
+        lines = []
+        for idx, res in enumerate(search_results, start=1):
+            title = res.get("title") or "Source"
+            url = res.get("url") or ""
+            date = res.get("date") or ""
+            line = f"{idx}. {title}"
+            if date:
+                line += f" ({date})"
+            if url:
+                line += f" — {url}"
+            lines.append(line)
+        
+        if lines:
+            return (answer.rstrip() + "\n\nSources:\n" + "\n".join(lines)).rstrip()
+        return answer
 
     def audio_transcription(self, widget):
         """Handle audio transcription."""
@@ -3224,27 +2976,22 @@ class OpenAIGTKClient(Gtk.Window):
             self.refresh_history_list()
 
 
-    def on_sidebar_toggle(self, button):
+    def on_sidebar_toggle(self, button=None):
         """Toggle sidebar visibility."""
         if self.sidebar_visible:
             self.sidebar.hide()
-            arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.RIGHT, shadow_type=Gtk.ShadowType.NONE)
         else:
             self.sidebar.show()
             # Restore the paned position to the saved sidebar width
             self.paned.set_position(self.current_sidebar_width)
             # Reload the current conversation to force reflow with new width
-            # Use idle_add to ensure this happens after the paned has allocated space
             GLib.idle_add(self._reload_current_conversation)
-            arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.LEFT, shadow_type=Gtk.ShadowType.NONE)
-        
-        # Update button arrow
-        old_arrow = button.get_child()
-        button.remove(old_arrow)
-        button.add(arrow)
-        button.show_all()
         
         self.sidebar_visible = not self.sidebar_visible
+        
+        # Update toolbar button if using component
+        if hasattr(self, '_toolbar'):
+            self._toolbar.set_sidebar_visible(self.sidebar_visible)
     
     def _reload_current_conversation(self):
         """Reload the current conversation to force widgets to recalculate with new width."""

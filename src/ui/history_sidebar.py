@@ -85,7 +85,7 @@ class HistorySidebar(UIComponent):
         
         # Build UI
         self.widget = self._build_ui()
-        self.widget.set_size_request(width, -1)
+        # Don't set minimum width - let the paned control sizing
         
         # Subscribe to events
         self.subscribe(EventType.CHAT_SAVED, self._on_chat_event)
@@ -259,6 +259,12 @@ class HistorySidebar(UIComponent):
     
     def select_chat(self, chat_id: str) -> None:
         """Select a chat by ID."""
+        # Skip if already selected
+        if self._current_chat_id == chat_id:
+            selected = self.history_list.get_selected_row()
+            if selected and getattr(selected, 'chat_id', None) == chat_id:
+                return
+        
         self._current_chat_id = chat_id
         for row in self.history_list.get_children():
             if getattr(row, 'chat_id', None) == chat_id:
