@@ -16,6 +16,12 @@ import os
 import json
 from typing import Any, Dict, List, Optional, Set, Callable
 
+from repositories import (
+    SettingsRepository,
+    APIKeysRepository,
+    ChatHistoryRepository,
+    ModelCacheRepository,
+)
 from utils import (
     load_settings,
     save_settings,
@@ -51,10 +57,32 @@ class ChatController:
     making it suitable for use with GTK, Qt, or other frameworks.
     """
 
-    def __init__(self):
-        """Initialize the controller with settings and state."""
-        # Load settings from disk
-        self._settings: Dict[str, Any] = load_settings()
+    def __init__(self, 
+                 settings_repo: Optional[SettingsRepository] = None,
+                 api_keys_repo: Optional[APIKeysRepository] = None,
+                 chat_history_repo: Optional[ChatHistoryRepository] = None,
+                 model_cache_repo: Optional[ModelCacheRepository] = None):
+        """Initialize the controller with settings and state.
+        
+        Parameters
+        ----------
+        settings_repo : Optional[SettingsRepository]
+            Settings repository instance. If None, creates a new one.
+        api_keys_repo : Optional[APIKeysRepository]
+            API keys repository instance. If None, creates a new one.
+        chat_history_repo : Optional[ChatHistoryRepository]
+            Chat history repository instance. If None, creates a new one.
+        model_cache_repo : Optional[ModelCacheRepository]
+            Model cache repository instance. If None, creates a new one.
+        """
+        # Initialize repositories
+        self._settings_repo = settings_repo or SettingsRepository()
+        self._api_keys_repo = api_keys_repo or APIKeysRepository()
+        self._chat_history_repo = chat_history_repo or ChatHistoryRepository()
+        self._model_cache_repo = model_cache_repo or ModelCacheRepository()
+        
+        # Load settings from repository
+        self._settings: Dict[str, Any] = self._settings_repo.get_all()
         
         # Apply settings as attributes for convenience
         for key, value in self._settings.items():
@@ -72,7 +100,7 @@ class ChatController:
         # Provider management
         self.providers: Dict[str, Any] = {}
         self.model_provider_map: Dict[str, str] = {}
-        self.api_keys: Dict[str, str] = load_api_keys()
+        self.api_keys: Dict[str, str] = self._api_keys_repo.get_all_raw()
         self.custom_models: Dict[str, Dict[str, Any]] = load_custom_models()
         self.custom_providers: Dict[str, Any] = {}
         
@@ -253,9 +281,10 @@ class ChatController:
         Returns True if successful, False otherwise.
         """
         try:
-            history = load_chat_history(chat_id)
-            if history:
-                self.conversation_history = history
+            # Use repository to load chat
+            conv_history = self._chat_history_repo.get(chat_id)
+            if conv_history:
+                self.conversation_history = conv_history.to_list()
                 self.current_chat_id = chat_id
                 return True
         except Exception as e:
@@ -269,6 +298,8 @@ class ChatController:
         If this is a new chat, generates a name based on the first user message.
         Returns the chat_id (filename) or None on error.
         """
+        from conversation import ConversationHistory
+        
         if not self.conversation_history:
             return None
         
@@ -288,8 +319,13 @@ class ChatController:
             self.current_chat_id = chat_id
         
         try:
-            save_chat_history(chat_id, self.conversation_history, metadata)
-            return chat_id
+            if not self.current_chat_id:
+                self.current_chat_id = generate_chat_name(self.conversation_history)
+            
+            # Convert to ConversationHistory and save via repository
+            conv_history = ConversationHistory.from_list(self.conversation_history)
+            self._chat_history_repo.save(self.current_chat_id, conv_history)
+            return self.current_chat_id
         except Exception as e:
             print(f"Error saving chat: {e}")
             return None
