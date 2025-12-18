@@ -1406,35 +1406,35 @@ class OpenAIGTKClient(Gtk.Window):
         Return True if the given model for the specified provider should be
         treated as an image-generation model.
         """
-        return self.tool_manager.is_image_model_for_provider(model_name, provider_name, self.custom_models)
+        return self.controller.tool_service.is_image_model(model_name, provider_name, self.custom_models)
 
     def _supports_image_tools(self, model_name):
         """
         Return True if the given model should be offered the image-generation
-        tool. Delegates to ToolManager.
+        tool. Delegates to ToolService.
         """
-        return self.tool_manager.supports_image_tools(model_name, self.model_provider_map, self.custom_models)
+        return self.controller.tool_service.supports_image_tools(model_name, self.model_provider_map, self.custom_models)
 
     def _supports_music_tools(self, model_name):
         """
         Return True if the given model should be offered the music-control tool.
-        Delegates to ToolManager.
+        Delegates to ToolService.
         """
-        return self.tool_manager.supports_music_tools(model_name, self.model_provider_map, self.custom_models)
+        return self.controller.tool_service.supports_music_tools(model_name, self.model_provider_map, self.custom_models)
 
     def _supports_read_aloud_tools(self, model_name):
         """
         Return True if the given model should be offered the read-aloud tool.
-        Delegates to ToolManager.
+        Delegates to ToolService.
         """
-        return self.tool_manager.supports_read_aloud_tools(model_name, self.model_provider_map, self.custom_models)
+        return self.controller.tool_service.supports_read_aloud_tools(model_name, self.model_provider_map, self.custom_models)
 
     def _supports_search_tools(self, model_name):
         """
         Return True if the given model should be offered the search/memory tool.
-        Delegates to ToolManager.
+        Delegates to ToolService.
         """
-        return self.tool_manager.supports_search_tools(model_name, self.model_provider_map, self.custom_models)
+        return self.controller.tool_service.supports_search_tools(model_name, self.model_provider_map, self.custom_models)
 
     def _normalize_image_tags(self, text):
         """

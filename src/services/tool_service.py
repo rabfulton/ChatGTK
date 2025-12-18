@@ -343,3 +343,27 @@ class ToolService:
         elif tool_name == 'search':
             return self._tool_manager.search_tool_enabled
         return False
+
+    # -------------------------------------------------------------------------
+    # Model capability checks (delegated to ToolManager)
+    # -------------------------------------------------------------------------
+
+    def is_image_model(self, model_name: str, provider_name: str, custom_models: Optional[Dict] = None) -> bool:
+        """Check if a model is an image generation model."""
+        return self._tool_manager.is_image_model_for_provider(model_name, provider_name, custom_models)
+
+    def supports_image_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
+        """Check if a model supports image tools."""
+        return self._tool_manager.supports_image_tools(model_name, model_provider_map, custom_models)
+
+    def supports_music_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
+        """Check if a model supports music tools."""
+        return self._tool_manager.supports_music_tools(model_name, model_provider_map, custom_models)
+
+    def supports_read_aloud_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
+        """Check if a model supports read aloud tools."""
+        return self._tool_manager.supports_read_aloud_tools(model_name, model_provider_map, custom_models)
+
+    def supports_search_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
+        """Check if a model supports search tools."""
+        return self._tool_manager.supports_search_tools(model_name, model_provider_map, custom_models)
