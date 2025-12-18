@@ -55,8 +55,25 @@ def test_history_sidebar_component():
     
     bus = EventBus()
     
+    # Create a mock controller
+    class MockController:
+        def __init__(self):
+            self.event_bus = bus
+            self.chat_service = self
+        
+        def list_chats(self):
+            return [
+                {'chat_id': 'chat1', 'title': 'Hello world', 'timestamp': '2024-01-01T12:00:00'},
+                {'chat_id': 'chat2', 'title': 'Test message', 'timestamp': '2024-01-02T12:00:00'},
+            ]
+        
+        def load_chat(self, chat_id):
+            return None
+    
+    mock_controller = MockController()
+    
     # Test creation
-    sidebar = HistorySidebar(event_bus=bus)
+    sidebar = HistorySidebar(event_bus=bus, controller=mock_controller)
     assert sidebar.widget is not None
     print("✓ HistorySidebar creates widget")
     
@@ -65,26 +82,138 @@ def test_history_sidebar_component():
     assert hasattr(sidebar, 'filter_entry')
     print("✓ HistorySidebar has required UI elements")
     
-    # Test refresh with mock data
-    mock_histories = [
-        {'filename': 'chat1.json', 'first_message': 'Hello world'},
-        {'filename': 'chat2.json', 'first_message': 'Test message'},
-    ]
-    sidebar.refresh(mock_histories)
-    
+    # Test refresh
+    sidebar.refresh()
     children = sidebar.history_list.get_children()
     assert len(children) == 2
     print("✓ refresh() populates history list")
     
     # Test filtering
     sidebar._filter_text = "hello"
-    sidebar.refresh(mock_histories)
+    sidebar.refresh()
     children = sidebar.history_list.get_children()
     assert len(children) == 1
     print("✓ Filtering works")
     
     # Cleanup
     sidebar.cleanup()
+    
+    return True
+
+
+def test_chat_view_component():
+    """Test ChatView component structure."""
+    print("\nTesting ChatView component...")
+    
+    from ui import ChatView
+    from events import EventBus
+    
+    bus = EventBus()
+    
+    # Test creation
+    chat_view = ChatView(event_bus=bus)
+    assert chat_view.widget is not None
+    print("✓ ChatView creates widget")
+    
+    # Test it has required elements
+    assert hasattr(chat_view, 'conversation_box')
+    assert hasattr(chat_view, 'message_widgets')
+    print("✓ ChatView has required UI elements")
+    
+    # Test clear
+    chat_view.clear()
+    assert len(chat_view.message_widgets) == 0
+    print("✓ clear() works")
+    
+    # Cleanup
+    chat_view.cleanup()
+    
+    return True
+
+
+def test_input_panel_component():
+    """Test InputPanel component structure."""
+    print("\nTesting InputPanel component...")
+    
+    from ui import InputPanel
+    from events import EventBus
+    
+    bus = EventBus()
+    
+    # Track callbacks
+    submitted = []
+    
+    # Test creation
+    panel = InputPanel(
+        event_bus=bus,
+        on_submit=lambda text: submitted.append(text),
+    )
+    assert panel.widget is not None
+    print("✓ InputPanel creates widget")
+    
+    # Test it has required elements
+    assert hasattr(panel, 'entry')
+    assert hasattr(panel, 'btn_send')
+    assert hasattr(panel, 'btn_voice')
+    assert hasattr(panel, 'btn_attach')
+    print("✓ InputPanel has required UI elements")
+    
+    # Test text methods
+    panel.set_text("Hello")
+    assert panel.get_text() == "Hello"
+    panel.clear()
+    assert panel.get_text() == ""
+    print("✓ Text methods work")
+    
+    # Test recording state
+    panel.set_recording_state(True)
+    assert "Recording" in panel.btn_voice.get_label()
+    panel.set_recording_state(False)
+    assert "Start" in panel.btn_voice.get_label()
+    print("✓ Recording state works")
+    
+    # Cleanup
+    panel.cleanup()
+    
+    return True
+
+
+def test_model_selector_component():
+    """Test ModelSelector component structure."""
+    print("\nTesting ModelSelector component...")
+    
+    from ui import ModelSelector
+    from events import EventBus
+    
+    bus = EventBus()
+    
+    # Track callbacks
+    changed = []
+    
+    # Test creation
+    selector = ModelSelector(
+        event_bus=bus,
+        on_model_changed=lambda mid, disp: changed.append((mid, disp)),
+    )
+    assert selector.widget is not None
+    print("✓ ModelSelector creates widget")
+    
+    # Test set_models
+    models = ['gpt-4', 'gpt-3.5-turbo', 'claude-3']
+    display_names = {'gpt-4': 'GPT-4', 'claude-3': 'Claude 3'}
+    selector.set_models(models, display_names, 'gpt-4')
+    
+    assert selector.get_selected_model_id() == 'gpt-4'
+    assert selector.get_selected_display() == 'GPT-4'
+    print("✓ set_models works")
+    
+    # Test mappings
+    assert selector._display_to_model_id.get('GPT-4') == 'gpt-4'
+    assert selector._model_id_to_display.get('gpt-4') == 'GPT-4'
+    print("✓ Mappings work")
+    
+    # Cleanup
+    selector.cleanup()
     
     return True
 
@@ -151,6 +280,9 @@ def main():
     tests = [
         ("UIComponent base class", test_ui_base_component),
         ("HistorySidebar component", test_history_sidebar_component),
+        ("ChatView component", test_chat_view_component),
+        ("InputPanel component", test_input_panel_component),
+        ("ModelSelector component", test_model_selector_component),
         ("Event subscription infrastructure", test_event_subscriptions_exist),
         ("UI event types", test_event_types_for_ui),
     ]

@@ -126,75 +126,25 @@ class OpenAIGTKClient(Gtk.Window):
         self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         
         main_hbox.pack_start(self.paned, True, True, 0)
-        # Create sidebar
-        self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        self.sidebar.set_size_request(200, -1)
-        self.sidebar.set_margin_top(10)
-        self.sidebar.set_margin_bottom(10)
-        self.sidebar.set_margin_start(10)
-        self.sidebar.set_margin_end(10)
-
-        # Add "New Chat" button at the top of sidebar
-        new_chat_button = Gtk.Button(label="New Chat")
-        new_chat_button.connect("clicked", self.on_new_chat_clicked)
-        self.sidebar.pack_start(new_chat_button, False, False, 0)
-
-        # Add scrolled window for history list
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.sidebar.pack_start(scrolled, True, True, 0)
         
-        # Create list box for chat histories
-        self.history_list = Gtk.ListBox()
-        self.history_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self.history_list.connect('row-activated', self.on_history_selected)
-        self.history_list.connect('button-press-event', self.on_history_button_press)
-        
-        # Add navigation-sidebar style class
-        self.history_list.get_style_context().add_class('navigation-sidebar')
-        
-        scrolled.add(self.history_list)
-
-        # History filter entry at bottom of sidebar
+        # Create sidebar using UI component
+        from ui import HistorySidebar
+        self._history_sidebar = HistorySidebar(
+            event_bus=self.controller.event_bus,
+            controller=self.controller,
+            on_chat_selected=self.load_chat_by_filename,
+            on_new_chat=lambda: self.on_new_chat(None),
+            on_context_menu=self._on_sidebar_context_menu,
+            width=int(getattr(self, 'sidebar_width', 200)),
+        )
+        self.sidebar = self._history_sidebar.widget
+        # Expose history_list for backward compatibility
+        self.history_list = self._history_sidebar.history_list
+        # Expose filter state for backward compatibility
         self.history_filter_text = ""
-        self.history_filter_timeout_id = None
-        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        filter_entry = Gtk.Entry()
-        filter_entry.set_placeholder_text("Filter history...")
-        filter_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
-        filter_entry.connect("changed", self.on_history_filter_changed)
-        filter_entry.connect("icon-press", self.on_history_filter_icon_pressed)
-        filter_entry.connect("key-press-event", self.on_history_filter_keypress)
-        self.history_filter_entry = filter_entry
-        filter_box.pack_start(filter_entry, True, True, 0)
-        self.history_filter_box = filter_box
-        self.sidebar.pack_start(filter_box, False, False, 0)
-
-        filter_box.show_all()
-
-        # Filter options row (height aligned with typical button height)
-        options_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.history_options_box = options_box
-        self.sidebar.pack_start(options_box, False, False, 0)
-
-        # Titles-only toggle for filtering
         self.history_filter_titles_only = True
-        self.history_filter_toggle = Gtk.CheckButton(label="Titles only")
-        self.history_filter_toggle.set_active(True)
-        self.history_filter_toggle.connect("toggled", self.on_history_filter_mode_toggled)
-        options_box.pack_start(self.history_filter_toggle, False, False, 0)
-        self.history_filter_toggle.show()
-
-        # Whole-words toggle
         self.history_filter_whole_words = False
-        self.history_filter_whole_words_toggle = Gtk.CheckButton(label="Whole Words")
-        self.history_filter_whole_words_toggle.set_active(False)
-        self.history_filter_whole_words_toggle.connect("toggled", self.on_history_filter_whole_words_toggled)
-        options_box.pack_start(self.history_filter_whole_words_toggle, False, False, 0)
-        self.history_filter_whole_words_toggle.show()
-
-        options_box.show_all()
-
+        
         # Pack sidebar into left pane
         self.paned.pack1(self.sidebar, False, False)
 
@@ -240,9 +190,17 @@ class OpenAIGTKClient(Gtk.Window):
         )
         hbox_top.pack_start(self.sidebar_button, False, False, 0)
 
-        # Initialize model combo before trying to use it
-        self.combo_model = Gtk.ComboBoxText()
-        self.combo_model.connect('changed', self.on_model_changed)
+        # Model selector component
+        from ui import ModelSelector
+        self._model_selector = ModelSelector(
+            event_bus=self.controller.event_bus,
+            on_model_changed=self._handle_model_changed,
+        )
+        hbox_top.pack_start(self._model_selector.widget, False, False, 0)
+        # Expose combo_model for backward compatibility
+        self.combo_model = self._model_selector.widget
+        self._display_to_model_id = self._model_selector._display_to_model_id
+        self._model_id_to_display = self._model_selector._model_id_to_display
         
         # Provider initialization is now handled by self.controller.initialize_providers_from_env()
         # called above. Here we just fetch models if we have any providers.
@@ -253,8 +211,6 @@ class OpenAIGTKClient(Gtk.Window):
             self.model_provider_map = {model: 'openai' for model in default_models}
             self.controller.model_provider_map = self.model_provider_map
             self.update_model_list(default_models, self.default_model)
-
-        hbox_top.pack_start(self.combo_model, False, False, 0)
 
         # System prompt selector (only visible when multiple prompts exist)
         self.combo_system_prompt = Gtk.ComboBoxText()
@@ -275,72 +231,43 @@ class OpenAIGTKClient(Gtk.Window):
 
         vbox_main.pack_start(hbox_top, False, False, 0)
 
-        # Scrolled window for conversation
-        scrolled_window = Gtk.ScrolledWindow()
-        scrolled_window.set_vexpand(True)
-        vbox_main.pack_start(scrolled_window, True, True, 0)
-
-        # Conversation box – we will add each message as a separate widget
-        self.conversation_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.conversation_box.set_margin_start(0)
-        self.conversation_box.set_margin_end(5)
-        self.conversation_box.set_margin_top(0)
-        self.conversation_box.set_margin_bottom(5)
-        scrolled_window.add(self.conversation_box)
+        # Chat view component for message display
+        from ui import ChatView
+        self._chat_view = ChatView(
+            event_bus=self.controller.event_bus,
+            window=self,
+        )
+        vbox_main.pack_start(self._chat_view.widget, True, True, 0)
+        # Expose conversation_box and message_widgets for backward compatibility
+        self.conversation_box = self._chat_view.conversation_box
+        self.message_widgets = self._chat_view.message_widgets
 
         # Initialize the message renderer for displaying chat messages
         self._init_message_renderer()
 
-        # Question input, prompt editor button, and send button
-        hbox_input = Gtk.Box(spacing=6)
-
-        self.entry_question = Gtk.Entry()
-        self.entry_question.set_placeholder_text("Enter your question here...")
-        self.entry_question.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
-        self.entry_question.connect("icon-press", self.on_question_icon_pressed)
-        self.entry_question.connect("activate", self.on_submit)
-
-        # Button to open a larger prompt editor dialog
-        btn_edit_prompt = Gtk.Button()
-        btn_edit_prompt.set_tooltip_text("Open prompt editor")
-        edit_icon = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
-        btn_edit_prompt.add(edit_icon)
-        btn_edit_prompt.set_relief(Gtk.ReliefStyle.NONE)
-        btn_edit_prompt.connect("clicked", self.on_open_prompt_editor)
-
-        btn_send = Gtk.Button(label="Send")
-        btn_send.connect("clicked", self.on_submit)
-        self.btn_send = btn_send
-
-        hbox_input.pack_start(self.entry_question, True, True, 0)
-        hbox_input.pack_start(btn_edit_prompt, False, False, 0)
-        hbox_input.pack_start(btn_send, False, False, 0)
-        vbox_main.pack_start(hbox_input, False, False, 0)
-
-        # Create horizontal box for buttons
-        button_box = Gtk.Box(spacing=6)
-
-        # Voice input button with recording state
+        # Input panel component
+        from ui import InputPanel
+        self._input_panel = InputPanel(
+            event_bus=self.controller.event_bus,
+            on_submit=lambda text: self.on_submit(None),
+            on_voice_input=lambda: self.on_voice_input(None),
+            on_attach_file=lambda: self.on_attach_file(None),
+            on_open_prompt_editor=lambda: self.on_open_prompt_editor(None),
+        )
+        vbox_main.pack_start(self._input_panel.widget, False, False, 0)
+        
+        # Expose widgets for backward compatibility
+        self.entry_question = self._input_panel.entry
+        self.btn_send = self._input_panel.btn_send
+        self.btn_voice = self._input_panel.btn_voice
+        self.btn_attach = self._input_panel.btn_attach
+        
+        # State (also tracked in component)
         self.recording = False
         self.attached_file_path = None
-        self.pending_edit_image = None  # Image path selected for editing
-        self.pending_edit_message_index = None  # Message index of the image
-        self._edit_buttons = []  # Track edit buttons for clearing
-        self.btn_voice = Gtk.Button(label="Start Voice Input")
-        self.btn_voice.connect("clicked", self.on_voice_input)
-        
-        # Add voice button to horizontal box
-        button_box.pack_start(self.btn_voice, True, True, 0)
-
-        # Attach File button
-        self.btn_attach = Gtk.Button(label="Attach File")
-        self.btn_attach.connect("clicked", self.on_attach_file)
-        button_box.pack_start(self.btn_attach, True, True, 0)
-
-        vbox_main.pack_start(button_box, False, False, 0)
-        # Keep sidebar row heights aligned with button height
-        button_box.connect("size-allocate", lambda w, alloc: self._update_sidebar_row_heights())
-        self._update_sidebar_row_heights()
+        self.pending_edit_image = None
+        self.pending_edit_message_index = None
+        self._edit_buttons = []
 
         # Check LaTeX installation
         if not is_latex_installed():
@@ -670,123 +597,43 @@ class OpenAIGTKClient(Gtk.Window):
             models = self._default_models_for_provider('openai')
             self.model_provider_map = {model: 'openai' for model in models}
         
-        # Create mapping from display text to model_id
-        self._display_to_model_id = {}
+        # Build display names mapping
+        display_names = {}
         for model_id in models:
             display_name = get_model_display_name(model_id, self.custom_models)
-            # Only show display name if one is set, otherwise use model_id
             if display_name:
-                display_text = display_name
-            else:
-                display_text = model_id
-            self._display_to_model_id[display_text] = model_id
+                display_names[model_id] = display_name
         
-        # Find active model (map from display text to model_id if needed)
-        active_display = current_model
-        if current_model:
-            # Check if current_model is a display text or model_id
-            if current_model in self._display_to_model_id:
-                active_model = self._display_to_model_id[current_model]
-            elif current_model in models:
-                active_model = current_model
-                # Find the display text for this model_id
-                display_name = get_model_display_name(current_model, self.custom_models)
-                if display_name:
-                    active_display = display_name
-                else:
-                    active_display = current_model
-            else:
-                active_model = None
-        else:
-            active_display = self.combo_model.get_active_text()
-            if active_display:
-                active_model = self._display_to_model_id.get(active_display)
-            else:
-                active_model = None
-        
+        # Determine active model
+        active_model = current_model
         if not active_model or active_model not in models:
-            preferred_default = self.default_model if self.default_model in models else None
-            active_model = preferred_default or models[0]
-            display_name = get_model_display_name(active_model, self.custom_models)
-            if display_name:
-                active_display = display_name
-            else:
-                active_display = active_model
+            active_model = self.default_model if self.default_model in models else models[0] if models else None
         
-        self._updating_model = True
-        try:
-            self.combo_model.remove_all()
-            # Add active model first
-            self.combo_model.append_text(active_display)
-            # Add other models sorted by display text
-            other_displays = []
-            for model in models:
-                if model != active_model:
-                    display_name = get_model_display_name(model, self.custom_models)
-                    if display_name:
-                        display_text = display_name
-                    else:
-                        display_text = model
-                    other_displays.append((display_text, model))
-            # Sort by display text
-            other_displays.sort(key=lambda x: x[0])
-            for display_text, _ in other_displays:
-                self.combo_model.append_text(display_text)
-            self.combo_model.set_active(0)
-        finally:
-            self._updating_model = False
+        # Use component to set models
+        if hasattr(self, '_model_selector'):
+            self._model_selector.set_models(models, display_names, active_model)
+            # Sync mappings
+            self._display_to_model_id = self._model_selector._display_to_model_id
+            self._model_id_to_display = self._model_selector._model_id_to_display
+        
         return False
 
+    def _handle_model_changed(self, model_id: str, display_name: str):
+        """Handle model selection from ModelSelector component."""
+        # Emit MODEL_CHANGED event
+        self.controller.event_bus.publish(Event(
+            type=EventType.MODEL_CHANGED,
+            data={'model_id': model_id, 'display_name': display_name},
+            source='ui'
+        ))
+        # Sync mappings from component
+        if hasattr(self, '_model_selector'):
+            self._display_to_model_id = self._model_selector._display_to_model_id
+            self._model_id_to_display = self._model_selector._model_id_to_display
+
     def on_model_changed(self, combo):
-        """Handle model selection changes."""
-        # Check if we're already updating to avoid recursive calls.
-        if getattr(self, '_updating_model', False):
-            return
-        self._updating_model = True
-        try:
-            # Get newly selected display text
-            selected_display = combo.get_active_text()
-            if not selected_display:
-                return
-
-            # Map display text back to model_id
-            selected_model_id = None
-            if hasattr(self, '_display_to_model_id') and selected_display in self._display_to_model_id:
-                selected_model_id = self._display_to_model_id[selected_display]
-            else:
-                # If not in mapping, assume it's the model_id itself
-                selected_model_id = selected_display
-
-            # Emit MODEL_CHANGED event
-            self.controller.event_bus.publish(Event(
-                type=EventType.MODEL_CHANGED,
-                data={'model_id': selected_model_id, 'display_name': selected_display},
-                source='ui'
-            ))
-
-            # Get all display texts from the combo box
-            model_store = combo.get_model()
-            display_texts = []
-            iter = model_store.get_iter_first()
-            while iter:
-                display_texts.append(model_store.get_value(iter, 0))
-                iter = model_store.iter_next(iter)
-
-            # Update the list with new order
-            combo.remove_all()
-
-            # Add the selected model first
-            combo.append_text(selected_display)
-
-            # Add other models alphabetically, excluding the selected model
-            other_displays = sorted(d for d in display_texts if d != selected_display)
-            for display_text in other_displays:
-                combo.append_text(display_text)
-
-            # Set active to the first item (the selected model)
-            combo.set_active(0)
-        finally:
-            self._updating_model = False
+        """Handle model selection changes - legacy, now handled by component."""
+        pass  # Component handles this now
 
     def _init_message_renderer(self):
         """Initialize the MessageRenderer with current settings and callbacks."""
@@ -814,6 +661,9 @@ class OpenAIGTKClient(Gtk.Window):
             window=self,
             current_chat_id=self.current_chat_id,
         )
+        # Connect renderer to chat view component
+        if hasattr(self, '_chat_view'):
+            self._chat_view.set_message_renderer(self.message_renderer)
 
     def _update_message_renderer_settings(self):
         """Update renderer settings after settings change."""
@@ -3470,204 +3320,12 @@ class OpenAIGTKClient(Gtk.Window):
 
     def refresh_history_list(self):
         """Refresh the list of chat histories in the sidebar."""
-        # Ensure filter entry mirrors current filter text without re-triggering needless updates
-        if hasattr(self, "history_filter_entry"):
-            current_text = self.history_filter_entry.get_text()
-            if current_text != self.history_filter_text:
-                self.history_filter_entry.set_text(self.history_filter_text)
-        if hasattr(self, "history_filter_toggle"):
-            if self.history_filter_toggle.get_active() != self.history_filter_titles_only:
-                self.history_filter_toggle.set_active(self.history_filter_titles_only)
-        if hasattr(self, "history_filter_whole_words_toggle"):
-            if self.history_filter_whole_words_toggle.get_active() != self.history_filter_whole_words:
-                self.history_filter_whole_words_toggle.set_active(self.history_filter_whole_words)
-
-        # Preserve current selection if present
-        selected_filename = self.current_chat_id
-        if selected_filename is None:
-            current_row = self.history_list.get_selected_row()
-            if current_row and hasattr(current_row, "filename"):
-                selected_filename = current_row.filename
-
-        # Clear existing items
-        for child in self.history_list.get_children():
-            self.history_list.remove(child)
+        if hasattr(self, '_history_sidebar'):
+            self._history_sidebar.refresh()
         
-        # Get histories via controller
-        histories = self.controller.list_chats()
-
-        filter_text = (self.history_filter_text or "").strip()
-        if filter_text:
-            filtered = []
-            for history in histories:
-                if self._history_matches_filter(history, filter_text):
-                    filtered.append(history)
-            histories = filtered
-
-        for history in histories:
-            row = Gtk.ListBoxRow()
-            
-            # Create vertical box for title and timestamp
-            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-            vbox.set_margin_start(10)
-            vbox.set_margin_end(10)
-            
-            # Get chat title - use title from service or fall back to get_chat_title
-            chat_id = history.get('chat_id') or history.get('filename', '')
-            title = history.get('title') or get_chat_title(chat_id)
-            
-            title_label = Gtk.Label(label=title, xalign=0)
-            title_label.get_style_context().add_class('title')
-            title_label.set_line_wrap(False)
-            title_label.set_ellipsize(Pango.EllipsizeMode.END)
-            
-            # Timestamp label - use timestamp from service or fall back
-            timestamp = history.get('timestamp') or self.get_chat_timestamp(chat_id)
-            if isinstance(timestamp, str) and 'T' in timestamp:
-                # Format ISO timestamp
-                try:
-                    from datetime import datetime
-                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                    timestamp = dt.strftime("%Y-%m-%d %H:%M")
-                except:
-                    pass
-            time_label = Gtk.Label(label=str(timestamp), xalign=0)
-            time_label.get_style_context().add_class('timestamp')
-            
-            vbox.pack_start(title_label, True, True, 0)
-            vbox.pack_start(time_label, True, True, 0)
-            
-            row.add(vbox)
-            row.filename = chat_id
-            
-            self.history_list.add(row)
-        
-        self.history_list.show_all()
-
-        # Restore selection if possible
-        selected_row = None
-        if selected_filename:
-            for row in self.history_list.get_children():
-                if getattr(row, "filename", None) == selected_filename:
-                    selected_row = row
-                    break
-
-        if selected_row:
-            self.history_list.select_row(selected_row)
-        else:
-            self.history_list.unselect_all()
-
-    def on_history_filter_changed(self, entry):
-        """Debounce and apply history filter as the user types."""
-        self.history_filter_text = entry.get_text()
-        # Only debounce live filtering when in titles-only mode; full-content search waits for Enter
-        if self.history_filter_titles_only:
-            if self.history_filter_timeout_id:
-                GLib.source_remove(self.history_filter_timeout_id)
-            self.history_filter_timeout_id = GLib.timeout_add(150, self._apply_history_filter)
-
-    def on_history_filter_icon_pressed(self, entry, icon_pos, event):
-        """Clear filter when the clear icon is pressed."""
-        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
-            entry.set_text("")
-            self.history_filter_text = ""
-            self.refresh_history_list()
-
-    def on_history_filter_keypress(self, entry, event):
-        """Keyboard shortcuts for the history filter."""
-        if event.keyval == Gdk.KEY_Escape:
-            entry.set_text("")
-            self.history_filter_text = ""
-            self.refresh_history_list()
-            return True
-        if event.keyval == Gdk.KEY_Return:
-            # Apply filter immediately when Enter is pressed (used for content search)
-            self._apply_history_filter()
-            self.history_list.grab_focus()
-            return True
-        return False
-
-    def on_history_filter_mode_toggled(self, toggle_button):
-        """Switch between titles-only and full-content filtering."""
-        self.history_filter_titles_only = toggle_button.get_active()
-        # Apply immediately when switching to titles-only; wait for Enter when switching to full search
-        if self.history_filter_titles_only:
-            self._apply_history_filter()
-
-    def on_history_filter_whole_words_toggled(self, toggle_button):
-        """Toggle whole-word matching for history filter."""
-        self.history_filter_whole_words = toggle_button.get_active()
-        # Re-apply current filter to update matches
-        self._apply_history_filter()
-
-    def _apply_history_filter(self):
-        """Apply the pending history filter."""
-        self.refresh_history_list()
-        self.history_filter_timeout_id = None
-        return False
-
-    def _history_matches_filter(self, history, filter_text):
-        """Check if a history entry matches the current filter."""
-        # Get chat_id from either format
-        chat_id = history.get('chat_id') or history.get('filename', '')
-        title = history.get('title') or get_chat_title(chat_id)
-        
-        # Titles/filenames check always applies
-        if self._text_matches_filter(f"{title} {chat_id}", filter_text):
-            return True
-
-        # If in titles-only mode, stop here
-        if self.history_filter_titles_only:
-            return False
-
-        # Full-content search via chat service
-        try:
-            conv = self.controller.chat_service.load_chat(chat_id)
-            if conv:
-                messages = conv.to_list() if hasattr(conv, 'to_list') else conv
-                for msg in messages:
-                    content = msg.get("content", "")
-                    if isinstance(content, str) and self._text_matches_filter(content, filter_text):
-                        return True
-        except Exception as e:
-            print(f"Error filtering history {chat_id}: {e}")
-        return False
-
-    def _text_matches_filter(self, text, filter_text):
-        """Match text against filter with optional whole-word and case-insensitive rules."""
-        if not filter_text:
-            return True
-        if self.history_filter_whole_words:
-            try:
-                pattern = r"\b" + re.escape(filter_text) + r"\b"
-                return re.search(pattern, text, flags=re.IGNORECASE) is not None
-            except re.error:
-                return False
-        return filter_text.lower() in text.lower()
-
-    def _get_button_row_height(self):
-        """Return the themed height of a button row for alignment."""
-        try:
-            if hasattr(self, "btn_send"):
-                min_h, nat_h = self.btn_send.get_preferred_height()
-                if nat_h or min_h:
-                    return nat_h or min_h
-        except Exception as e:
-            print(f"Error getting button height: {e}")
-        return 0
-
-    def _update_sidebar_row_heights(self):
-        """Set sidebar row heights to match button height for alignment."""
-        height = self._get_button_row_height()
-        if height <= 0:
-            return
-        try:
-            if hasattr(self, "history_filter_box"):
-                self.history_filter_box.set_size_request(-1, height)
-            if hasattr(self, "history_options_box"):
-                self.history_options_box.set_size_request(-1, height)
-        except Exception as e:
-            print(f"Error updating sidebar row heights: {e}")
+    def _on_sidebar_context_menu(self, row, event):
+        """Handle sidebar context menu request."""
+        self.create_history_context_menu(row)
 
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""

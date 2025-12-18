@@ -1,0 +1,188 @@
+"""
+Input panel UI component.
+
+This component manages the text entry, voice input, and file attachment controls.
+"""
+
+from typing import Optional, Callable
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, GLib
+
+from .base import UIComponent
+from events import EventBus, EventType
+
+
+class InputPanel(UIComponent):
+    """
+    Input panel component for user message entry.
+    
+    Features:
+    - Text entry with clear icon
+    - Prompt editor button
+    - Send button
+    - Voice input button with recording state
+    - File attachment button
+    - Event-driven recording state updates
+    """
+    
+    def __init__(
+        self,
+        event_bus: Optional[EventBus] = None,
+        on_submit: Optional[Callable[[str], None]] = None,
+        on_voice_input: Optional[Callable[[], None]] = None,
+        on_attach_file: Optional[Callable[[], None]] = None,
+        on_open_prompt_editor: Optional[Callable[[], None]] = None,
+        on_clear: Optional[Callable[[], None]] = None,
+    ):
+        """
+        Initialize the input panel.
+        
+        Parameters
+        ----------
+        event_bus : Optional[EventBus]
+            Event bus for communication.
+        on_submit : Optional[Callable[[str], None]]
+            Callback when user submits message.
+        on_voice_input : Optional[Callable[[], None]]
+            Callback for voice input button.
+        on_attach_file : Optional[Callable[[], None]]
+            Callback for attach file button.
+        on_open_prompt_editor : Optional[Callable[[], None]]
+            Callback for prompt editor button.
+        on_clear : Optional[Callable[[], None]]
+            Callback when input is cleared.
+        """
+        super().__init__(event_bus)
+        
+        self._on_submit = on_submit
+        self._on_voice_input = on_voice_input
+        self._on_attach_file = on_attach_file
+        self._on_open_prompt_editor = on_open_prompt_editor
+        self._on_clear = on_clear
+        
+        # State
+        self.recording = False
+        self.attached_file_path = None
+        
+        # Build UI
+        self.widget = self._build_ui()
+        
+        # Subscribe to events
+        self.subscribe(EventType.RECORDING_STARTED, self._on_recording_started)
+        self.subscribe(EventType.RECORDING_STOPPED, self._on_recording_stopped)
+    
+    def _build_ui(self) -> Gtk.Box:
+        """Build the input panel UI."""
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        
+        # Main input row
+        input_row = Gtk.Box(spacing=6)
+        
+        # Text entry
+        self.entry = Gtk.Entry()
+        self.entry.set_placeholder_text("Enter your question here...")
+        self.entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
+        self.entry.connect("icon-press", self._on_icon_press)
+        self.entry.connect("activate", self._on_activate)
+        input_row.pack_start(self.entry, True, True, 0)
+        
+        # Prompt editor button
+        btn_edit = Gtk.Button()
+        btn_edit.set_tooltip_text("Open prompt editor")
+        edit_icon = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
+        btn_edit.add(edit_icon)
+        btn_edit.set_relief(Gtk.ReliefStyle.NONE)
+        btn_edit.connect("clicked", self._on_edit_clicked)
+        input_row.pack_start(btn_edit, False, False, 0)
+        
+        # Send button
+        self.btn_send = Gtk.Button(label="Send")
+        self.btn_send.connect("clicked", self._on_send_clicked)
+        input_row.pack_start(self.btn_send, False, False, 0)
+        
+        container.pack_start(input_row, False, False, 0)
+        
+        # Button row
+        button_row = Gtk.Box(spacing=6)
+        
+        # Voice button
+        self.btn_voice = Gtk.Button(label="Start Voice Input")
+        self.btn_voice.connect("clicked", self._on_voice_clicked)
+        button_row.pack_start(self.btn_voice, True, True, 0)
+        
+        # Attach button
+        self.btn_attach = Gtk.Button(label="Attach File")
+        self.btn_attach.connect("clicked", self._on_attach_clicked)
+        button_row.pack_start(self.btn_attach, True, True, 0)
+        
+        container.pack_start(button_row, False, False, 0)
+        
+        return container
+    
+    def get_text(self) -> str:
+        """Get the current input text."""
+        return self.entry.get_text()
+    
+    def set_text(self, text: str):
+        """Set the input text."""
+        self.entry.set_text(text)
+    
+    def clear(self):
+        """Clear the input."""
+        self.entry.set_text("")
+    
+    def grab_focus(self):
+        """Focus the input entry."""
+        self.entry.grab_focus()
+    
+    def set_recording_state(self, recording: bool):
+        """Update the recording state."""
+        self.recording = recording
+        label = "Recording... Click to Stop" if recording else "Start Voice Input"
+        self.btn_voice.set_label(label)
+    
+    def set_attachment_label(self, label: str):
+        """Update the attach button label."""
+        self.btn_attach.set_label(label)
+    
+    def _on_icon_press(self, entry, icon_pos, event):
+        """Handle clear icon press."""
+        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
+            self.clear()
+            if self._on_clear:
+                self._on_clear()
+    
+    def _on_activate(self, entry):
+        """Handle Enter key press."""
+        if self._on_submit:
+            self._on_submit(self.get_text())
+    
+    def _on_send_clicked(self, button):
+        """Handle send button click."""
+        if self._on_submit:
+            self._on_submit(self.get_text())
+    
+    def _on_edit_clicked(self, button):
+        """Handle prompt editor button click."""
+        if self._on_open_prompt_editor:
+            self._on_open_prompt_editor()
+    
+    def _on_voice_clicked(self, button):
+        """Handle voice button click."""
+        if self._on_voice_input:
+            self._on_voice_input()
+    
+    def _on_attach_clicked(self, button):
+        """Handle attach button click."""
+        if self._on_attach_file:
+            self._on_attach_file()
+    
+    def _on_recording_started(self, event):
+        """Handle RECORDING_STARTED event."""
+        self.schedule_ui_update(lambda: self.set_recording_state(True))
+    
+    def _on_recording_stopped(self, event):
+        """Handle RECORDING_STOPPED event."""
+        self.schedule_ui_update(lambda: self.set_recording_state(False))
