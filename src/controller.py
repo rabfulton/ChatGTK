@@ -22,6 +22,12 @@ from repositories import (
     ChatHistoryRepository,
     ModelCacheRepository,
 )
+from services import (
+    ChatService,
+    ImageGenerationService,
+    AudioService,
+    ToolService,
+)
 from utils import (
     load_settings,
     save_settings,
@@ -31,17 +37,14 @@ from utils import (
     load_api_keys,
     load_custom_models,
     save_custom_models,
-    generate_chat_name,
-    save_chat_history,
-    load_chat_history,
-    list_chat_histories,
-    get_chat_metadata,
-    get_chat_title,
-    get_chat_dir,
-    delete_chat_history,
 )
 from ai_providers import get_ai_provider
-from conversation import create_system_message, create_user_message, create_assistant_message
+from conversation import (
+    create_system_message,
+    create_user_message,
+    create_assistant_message,
+    ConversationHistory,
+)
 from tools import (
     ToolManager,
     is_chat_completion_model,
@@ -81,6 +84,20 @@ class ChatController:
         self._chat_history_repo = chat_history_repo or ChatHistoryRepository()
         self._model_cache_repo = model_cache_repo or ModelCacheRepository()
         
+        # Initialize services
+        self._chat_service = ChatService(
+            history_repo=self._chat_history_repo,
+            settings_repo=self._settings_repo,
+            api_keys_repo=self._api_keys_repo,
+        )
+        self._image_service = ImageGenerationService(
+            chat_history_repo=self._chat_history_repo,
+        )
+        self._audio_service = AudioService(
+            chat_history_repo=self._chat_history_repo,
+            settings_repo=self._settings_repo,
+        )
+        
         # Load settings from repository
         self._settings: Dict[str, Any] = self._settings_repo.get_all()
         
@@ -110,6 +127,11 @@ class ChatController:
             music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
             read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
             search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
+        )
+        
+        # Initialize tool service
+        self._tool_service = ToolService(
+            tool_manager=self.tool_manager,
         )
 
     # -----------------------------------------------------------------------
@@ -281,8 +303,8 @@ class ChatController:
         Returns True if successful, False otherwise.
         """
         try:
-            # Use repository to load chat
-            conv_history = self._chat_history_repo.get(chat_id)
+            # Use chat service to load chat
+            conv_history = self._chat_service.load_chat(chat_id)
             if conv_history:
                 self.conversation_history = conv_history.to_list()
                 self.current_chat_id = chat_id
@@ -298,37 +320,39 @@ class ChatController:
         If this is a new chat, generates a name based on the first user message.
         Returns the chat_id (filename) or None on error.
         """
-        from conversation import ConversationHistory
-        
         if not self.conversation_history:
             return None
         
-        # Get first user message for naming
-        first_user_msg = ""
-        for msg in self.conversation_history:
-            if msg.get("role") == "user":
-                first_user_msg = msg.get("content", "")[:40]
-                break
-        
-        # Use existing ID or generate new one
-        chat_id = self.current_chat_id
-        if not chat_id:
-            chat_id = generate_chat_name(first_user_msg or "chat")
-            if chat_id.endswith('.json'):
-                chat_id = chat_id[:-5]
-            self.current_chat_id = chat_id
-        
         try:
-            if not self.current_chat_id:
-                self.current_chat_id = generate_chat_name(self.conversation_history)
+            # Use existing ID or generate new one
+            chat_id = self.current_chat_id
+            if not chat_id:
+                # Generate a temporary ID that will be replaced by service
+                from datetime import datetime
+                chat_id = f"new_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
-            # Convert to ConversationHistory and save via repository
+            # Convert to ConversationHistory and save via service
             conv_history = ConversationHistory.from_list(self.conversation_history)
-            self._chat_history_repo.save(self.current_chat_id, conv_history)
-            return self.current_chat_id
+            actual_chat_id = self._chat_service.save_chat(chat_id, conv_history)
+            self.current_chat_id = actual_chat_id
+            return actual_chat_id
         except Exception as e:
             print(f"Error saving chat: {e}")
+            import traceback
+            traceback.print_exc()
             return None
+
+    def list_chats(self) -> List[Dict[str, Any]]:
+        """List all available chats via service."""
+        return self._chat_service.list_chats()
+
+    def delete_chat(self, chat_id: str) -> bool:
+        """Delete a chat via service."""
+        return self._chat_service.delete_chat(chat_id)
+
+    def search_history(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Search chat histories via service."""
+        return self._chat_service.search_history(query, limit, exclude_chat_id=self.current_chat_id)
 
     # -----------------------------------------------------------------------
     # Message preparation
@@ -423,6 +447,30 @@ class ChatController:
         return messages
 
     # -----------------------------------------------------------------------
+    # Service accessors
+    # -----------------------------------------------------------------------
+
+    @property
+    def chat_service(self) -> ChatService:
+        """Get the chat service instance."""
+        return self._chat_service
+    
+    @property
+    def image_service(self) -> ImageGenerationService:
+        """Get the image generation service instance."""
+        return self._image_service
+    
+    @property
+    def audio_service(self) -> AudioService:
+        """Get the audio service instance."""
+        return self._audio_service
+    
+    @property
+    def tool_service(self) -> ToolService:
+        """Get the tool service instance."""
+        return self._tool_service
+
+    # -----------------------------------------------------------------------
     # Settings management
     # -----------------------------------------------------------------------
 
@@ -443,4 +491,8 @@ class ChatController:
             music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
             read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
             search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
+        )
+        # Update tool service with new tool manager
+        self._tool_service = ToolService(
+            tool_manager=self.tool_manager,
         )

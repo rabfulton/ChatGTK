@@ -112,7 +112,7 @@ class ConversationHistory:
     and converting it for different purposes (API calls, serialization, etc.).
     """
     
-    def __init__(self, system_message: str = "You are a helpful assistant."):
+    def __init__(self, system_message: str = "You are a helpful assistant.", metadata: Optional[Dict[str, Any]] = None):
         """
         Initialize a new conversation history.
         
@@ -120,10 +120,13 @@ class ConversationHistory:
         ----------
         system_message : str
             The initial system message for the conversation.
+        metadata : Optional[Dict[str, Any]]
+            Optional chat-level metadata (e.g., title, tags).
         """
         self._messages: List[Message] = [
             Message(role="system", content=system_message)
         ]
+        self.metadata: Dict[str, Any] = metadata or {}
     
     @property
     def messages(self) -> List[Message]:
@@ -225,7 +228,7 @@ class ConversationHistory:
         return [msg.to_dict() for msg in self._messages]
     
     @classmethod
-    def from_list(cls, data: List[Dict[str, Any]], default_system: str = "You are a helpful assistant.") -> "ConversationHistory":
+    def from_list(cls, data: List[Dict[str, Any]], default_system: str = "You are a helpful assistant.", metadata: Optional[Dict[str, Any]] = None) -> "ConversationHistory":
         """
         Create from a list of dictionaries.
         
@@ -235,6 +238,8 @@ class ConversationHistory:
             The conversation history as a list of dicts.
         default_system : str
             Default system message if none is present.
+        metadata : Optional[Dict[str, Any]]
+            Optional chat-level metadata.
         
         Returns
         -------
@@ -243,6 +248,7 @@ class ConversationHistory:
         """
         history = cls.__new__(cls)
         history._messages = [Message.from_dict(d) for d in data] if data else []
+        history.metadata = metadata or {}
         
         # Ensure there's a system message at the start
         if not history._messages or history._messages[0].role != "system":

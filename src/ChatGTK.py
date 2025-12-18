@@ -1722,49 +1722,17 @@ class OpenAIGTKClient(Gtk.Window):
     
     def _search_history_files(self, keyword: str, pattern, limit: int) -> list:
         """Search conversation history JSON files for keyword matches."""
-        import glob
-        from config import HISTORY_DIR
+        # Use controller's search_history method which delegates to service/repository
+        search_results = self.controller.search_history(keyword, limit)
         
         results = []
-        current_chat_file = None
-        if self.current_chat_id:
-            current_chat_file = os.path.join(HISTORY_DIR, f"{self.current_chat_id}.json")
-        
-        # Find all JSON files in history directory
-        json_files = glob.glob(os.path.join(HISTORY_DIR, "*.json"))
-        
-        for json_file in json_files:
-            # Skip current conversation
-            if current_chat_file and os.path.normpath(json_file) == os.path.normpath(current_chat_file):
-                continue
-            
-            if len(results) >= limit:
-                break
-            
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                messages = data.get("messages", [])
-                matching_messages = []
-                
-                for msg in messages:
-                    content = msg.get("content", "")
-                    role = msg.get("role", "")
-                    if role == "system":
-                        continue
-                    if pattern.search(content):
-                        matching_messages.append(f"[{role}]: {content[:500]}{'...' if len(content) > 500 else ''}")
-                
-                if matching_messages:
-                    chat_name = os.path.basename(json_file).replace(".json", "")
-                    results.append({
-                        "source": f"Chat: {chat_name}",
-                        "content": "\n".join(matching_messages[:3])  # Limit messages per chat
-                    })
-                    
-            except (json.JSONDecodeError, IOError) as e:
-                continue
+        for sr in search_results:
+            # Format matches for display
+            matches_text = "\n".join(sr.get('matches', [])[:3])
+            results.append({
+                "source": f"Chat: {sr.get('chat_title', sr.get('chat_id', 'Unknown'))}",
+                "content": matches_text
+            })
         
         return results
     

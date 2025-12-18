@@ -23,6 +23,7 @@ import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
 from model_cards import get_card, list_cards
+from repositories import ModelCacheRepository
 from utils import (
     load_settings,
     apply_settings,
@@ -41,7 +42,6 @@ from config import (
     BASE_DIR,
     PARENT_DIR,
     SETTINGS_CONFIG,
-    MODEL_CACHE_FILE,
     DEFAULT_SYSTEM_PROMPT_APPENDIX,
     DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX,
     DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX,
@@ -63,16 +63,14 @@ def load_model_cache() -> dict:
     each value being a list of model ID strings.
     Returns an empty dict if the cache file does not exist or is invalid.
     """
-    if not os.path.exists(MODEL_CACHE_FILE):
-        return {}
-    try:
-        with open(MODEL_CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return data
-    except Exception as e:
-        print(f"Warning: could not load model cache: {e}")
-    return {}
+    # Use repository backend
+    repo = ModelCacheRepository()
+    result = {}
+    for provider in ['openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom']:
+        models = repo.get_models(provider)
+        if models:
+            result[provider] = models
+    return result
 
 
 def save_model_cache(cache: dict) -> None:
@@ -80,11 +78,11 @@ def save_model_cache(cache: dict) -> None:
     Save the model cache to disk.
     `cache` should be a dict keyed by provider ID, each value a list of model IDs.
     """
-    try:
-        with open(MODEL_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, indent=2)
-    except Exception as e:
-        print(f"Warning: could not save model cache: {e}")
+    # Use repository backend
+    repo = ModelCacheRepository()
+    for provider, models in cache.items():
+        if isinstance(models, list):
+            repo.set_models(provider, models)
 
 
 # ---------------------------------------------------------------------------

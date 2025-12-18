@@ -102,19 +102,20 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
                 data = json.load(f)
             
             messages = data.get('messages', [])
+            metadata = data.get('metadata', {})
             system_message = "You are a helpful assistant."
             
             # Extract system message if present
             if messages and messages[0].get('role') == 'system':
                 system_message = messages[0].get('content', system_message)
             
-            return ConversationHistory.from_list(messages, default_system=system_message)
+            return ConversationHistory.from_list(messages, default_system=system_message, metadata=metadata)
             
         except (json.JSONDecodeError, IOError) as e:
             print(f"Error loading chat {chat_id}: {e}")
             return None
     
-    def save(self, chat_id: str, history: ConversationHistory) -> None:
+    def save(self, chat_id: str, history, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
         Save a chat history.
         
@@ -122,16 +123,32 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
         ----------
         chat_id : str
             The unique identifier for the chat.
-        history : ConversationHistory
+        history : ConversationHistory or List[Dict]
             The conversation history to save.
+        metadata : Optional[Dict[str, Any]]
+            Optional metadata to save with the chat.
         """
         chat_path = self._get_chat_path(chat_id)
         
         try:
+            # Handle both ConversationHistory and list formats
+            if isinstance(history, ConversationHistory):
+                messages = history.to_list()
+                meta = history.metadata or {}
+            else:
+                messages = history
+                meta = {}
+            
+            # Merge with provided metadata
+            if metadata:
+                meta.update(metadata)
+            
             data = {
-                'messages': history.to_list(),
+                'messages': messages,
                 'timestamp': datetime.now().isoformat(),
             }
+            if meta:
+                data['metadata'] = meta
             
             with open(chat_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
