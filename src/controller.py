@@ -28,6 +28,7 @@ from services import (
     AudioService,
     ToolService,
 )
+from settings import SettingsManager
 from events import EventBus, EventType, Event, get_event_bus
 from utils import (
     load_settings,
@@ -66,7 +67,8 @@ class ChatController:
                  api_keys_repo: Optional[APIKeysRepository] = None,
                  chat_history_repo: Optional[ChatHistoryRepository] = None,
                  model_cache_repo: Optional[ModelCacheRepository] = None,
-                 event_bus: Optional[EventBus] = None):
+                 event_bus: Optional[EventBus] = None,
+                 settings_manager: Optional[SettingsManager] = None):
         """Initialize the controller with settings and state.
         
         Parameters
@@ -81,6 +83,8 @@ class ChatController:
             Model cache repository instance. If None, creates a new one.
         event_bus : Optional[EventBus]
             Event bus for publishing/subscribing to events. If None, uses global.
+        settings_manager : Optional[SettingsManager]
+            Settings manager instance. If None, creates a new one.
         """
         # Initialize repositories
         self._settings_repo = settings_repo or SettingsRepository()
@@ -90,6 +94,12 @@ class ChatController:
         
         # Initialize event bus
         self._event_bus = event_bus or get_event_bus()
+        
+        # Initialize settings manager
+        self._settings_manager = settings_manager or SettingsManager(
+            repository=self._settings_repo,
+            event_bus=self._event_bus,
+        )
         
         # Initialize services with event bus
         self._chat_service = ChatService(
@@ -108,12 +118,9 @@ class ChatController:
             event_bus=self._event_bus,
         )
         
-        # Load settings from repository
-        self._settings: Dict[str, Any] = self._settings_repo.get_all()
-        
-        # Apply settings as attributes for convenience
-        for key, value in self._settings.items():
-            setattr(self, key.lower(), value)
+        # Load settings and apply as attributes for backward compatibility
+        self._settings: Dict[str, Any] = self._settings_manager.get_all()
+        self._settings_manager.apply_to_object(self)
         
         # Initialize system prompts from settings
         self._init_system_prompts_from_settings()
@@ -133,10 +140,10 @@ class ChatController:
         
         # Tool manager
         self.tool_manager = ToolManager(
-            image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
-            music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
-            read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
-            search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
+            image_tool_enabled=self._settings_manager.get('IMAGE_TOOL_ENABLED', True),
+            music_tool_enabled=self._settings_manager.get('MUSIC_TOOL_ENABLED', False),
+            read_aloud_tool_enabled=self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False),
+            search_tool_enabled=self._settings_manager.get('SEARCH_TOOL_ENABLED', False),
         )
         
         # Initialize tool service with event bus
@@ -481,32 +488,276 @@ class ChatController:
         """Get the tool service instance."""
         return self._tool_service
 
+    # -----------------------------------------------------------------------
+    # High-level orchestration methods
+    # -----------------------------------------------------------------------
+
+    def get_provider_for_model(self, model: str) -> Optional[Any]:
+        """
+        Get or initialize the appropriate provider for a model.
+        
+        Parameters
+        ----------
+        model : str
+            The model identifier.
+            
+        Returns
+        -------
+        Optional[Any]
+            The provider instance, or None if unavailable.
+        """
+        provider_name = self.get_provider_name_for_model(model)
+        
+        # Check for custom provider
+        if provider_name == "custom":
+            provider = self.custom_providers.get(model)
+            if provider:
+                return provider
+            # Initialize custom provider
+            config = (self.custom_models or {}).get(model, {})
+            if not config:
+                return None
+            from utils import resolve_api_key
+            provider = get_ai_provider("custom")
+            provider.initialize(
+                api_key=resolve_api_key(config.get("api_key", "")).strip(),
+                endpoint=config.get("endpoint"),
+                model_id=model,
+                api_type=config.get("api_type", "chat.completions"),
+            )
+            self.custom_providers[model] = provider
+            return provider
+        
+        # Check cached provider
+        if provider_name in self.providers:
+            return self.providers[provider_name]
+        
+        # Get API key and initialize
+        api_key = self._get_api_key_for_provider(provider_name)
+        if not api_key:
+            return None
+        
+        return self.initialize_provider(provider_name, api_key)
+
+    def _get_api_key_for_provider(self, provider_name: str) -> Optional[str]:
+        """Get API key for a provider from env or saved keys."""
+        env_map = {
+            'openai': 'OPENAI_API_KEY',
+            'gemini': 'GEMINI_API_KEY',
+            'grok': 'GROK_API_KEY',
+            'claude': 'CLAUDE_API_KEY',
+            'perplexity': 'PERPLEXITY_API_KEY',
+        }
+        env_var = env_map.get(provider_name, f'{provider_name.upper()}_API_KEY')
+        return os.environ.get(env_var, '').strip() or self.api_keys.get(provider_name, '').strip()
+
+    def get_provider_name_for_model(self, model: str) -> str:
+        """
+        Determine which provider handles a given model.
+        
+        Parameters
+        ----------
+        model : str
+            The model identifier.
+            
+        Returns
+        -------
+        str
+            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom').
+        """
+        # Check model_provider_map first
+        if model in self.model_provider_map:
+            return self.model_provider_map[model]
+        
+        # Check custom models
+        if model in (self.custom_models or {}):
+            return "custom"
+        
+        # Infer from model name
+        model_lower = model.lower()
+        if 'gemini' in model_lower:
+            return 'gemini'
+        if 'grok' in model_lower:
+            return 'grok'
+        if 'claude' in model_lower:
+            return 'claude'
+        if 'sonar' in model_lower:
+            return 'perplexity'
+        
+        return 'openai'
+
+    def prepare_message(
+        self,
+        content: str,
+        images: Optional[List[Dict[str, Any]]] = None,
+        files: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Prepare a user message for the conversation.
+        
+        Parameters
+        ----------
+        content : str
+            The message content.
+        images : Optional[List[Dict]]
+            List of image attachments.
+        files : Optional[List[Dict]]
+            List of file attachments.
+            
+        Returns
+        -------
+        Dict[str, Any]
+            The prepared message dictionary.
+        """
+        return create_user_message(content, images=images, files=files)
+
+    def add_user_message(
+        self,
+        content: str,
+        images: Optional[List[Dict[str, Any]]] = None,
+        files: Optional[List[Dict[str, Any]]] = None,
+    ) -> int:
+        """
+        Add a user message to the conversation history.
+        
+        Parameters
+        ----------
+        content : str
+            The message content.
+        images : Optional[List[Dict]]
+            List of image attachments.
+        files : Optional[List[Dict]]
+            List of file attachments.
+            
+        Returns
+        -------
+        int
+            The index of the added message.
+        """
+        msg = self.prepare_message(content, images, files)
+        msg_index = len(self.conversation_history)
+        self.conversation_history.append(msg)
+        
+        self._event_bus.publish(Event(
+            type=EventType.MESSAGE_SENT,
+            data={'content': content, 'index': msg_index, 'role': 'user'},
+            source='controller'
+        ))
+        
+        return msg_index
+
+    def add_assistant_message(self, content: str) -> int:
+        """
+        Add an assistant message to the conversation history.
+        
+        Parameters
+        ----------
+        content : str
+            The message content.
+            
+        Returns
+        -------
+        int
+            The index of the added message.
+        """
+        msg = create_assistant_message(content)
+        msg_index = len(self.conversation_history)
+        self.conversation_history.append(msg)
+        
+        self._event_bus.publish(Event(
+            type=EventType.MESSAGE_RECEIVED,
+            data={'content': content, 'index': msg_index, 'role': 'assistant'},
+            source='controller'
+        ))
+        
+        return msg_index
+
+    def is_quick_image_request(self, content: str) -> bool:
+        """Check if content is a quick image generation request (img: prefix)."""
+        return content.lower().startswith("img:")
+
+    def get_image_prompt(self, content: str) -> str:
+        """Extract image prompt from img: prefixed content."""
+        return content[4:].strip()
+
+    def get_preferred_image_model(self) -> str:
+        """Get the user's preferred image generation model."""
+        return self._settings_manager.get('IMAGE_MODEL', 'dall-e-3') or 'dall-e-3'
+
+    def get_temperature_for_model(self, model: str) -> Optional[float]:
+        """
+        Get the appropriate temperature setting for a model.
+        
+        Some models (like o1, o3) don't support temperature.
+        """
+        from model_cards import get_card
+        
+        card = get_card(model, self.custom_models)
+        if card and card.quirks.get('no_temperature'):
+            return None
+        
+        return self._settings_manager.get('TEMPERATURE', 0.7)
+
+    def ensure_chat_id(self) -> str:
+        """
+        Ensure a chat ID exists, creating one if necessary.
+        
+        Returns
+        -------
+        str
+            The current or newly created chat ID.
+        """
+        if self.current_chat_id is None and len(self.conversation_history) > 1:
+            # Generate from first user message
+            from utils import generate_chat_name
+            first_user = next(
+                (m for m in self.conversation_history if m.get('role') == 'user'),
+                None
+            )
+            if first_user:
+                self.current_chat_id = generate_chat_name(first_user.get('content', ''))
+            else:
+                from datetime import datetime
+                self.current_chat_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        return self.current_chat_id
+
     @property
     def event_bus(self) -> EventBus:
         """Get the event bus instance."""
         return self._event_bus
 
+    @property
+    def settings_manager(self) -> SettingsManager:
+        """Get the settings manager instance."""
+        return self._settings_manager
+
     # -----------------------------------------------------------------------
     # Settings management
     # -----------------------------------------------------------------------
 
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        """Get a setting value via settings manager."""
+        return self._settings_manager.get(key, default)
+    
+    def set_setting(self, key: str, value: Any) -> None:
+        """Set a setting value via settings manager."""
+        self._settings_manager.set(key, value)
+        # Also update local attribute for backward compatibility
+        setattr(self, key.lower(), value)
+
     def _save_settings(self) -> None:
         """Persist current settings to disk."""
-        # Load existing to preserve dialog-managed settings
-        existing = load_settings()
-        for key in self._settings.keys():
-            attr = key.lower()
-            if hasattr(self, attr):
-                existing[key] = getattr(self, attr)
-        save_settings(convert_settings_for_save(existing))
+        # Update settings manager from object attributes
+        self._settings_manager.update_from_object(self, save=True)
 
     def update_tool_manager(self) -> None:
         """Update the ToolManager with current settings."""
         self.tool_manager = ToolManager(
-            image_tool_enabled=bool(getattr(self, "image_tool_enabled", True)),
-            music_tool_enabled=bool(getattr(self, "music_tool_enabled", False)),
-            read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
-            search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
+            image_tool_enabled=self._settings_manager.get('IMAGE_TOOL_ENABLED', True),
+            music_tool_enabled=self._settings_manager.get('MUSIC_TOOL_ENABLED', False),
+            read_aloud_tool_enabled=self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False),
+            search_tool_enabled=self._settings_manager.get('SEARCH_TOOL_ENABLED', False),
         )
         # Update tool service with new tool manager and event bus
         self._tool_service = ToolService(
