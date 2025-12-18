@@ -24,13 +24,10 @@ from latex_utils import (
     export_chat_to_pdf,
 )
 from utils import (
-    load_settings,
-    save_settings,
     generate_chat_name,
     get_chat_metadata,
     get_chat_title,
     get_chat_dir,
-    delete_chat_history,
     parse_color_to_rgba,
     rgb_to_hex,
     insert_resized_image,
@@ -103,7 +100,8 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Load and apply settings (for UI settings like window_width, font_size, etc.)
         # Note: settings like system_message will be routed to controller via properties
-        loaded = load_settings()
+        # Settings are loaded via controller's settings_manager
+        loaded = self.controller.settings_manager.get_all()
         apply_settings(self, loaded)
         
         # Initialize window
@@ -531,16 +529,14 @@ class OpenAIGTKClient(Gtk.Window):
         if hasattr(self, 'ws_provider'):
             self.ws_provider.stop_streaming()
             
-        # Load existing settings first to preserve values we don't manage
-        existing = load_settings()
-        # Get settings from this object
+        # Save settings via controller's settings_manager
         to_save = get_object_settings(self)
         to_save['WINDOW_WIDTH'] = self.current_geometry[0]
         to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
         to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
-        # Merge: existing settings + our updates
-        existing.update(to_save)
-        save_settings(convert_settings_for_save(existing))
+        for key, value in convert_settings_for_save(to_save).items():
+            self.controller.settings_manager.set(key, value)
+        
         # Hide tray icon on exit (only for StatusIcon backend)
         if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
             try:
@@ -3310,8 +3306,8 @@ class OpenAIGTKClient(Gtk.Window):
                 self.conversation_history = [create_system_message(self.system_message)]
                 self.current_chat_id = None
 
-            # Delete the chat history and associated files
-            delete_chat_history(filename)
+            # Delete the chat history via controller
+            self.controller.delete_chat(filename)
             
             # Refresh the history list
             self.refresh_history_list()
@@ -4023,17 +4019,12 @@ class OpenAIGTKClient(Gtk.Window):
         if response == Gtk.ResponseType.OK:
             new_name = entry.get_text().strip()
             if new_name:
-                # Update the visible title
-                history_row.get_children()[0].get_children()[0].set_text(new_name)
-                
-                # Load and update the chat history via repository
+                # Set the custom title via utils function
+                from utils import set_chat_title
                 chat_id = history_row.filename.replace('.json', '') if history_row.filename.endswith('.json') else history_row.filename
-                conv = self.controller._chat_history_repo.get(chat_id)
-                if conv:
-                    history = conv.to_list() if hasattr(conv, 'to_list') else conv
-                    # Update the first user message which is used as the title
-                    history[1]['content'] = new_name
-                    self.controller._chat_history_repo.save(chat_id, history)
+                set_chat_title(chat_id, new_name)
+                # Refresh sidebar to show new title
+                self.refresh_history_list()
         
         dialog.destroy()
 

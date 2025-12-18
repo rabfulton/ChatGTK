@@ -167,13 +167,19 @@ def _migrate_legacy_tts_settings(settings, explicit_keys=None):
     return settings
 
 def load_settings():
-    """Load settings with type conversion based on config."""
+    """Load settings with type conversion based on config.
+    
+    DEPRECATED: Use SettingsRepository or SettingsManager directly.
+    """
     # Use repository backend
     repo = _get_settings_repo()
     return repo.get_all()
 
 def save_settings(settings_dict):
-    """Save the settings dictionary to the SETTINGS_FILE in a simple key=value format."""
+    """Save the settings dictionary to the SETTINGS_FILE in a simple key=value format.
+    
+    DEPRECATED: Use SettingsRepository or SettingsManager directly.
+    """
     # Use repository backend
     repo = _get_settings_repo()
     for key, value in settings_dict.items():
@@ -363,7 +369,10 @@ def generate_chat_name(first_message):
     return f"{safe_msg}_{timestamp}.json"
 
 def save_chat_history(chat_name, conversation_history, metadata=None):
-    """Save a chat history to a file with optional metadata."""
+    """Save a chat history to a file with optional metadata.
+    
+    DEPRECATED: Use ChatHistoryRepository or ChatService directly.
+    """
     # Use repository backend
     repo = _get_chat_history_repo()
     chat_id = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
@@ -371,6 +380,8 @@ def save_chat_history(chat_name, conversation_history, metadata=None):
 
 def load_chat_history(chat_name, messages_only=True):
     """Load a chat history from a file.
+    
+    DEPRECATED: Use ChatHistoryRepository or ChatService directly.
     
     Args:
         chat_name: Name of the chat file
@@ -388,6 +399,8 @@ def load_chat_history(chat_name, messages_only=True):
 
 def delete_chat_history(chat_name):
     """Delete a chat history and its associated files (images, audio, etc.).
+    
+    DEPRECATED: Use ChatHistoryRepository or ChatService directly.
     
     Args:
         chat_name: Name of the chat file (with or without .json extension)

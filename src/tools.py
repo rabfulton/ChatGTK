@@ -16,7 +16,18 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from model_cards import get_card
-from utils import load_settings
+
+
+# Settings repository singleton for tools
+_settings_repo = None
+
+def _get_settings_repo():
+    """Get or create the settings repository singleton."""
+    global _settings_repo
+    if _settings_repo is None:
+        from repositories import SettingsRepository
+        _settings_repo = SettingsRepository()
+    return _settings_repo
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +223,10 @@ def append_tool_guidance(
         The system prompt with relevant guidance appended.
     """
     result = system_prompt.rstrip() if system_prompt else ""
-    settings = load_settings()
+    settings_repo = _get_settings_repo()
 
     if include_math:
-        math_appendix = settings.get("SYSTEM_PROMPT_APPENDIX", "")
+        math_appendix = settings_repo.get("SYSTEM_PROMPT_APPENDIX", "")
         if math_appendix and math_appendix not in result:
             if result:
                 result = f"{result}\n\n{math_appendix}"
@@ -225,13 +236,13 @@ def append_tool_guidance(
     for tool_name in sorted(enabled_tools):
         appendix = ""
         if tool_name == "generate_image":
-            appendix = settings.get("IMAGE_TOOL_PROMPT_APPENDIX", "")
+            appendix = settings_repo.get("IMAGE_TOOL_PROMPT_APPENDIX", "")
         elif tool_name == "control_music":
-            appendix = settings.get("MUSIC_TOOL_PROMPT_APPENDIX", "")
+            appendix = settings_repo.get("MUSIC_TOOL_PROMPT_APPENDIX", "")
         elif tool_name == "read_aloud":
-            appendix = settings.get("READ_ALOUD_TOOL_PROMPT_APPENDIX", "")
+            appendix = settings_repo.get("READ_ALOUD_TOOL_PROMPT_APPENDIX", "")
         elif tool_name == "search_memory":
-            appendix = settings.get("SEARCH_TOOL_PROMPT_APPENDIX", "")
+            appendix = settings_repo.get("SEARCH_TOOL_PROMPT_APPENDIX", "")
         
         # Fallback to spec if available (though now specs default to empty)
         if not appendix:

@@ -76,6 +76,9 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
     
     def _get_chat_path(self, chat_id: str) -> Path:
         """Get the file path for a chat ID."""
+        # Strip .json if already present to avoid .json.json
+        if chat_id.endswith('.json'):
+            chat_id = chat_id[:-5]
         return self.history_dir / f"{chat_id}.json"
     
     def get(self, chat_id: str) -> Optional[ConversationHistory]:
@@ -210,6 +213,7 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
                     data = json.load(f)
                 
                 messages = data.get('messages', [])
+                metadata = data.get('metadata', {})
                 timestamp_str = data.get('timestamp', '')
                 
                 # Parse timestamp
@@ -218,8 +222,8 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
                 except (ValueError, TypeError):
                     timestamp = datetime.fromtimestamp(chat_file.stat().st_mtime)
                 
-                # Generate title from first user message
-                title = self._generate_title(messages, chat_id)
+                # Use metadata title if set, otherwise generate from messages
+                title = metadata.get('title') or self._generate_title(messages, chat_id)
                 
                 chats.append(ChatMetadata(
                     chat_id=chat_id,
