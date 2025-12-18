@@ -757,6 +757,13 @@ class OpenAIGTKClient(Gtk.Window):
                 # If not in mapping, assume it's the model_id itself
                 selected_model_id = selected_display
 
+            # Emit MODEL_CHANGED event
+            self.controller.event_bus.publish(Event(
+                type=EventType.MODEL_CHANGED,
+                data={'model_id': selected_model_id, 'display_name': selected_display},
+                source='ui'
+            ))
+
             # Get all display texts from the combo box
             model_store = combo.get_model()
             display_texts = []
@@ -942,8 +949,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.controller.active_system_prompt_id = getattr(self, "active_system_prompt_id", "")
         
         # Let controller parse/init
-        if hasattr(self.controller, '_init_system_prompts_from_settings'):
-            self.controller._init_system_prompts_from_settings()
+        self.controller.init_system_prompts()
 
     # -----------------------------------------------------------------------
     # Event subscriptions for reactive UI updates
@@ -954,6 +960,7 @@ class OpenAIGTKClient(Gtk.Window):
         bus = self.controller.event_bus
         
         # Chat events
+        bus.subscribe(EventType.CHAT_CREATED, self._on_chat_created_event)
         bus.subscribe(EventType.CHAT_LOADED, self._on_chat_loaded_event)
         bus.subscribe(EventType.CHAT_SAVED, self._on_chat_saved_event)
         bus.subscribe(EventType.CHAT_DELETED, self._on_chat_deleted_event)
@@ -968,12 +975,28 @@ class OpenAIGTKClient(Gtk.Window):
         bus.subscribe(EventType.THINKING_STARTED, self._on_thinking_started_event)
         bus.subscribe(EventType.THINKING_STOPPED, self._on_thinking_stopped_event)
         
-        # Message events (for controller-driven message additions)
+        # Message events
         bus.subscribe(EventType.MESSAGE_SENT, self._on_message_sent_event)
         bus.subscribe(EventType.MESSAGE_RECEIVED, self._on_message_received_event)
         
         # Image events
         bus.subscribe(EventType.IMAGE_GENERATED, self._on_image_generated_event)
+        
+        # Audio events
+        bus.subscribe(EventType.RECORDING_STARTED, self._on_recording_started_event)
+        bus.subscribe(EventType.RECORDING_STOPPED, self._on_recording_stopped_event)
+        bus.subscribe(EventType.TRANSCRIPTION_COMPLETE, self._on_transcription_complete_event)
+        bus.subscribe(EventType.PLAYBACK_STARTED, self._on_playback_started_event)
+        bus.subscribe(EventType.PLAYBACK_STOPPED, self._on_playback_stopped_event)
+        bus.subscribe(EventType.TTS_COMPLETE, self._on_tts_complete_event)
+        
+        # Model events
+        bus.subscribe(EventType.MODEL_CHANGED, self._on_model_changed_event)
+        bus.subscribe(EventType.MODELS_FETCHED, self._on_models_fetched_event)
+        
+        # Tool events
+        bus.subscribe(EventType.TOOL_EXECUTED, self._on_tool_executed_event)
+        bus.subscribe(EventType.TOOL_RESULT, self._on_tool_result_event)
 
     def _on_chat_loaded_event(self, event):
         """Handle CHAT_LOADED event - refresh UI."""
@@ -1058,6 +1081,85 @@ class OpenAIGTKClient(Gtk.Window):
         image_path = event.data.get('image_path', '')
         prompt = event.data.get('prompt', '')[:50]
         print(f"[Event] Image generated: {image_path} for prompt: {prompt}...")
+
+    def _on_chat_created_event(self, event):
+        """Handle CHAT_CREATED event - refresh history list."""
+        GLib.idle_add(self.refresh_history_list)
+
+    def _on_recording_started_event(self, event):
+        """Handle RECORDING_STARTED event - update voice button state."""
+        def update():
+            self.recording = True
+            self.btn_voice.set_label("Recording... Click to Stop")
+        GLib.idle_add(update)
+
+    def _on_recording_stopped_event(self, event):
+        """Handle RECORDING_STOPPED event - reset voice button state."""
+        def update():
+            self.recording = False
+            self.btn_voice.set_label("Start Voice Input")
+        GLib.idle_add(update)
+
+    def _on_transcription_complete_event(self, event):
+        """Handle TRANSCRIPTION_COMPLETE event - log completion."""
+        text = event.data.get('text', '')[:50]
+        print(f"[Event] Transcription complete: {text}...")
+
+    def _on_playback_started_event(self, event):
+        """Handle PLAYBACK_STARTED event - log playback start."""
+        audio_path = event.data.get('audio_path', '')
+        print(f"[Event] Playback started: {audio_path}")
+
+    def _on_playback_stopped_event(self, event):
+        """Handle PLAYBACK_STOPPED event - log playback stop."""
+        audio_path = event.data.get('audio_path', '')
+        print(f"[Event] Playback stopped: {audio_path}")
+
+    def _on_tts_complete_event(self, event):
+        """Handle TTS_COMPLETE event - log TTS completion."""
+        audio_path = event.data.get('audio_path', '')
+        print(f"[Event] TTS complete: {audio_path}")
+
+    def _on_model_changed_event(self, event):
+        """Handle MODEL_CHANGED event - update model combo if needed."""
+        model_id = event.data.get('model_id', '')
+        source = event.source
+        # Only update if change came from elsewhere (not UI)
+        if source != 'ui' and model_id:
+            GLib.idle_add(lambda: self._select_model_in_combo(model_id))
+
+    def _select_model_in_combo(self, model_id):
+        """Select a model in the combo box by model_id."""
+        if getattr(self, '_updating_model', False):
+            return
+        display_text = self._model_id_to_display.get(model_id, model_id)
+        model_store = self.combo_model.get_model()
+        iter = model_store.get_iter_first()
+        idx = 0
+        while iter:
+            if model_store.get_value(iter, 0) == display_text:
+                self.combo_model.set_active(idx)
+                return
+            iter = model_store.iter_next(iter)
+            idx += 1
+
+    def _on_models_fetched_event(self, event):
+        """Handle MODELS_FETCHED event - refresh model list."""
+        provider = event.data.get('provider', '')
+        models = event.data.get('models', [])
+        print(f"[Event] Models fetched for {provider}: {len(models)} models")
+
+    def _on_tool_executed_event(self, event):
+        """Handle TOOL_EXECUTED event - log tool execution."""
+        tool_name = event.data.get('tool_name', '')
+        print(f"[Event] Tool executed: {tool_name}")
+
+    def _on_tool_result_event(self, event):
+        """Handle TOOL_RESULT event - log tool result."""
+        tool_name = event.data.get('tool_name', '')
+        success = event.data.get('success', False)
+        status = "success" if success else "failed"
+        print(f"[Event] Tool result: {tool_name} - {status}")
 
     # -----------------------------------------------------------------------
     # System prompt management
@@ -1434,12 +1536,10 @@ class OpenAIGTKClient(Gtk.Window):
                 self.custom_providers[model] = provider
             return provider
         else:
-            provider = self.providers.get(provider_name)
+            # Get provider via controller
+            provider = self.controller.get_provider(provider_name)
             if not provider:
-                api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
-                provider = self.initialize_provider(provider_name, api_key)
-                if not provider:
-                    raise ValueError(f"{provider_name.title()} provider is not initialized")
+                raise ValueError(f"{provider_name.title()} provider is not initialized")
             return provider
 
     def generate_image_via_preferred_model(self, prompt, last_msg, image_path=None):
@@ -2005,7 +2105,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Pass ai_provider, providers dict, and api_keys to the settings dialog
         dialog = SettingsDialog(
             self,
-            ai_provider=self.providers.get('openai'),
+            ai_provider=self.controller.get_provider('openai'),
             providers=self.providers,
             api_keys=current_api_keys,
             **{k.lower(): getattr(self, k.lower()) for k in SETTINGS_CONFIG.keys()}
@@ -2521,12 +2621,10 @@ class OpenAIGTKClient(Gtk.Window):
                     )
                     self.custom_providers[model] = provider
             else:
-                provider = self.providers.get(provider_name)
+                # Get provider via controller
+                provider = self.controller.get_provider(provider_name)
                 if not provider:
-                    api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
-                    provider = self.initialize_provider(provider_name, api_key)
-                    if not provider:
-                        raise ValueError(f"{provider_name.title()} provider is not initialized")
+                    raise ValueError(f"{provider_name.title()} provider is not initialized")
             
             model_temperature = self._get_temperature_for_model(model)
             
@@ -2911,12 +3009,9 @@ class OpenAIGTKClient(Gtk.Window):
                     stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
         except Exception as e:
             print(f"[Audio STT] Error reading card for {stt_model}: {e}")
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                os.environ['OPENAI_API_KEY'] = api_key
-                openai_provider = self.initialize_provider('openai', api_key)
+        
+        # Get OpenAI provider via controller
+        openai_provider = self.controller.get_provider('openai')
         if not openai_provider:
             self.show_error_dialog("Audio transcription requires an OpenAI API key")
             return
@@ -3016,12 +3111,8 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception as e:
             print(f"[Audio STT] Error reading card for {stt_model}: {e}")
 
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                os.environ['OPENAI_API_KEY'] = api_key
-                openai_provider = self.initialize_provider('openai', api_key)
+        # Get OpenAI provider via controller
+        openai_provider = self.controller.get_provider('openai')
         if not openai_provider:
             self.show_error_dialog("Audio transcription requires an OpenAI API key")
             return
@@ -3529,9 +3620,9 @@ class OpenAIGTKClient(Gtk.Window):
         if self.history_filter_titles_only:
             return False
 
-        # Full-content search via repository
+        # Full-content search via chat service
         try:
-            conv = self.controller._chat_history_repo.get(chat_id)
+            conv = self.controller.chat_service.load_chat(chat_id)
             if conv:
                 messages = conv.to_list() if hasattr(conv, 'to_list') else conv
                 for msg in messages:
@@ -4047,9 +4138,9 @@ class OpenAIGTKClient(Gtk.Window):
                 if not filename.endswith('.pdf'):
                     filename += '.pdf'
                     
-                # Load the chat history via controller
+                # Load the chat history via chat service
                 chat_id = history_row.filename.replace('.json', '') if history_row.filename.endswith('.json') else history_row.filename
-                conv = self.controller._chat_history_repo.get(chat_id)
+                conv = self.controller.chat_service.load_chat(chat_id)
                 history = conv.to_list() if conv and hasattr(conv, 'to_list') else conv
                 if history:
                     # Use the sidebar chat title and present it with capitalized words
@@ -4513,12 +4604,8 @@ class OpenAIGTKClient(Gtk.Window):
         Uses the unified tts_voice setting and caches audio files per chat.
         Returns True if playback completed successfully, False otherwise.
         """
-        # Get the OpenAI provider for TTS
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                openai_provider = self.initialize_provider('openai', api_key)
+        # Get the OpenAI provider for TTS via controller
+        openai_provider = self.controller.get_provider('openai')
         
         if not openai_provider:
             print("TTS: OpenAI provider not available")
@@ -4582,12 +4669,8 @@ class OpenAIGTKClient(Gtk.Window):
         Builds a prompt using the configured template and sends it to the audio model.
         Returns True if playback completed successfully, False otherwise.
         """
-        # Get the OpenAI provider
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                openai_provider = self.initialize_provider('openai', api_key)
+        # Get the OpenAI provider via controller
+        openai_provider = self.controller.get_provider('openai')
         
         if not openai_provider:
             print("TTS: OpenAI provider not available for audio-preview")
@@ -4666,12 +4749,8 @@ class OpenAIGTKClient(Gtk.Window):
         Uses the unified tts_voice setting and caches audio files per chat.
         Returns True if playback completed successfully, False otherwise.
         """
-        # Get the Gemini provider for TTS
-        gemini_provider = self.providers.get('gemini')
-        if not gemini_provider:
-            api_key = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')).strip()
-            if api_key:
-                gemini_provider = self.initialize_provider('gemini', api_key)
+        # Get the Gemini provider via controller
+        gemini_provider = self.controller.get_provider('gemini')
         
         if not gemini_provider:
             print("TTS: Gemini provider not available")

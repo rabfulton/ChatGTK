@@ -192,6 +192,10 @@ class ChatController:
         if active_prompt:
             self.system_message = active_prompt["content"]
 
+    def init_system_prompts(self) -> None:
+        """Public method to initialize system prompts from settings."""
+        self._init_system_prompts_from_settings()
+
     def get_system_prompt_by_id(self, prompt_id: str) -> Optional[Dict[str, Any]]:
         """Return the system prompt dict with the given ID, or None."""
         for p in getattr(self, "system_prompts", []):
@@ -527,6 +531,29 @@ class ChatController:
             return self.providers[provider_name]
         
         # Get API key and initialize
+        api_key = self._get_api_key_for_provider(provider_name)
+        if not api_key:
+            return None
+        
+        return self.initialize_provider(provider_name, api_key)
+
+    def get_provider(self, provider_name: str) -> Optional[Any]:
+        """
+        Get or initialize a provider by name.
+        
+        Parameters
+        ----------
+        provider_name : str
+            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity').
+            
+        Returns
+        -------
+        Optional[Any]
+            The provider instance, or None if unavailable.
+        """
+        if provider_name in self.providers:
+            return self.providers[provider_name]
+        
         api_key = self._get_api_key_for_provider(provider_name)
         if not api_key:
             return None
