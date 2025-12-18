@@ -28,6 +28,7 @@ from services import (
     AudioService,
     ToolService,
 )
+from events import EventBus, EventType, Event, get_event_bus
 from utils import (
     load_settings,
     save_settings,
@@ -64,7 +65,8 @@ class ChatController:
                  settings_repo: Optional[SettingsRepository] = None,
                  api_keys_repo: Optional[APIKeysRepository] = None,
                  chat_history_repo: Optional[ChatHistoryRepository] = None,
-                 model_cache_repo: Optional[ModelCacheRepository] = None):
+                 model_cache_repo: Optional[ModelCacheRepository] = None,
+                 event_bus: Optional[EventBus] = None):
         """Initialize the controller with settings and state.
         
         Parameters
@@ -77,6 +79,8 @@ class ChatController:
             Chat history repository instance. If None, creates a new one.
         model_cache_repo : Optional[ModelCacheRepository]
             Model cache repository instance. If None, creates a new one.
+        event_bus : Optional[EventBus]
+            Event bus for publishing/subscribing to events. If None, uses global.
         """
         # Initialize repositories
         self._settings_repo = settings_repo or SettingsRepository()
@@ -84,18 +88,24 @@ class ChatController:
         self._chat_history_repo = chat_history_repo or ChatHistoryRepository()
         self._model_cache_repo = model_cache_repo or ModelCacheRepository()
         
-        # Initialize services
+        # Initialize event bus
+        self._event_bus = event_bus or get_event_bus()
+        
+        # Initialize services with event bus
         self._chat_service = ChatService(
             history_repo=self._chat_history_repo,
             settings_repo=self._settings_repo,
             api_keys_repo=self._api_keys_repo,
+            event_bus=self._event_bus,
         )
         self._image_service = ImageGenerationService(
             chat_history_repo=self._chat_history_repo,
+            event_bus=self._event_bus,
         )
         self._audio_service = AudioService(
             chat_history_repo=self._chat_history_repo,
             settings_repo=self._settings_repo,
+            event_bus=self._event_bus,
         )
         
         # Load settings from repository
@@ -129,9 +139,10 @@ class ChatController:
             search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
         )
         
-        # Initialize tool service
+        # Initialize tool service with event bus
         self._tool_service = ToolService(
             tool_manager=self.tool_manager,
+            event_bus=self._event_bus,
         )
 
     # -----------------------------------------------------------------------
@@ -470,6 +481,11 @@ class ChatController:
         """Get the tool service instance."""
         return self._tool_service
 
+    @property
+    def event_bus(self) -> EventBus:
+        """Get the event bus instance."""
+        return self._event_bus
+
     # -----------------------------------------------------------------------
     # Settings management
     # -----------------------------------------------------------------------
@@ -492,7 +508,8 @@ class ChatController:
             read_aloud_tool_enabled=bool(getattr(self, "read_aloud_tool_enabled", False)),
             search_tool_enabled=bool(getattr(self, "search_tool_enabled", False)),
         )
-        # Update tool service with new tool manager
+        # Update tool service with new tool manager and event bus
         self._tool_service = ToolService(
             tool_manager=self.tool_manager,
+            event_bus=self._event_bus,
         )

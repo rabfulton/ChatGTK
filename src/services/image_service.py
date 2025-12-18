@@ -9,6 +9,7 @@ from datetime import datetime
 
 from repositories import ChatHistoryRepository
 from config import HISTORY_DIR
+from events import EventBus, EventType, Event
 
 
 class ImageGenerationService:
@@ -22,6 +23,7 @@ class ImageGenerationService:
     def __init__(
         self,
         chat_history_repo: ChatHistoryRepository,
+        event_bus: Optional[EventBus] = None,
     ):
         """
         Initialize the image generation service.
@@ -30,8 +32,16 @@ class ImageGenerationService:
         ----------
         chat_history_repo : ChatHistoryRepository
             Repository for accessing chat directories.
+        event_bus : Optional[EventBus]
+            Event bus for publishing events.
         """
         self._chat_history_repo = chat_history_repo
+        self._event_bus = event_bus
+    
+    def _emit(self, event_type: EventType, **data) -> None:
+        """Emit an event if event bus is configured."""
+        if self._event_bus:
+            self._event_bus.publish(Event(type=event_type, data=data, source='image_service'))
     
     def _get_chat_image_dir(self, chat_id: str) -> Path:
         """
@@ -130,6 +140,10 @@ class ImageGenerationService:
                 saved_path = self.save_to_chat(chat_id, image_path)
                 image_path = saved_path
             
+            self._emit(EventType.IMAGE_GENERATED, 
+                      image_path=image_path, image_url=image_url, 
+                      prompt=prompt, chat_id=chat_id)
+            
             return {
                 'success': True,
                 'image_path': image_path,
@@ -138,6 +152,7 @@ class ImageGenerationService:
             }
             
         except Exception as e:
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='image_generation')
             return {
                 'success': False,
                 'error': str(e),

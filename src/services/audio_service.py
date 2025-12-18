@@ -10,6 +10,7 @@ from datetime import datetime
 
 from repositories import ChatHistoryRepository, SettingsRepository
 from config import HISTORY_DIR
+from events import EventBus, EventType, Event
 
 
 class AudioService:
@@ -24,6 +25,7 @@ class AudioService:
         self,
         chat_history_repo: ChatHistoryRepository,
         settings_repo: SettingsRepository,
+        event_bus: Optional[EventBus] = None,
     ):
         """
         Initialize the audio service.
@@ -34,13 +36,21 @@ class AudioService:
             Repository for accessing chat directories.
         settings_repo : SettingsRepository
             Repository for audio settings.
+        event_bus : Optional[EventBus]
+            Event bus for publishing events.
         """
         self._chat_history_repo = chat_history_repo
         self._settings_repo = settings_repo
+        self._event_bus = event_bus
         self._recording_thread: Optional[threading.Thread] = None
         self._playback_thread: Optional[threading.Thread] = None
         self._stop_recording = False
         self._stop_playback = False
+    
+    def _emit(self, event_type: EventType, **data) -> None:
+        """Emit an event if event bus is configured."""
+        if self._event_bus:
+            self._event_bus.publish(Event(type=event_type, data=data, source='audio_service'))
     
     def _get_chat_audio_dir(self, chat_id: str) -> Path:
         """
@@ -150,12 +160,15 @@ class AudioService:
             self._recording_thread = threading.Thread(target=record_thread, daemon=True)
             self._recording_thread.start()
             
+            self._emit(EventType.RECORDING_STARTED, audio_path=str(audio_path), chat_id=chat_id)
+            
             return {
                 'success': True,
                 'audio_path': str(audio_path),
             }
             
         except Exception as e:
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='recording')
             return {
                 'success': False,
                 'error': str(e),
@@ -173,6 +186,7 @@ class AudioService:
         if self._recording_thread and self._recording_thread.is_alive():
             self._stop_recording = True
             self._recording_thread.join(timeout=2.0)
+            self._emit(EventType.RECORDING_STOPPED)
             return True
         return False
     
@@ -222,12 +236,15 @@ class AudioService:
             
             text = provider.transcribe_audio(audio_path, **kwargs)
             
+            self._emit(EventType.TRANSCRIPTION_COMPLETE, text=text, audio_path=audio_path)
+            
             return {
                 'success': True,
                 'text': text,
             }
             
         except Exception as e:
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='transcription')
             return {
                 'success': False,
                 'error': str(e),
@@ -309,12 +326,15 @@ class AudioService:
                     'error': f'Unexpected audio data type: {type(audio_data)}',
                 }
             
+            self._emit(EventType.TTS_COMPLETE, audio_path=str(audio_path), text=text[:100])
+            
             return {
                 'success': True,
                 'audio_path': str(audio_path),
             }
             
         except Exception as e:
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='tts')
             return {
                 'success': False,
                 'error': str(e),
@@ -369,6 +389,8 @@ class AudioService:
                             # Windows
                             os.startfile(audio_path)
                     
+                    self._emit(EventType.PLAYBACK_STOPPED, audio_path=audio_path)
+                    
                     # Call callback if provided
                     if callback:
                         callback()
@@ -381,11 +403,14 @@ class AudioService:
             self._playback_thread = threading.Thread(target=playback_thread, daemon=True)
             self._playback_thread.start()
             
+            self._emit(EventType.PLAYBACK_STARTED, audio_path=audio_path)
+            
             return {
                 'success': True,
             }
             
         except Exception as e:
+            self._emit(EventType.ERROR_OCCURRED, error=str(e), context='playback')
             return {
                 'success': False,
                 'error': str(e),

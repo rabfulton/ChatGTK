@@ -14,6 +14,7 @@ from repositories import (
 from conversation import ConversationHistory, Message, create_system_message
 from ai_providers import get_ai_provider
 from utils import generate_chat_name
+from events import EventBus, EventType, Event
 
 
 class ChatService:
@@ -30,6 +31,7 @@ class ChatService:
         history_repo: ChatHistoryRepository,
         settings_repo: SettingsRepository,
         api_keys_repo: APIKeysRepository,
+        event_bus: Optional[EventBus] = None,
     ):
         """
         Initialize the chat service.
@@ -42,14 +44,22 @@ class ChatService:
             Repository for application settings.
         api_keys_repo : APIKeysRepository
             Repository for API keys.
+        event_bus : Optional[EventBus]
+            Event bus for publishing events.
         """
         self._history_repo = history_repo
         self._settings_repo = settings_repo
         self._api_keys_repo = api_keys_repo
+        self._event_bus = event_bus
         
         # Cache providers to avoid re-initialization
         self._providers: Dict[str, Any] = {}
         self._model_provider_map: Dict[str, str] = {}
+    
+    def _emit(self, event_type: EventType, **data) -> None:
+        """Emit an event if event bus is configured."""
+        if self._event_bus:
+            self._event_bus.publish(Event(type=event_type, data=data, source='chat_service'))
     
     def create_chat(self, system_message: Optional[str] = None) -> str:
         """
@@ -75,6 +85,8 @@ class ChatService:
         # Generate a temporary chat ID (will be replaced on first save)
         chat_id = f"new_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
+        self._emit(EventType.CHAT_CREATED, chat_id=chat_id, system_message=system_message)
+        
         return chat_id
     
     def load_chat(self, chat_id: str) -> Optional[ConversationHistory]:
@@ -91,7 +103,10 @@ class ChatService:
         Optional[ConversationHistory]
             The conversation history if found, None otherwise.
         """
-        return self._history_repo.get(chat_id)
+        history = self._history_repo.get(chat_id)
+        if history:
+            self._emit(EventType.CHAT_LOADED, chat_id=chat_id, message_count=len(history))
+        return history
     
     def save_chat(self, chat_id: str, history: ConversationHistory) -> str:
         """
@@ -126,6 +141,7 @@ class ChatService:
                 chat_id = chat_id[:-5]
         
         self._history_repo.save(chat_id, history)
+        self._emit(EventType.CHAT_SAVED, chat_id=chat_id, message_count=len(history))
         return chat_id
     
     def delete_chat(self, chat_id: str) -> bool:
@@ -142,7 +158,10 @@ class ChatService:
         bool
             True if deleted successfully, False otherwise.
         """
-        return self._history_repo.delete(chat_id)
+        result = self._history_repo.delete(chat_id)
+        if result:
+            self._emit(EventType.CHAT_DELETED, chat_id=chat_id)
+        return result
     
     def list_chats(self) -> List[Dict[str, Any]]:
         """

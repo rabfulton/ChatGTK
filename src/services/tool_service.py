@@ -12,6 +12,7 @@ from tools import (
     is_chat_completion_model,
     append_tool_guidance,
 )
+from events import EventBus, EventType, Event
 
 
 @dataclass
@@ -39,6 +40,7 @@ class ToolService:
         music_handler: Optional[Callable] = None,
         read_aloud_handler: Optional[Callable] = None,
         search_handler: Optional[Callable] = None,
+        event_bus: Optional[EventBus] = None,
     ):
         """
         Initialize the tool service.
@@ -55,6 +57,8 @@ class ToolService:
             Handler for read aloud tool.
         search_handler : Optional[Callable]
             Handler for search/memory tool.
+        event_bus : Optional[EventBus]
+            Event bus for publishing events.
         """
         self._tool_manager = tool_manager
         self._handlers = {
@@ -63,6 +67,12 @@ class ToolService:
             'read_aloud': read_aloud_handler,
             'search': search_handler,
         }
+        self._event_bus = event_bus
+    
+    def _emit(self, event_type: EventType, **data) -> None:
+        """Emit an event if event bus is configured."""
+        if self._event_bus:
+            self._event_bus.publish(Event(type=event_type, data=data, source='tool_service'))
     
     def execute_tool(
         self,
@@ -87,6 +97,8 @@ class ToolService:
         ToolExecutionResult
             The result of tool execution.
         """
+        self._emit(EventType.TOOL_EXECUTED, tool_name=tool_name, args=args, chat_id=chat_id)
+        
         try:
             # Create tool context
             context = ToolContext(
@@ -99,6 +111,8 @@ class ToolService:
             # Execute tool
             result = run_tool_call(tool_name, args, context)
             
+            self._emit(EventType.TOOL_RESULT, tool_name=tool_name, success=True, result=result[:200] if result else '')
+            
             return ToolExecutionResult(
                 success=True,
                 result=result,
@@ -106,6 +120,7 @@ class ToolService:
             )
             
         except Exception as e:
+            self._emit(EventType.TOOL_RESULT, tool_name=tool_name, success=False, error=str(e))
             return ToolExecutionResult(
                 success=False,
                 result='',
