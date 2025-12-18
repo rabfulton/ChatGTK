@@ -320,11 +320,39 @@ class ConversationHistory:
 
 
 # ---------------------------------------------------------------------------
-# Standalone helper functions for backward compatibility
+# Standalone helper functions (deprecated - use ConversationHistory methods)
+# ---------------------------------------------------------------------------
+# These functions are maintained for backward compatibility but are deprecated.
+# New code should use ConversationHistory class methods instead:
+#   - ConversationHistory.add_user_message()
+#   - ConversationHistory.add_assistant_message()
+#   - ConversationHistory(system_message=...) for system messages
 # ---------------------------------------------------------------------------
 
+import warnings
+
+_DEPRECATION_WARNED = set()  # Track which warnings have been shown
+
+
+def _warn_once(func_name: str, alternative: str) -> None:
+    """Show deprecation warning once per function."""
+    if func_name not in _DEPRECATION_WARNED:
+        _DEPRECATION_WARNED.add(func_name)
+        warnings.warn(
+            f"{func_name}() is deprecated. Use {alternative} instead. "
+            "This function will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=3
+        )
+
+
 def create_system_message(content: str) -> Dict[str, Any]:
-    """Create a system message dict."""
+    """Create a system message dict.
+    
+    .. deprecated::
+        Use ``ConversationHistory(system_message=content)`` instead.
+    """
+    # Note: Not warning for system messages as they're commonly used at init
     return {"role": "system", "content": content, "provider_meta": {}}
 
 
@@ -334,6 +362,9 @@ def create_user_message(
     files: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Create a user message dict.
+    
+    .. deprecated::
+        Use ``ConversationHistory.add_user_message()`` instead.
     
     Parameters
     ----------
@@ -365,7 +396,11 @@ def create_assistant_message(
     content: str,
     provider_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Create an assistant message dict."""
+    """Create an assistant message dict.
+    
+    .. deprecated::
+        Use ``ConversationHistory.add_assistant_message()`` instead.
+    """
     return {
         "role": "assistant",
         "content": content,
@@ -374,7 +409,11 @@ def create_assistant_message(
 
 
 def get_first_user_content(history: List[Dict[str, Any]]) -> str:
-    """Get the content of the first user message in a history."""
+    """Get the content of the first user message in a history.
+    
+    .. deprecated::
+        Use ``ConversationHistory.get_first_user_message()`` instead.
+    """
     for msg in history:
         if msg.get("role") == "user":
             return msg.get("content", "")
