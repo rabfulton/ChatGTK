@@ -64,6 +64,9 @@ class ModelCacheRepository:
         """
         provider = provider.lower()
         provider_data = self._cache.get(provider, {})
+        # Handle both formats: list directly or {'models': [...]}
+        if isinstance(provider_data, list):
+            return provider_data
         return provider_data.get('models', [])
     
     def set_models(self, provider: str, models: List[str]) -> None:

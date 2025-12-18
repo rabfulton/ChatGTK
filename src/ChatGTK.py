@@ -27,9 +27,6 @@ from utils import (
     load_settings,
     save_settings,
     generate_chat_name,
-    save_chat_history,
-    load_chat_history,
-    list_chat_histories,
     get_chat_metadata,
     get_chat_title,
     get_chat_dir,
@@ -909,6 +906,11 @@ class OpenAIGTKClient(Gtk.Window):
         """Get custom_providers from controller."""
         return self.controller.custom_providers
 
+    @custom_providers.setter
+    def custom_providers(self, value):
+        """Set custom_providers on controller."""
+        self.controller.custom_providers = value
+
     @property
     def tool_manager(self):
         """Get tool_manager from controller."""
@@ -966,6 +968,17 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Error events
         bus.subscribe(EventType.ERROR_OCCURRED, self._on_error_event)
+        
+        # Thinking/processing state events
+        bus.subscribe(EventType.THINKING_STARTED, self._on_thinking_started_event)
+        bus.subscribe(EventType.THINKING_STOPPED, self._on_thinking_stopped_event)
+        
+        # Message events (for controller-driven message additions)
+        bus.subscribe(EventType.MESSAGE_SENT, self._on_message_sent_event)
+        bus.subscribe(EventType.MESSAGE_RECEIVED, self._on_message_received_event)
+        
+        # Image events
+        bus.subscribe(EventType.IMAGE_GENERATED, self._on_image_generated_event)
 
     def _on_chat_loaded_event(self, event):
         """Handle CHAT_LOADED event - refresh UI."""
@@ -1002,6 +1015,54 @@ class OpenAIGTKClient(Gtk.Window):
         context = event.data.get('context', '')
         message = f"{context}: {error}" if context else error
         GLib.idle_add(self.display_error, message)
+
+    def _on_thinking_started_event(self, event):
+        """Handle THINKING_STARTED event - show thinking animation."""
+        GLib.idle_add(self.show_thinking_animation)
+
+    def _on_thinking_stopped_event(self, event):
+        """Handle THINKING_STOPPED event - hide thinking animation."""
+        GLib.idle_add(self.hide_thinking_animation)
+
+    def emit_thinking_started(self, model: str = None):
+        """Emit THINKING_STARTED event and show animation."""
+        self.controller.event_bus.publish(Event(
+            type=EventType.THINKING_STARTED,
+            data={'model': model},
+            source='ui'
+        ))
+
+    def emit_thinking_stopped(self):
+        """Emit THINKING_STOPPED event and hide animation."""
+        self.controller.event_bus.publish(Event(
+            type=EventType.THINKING_STOPPED,
+            data={},
+            source='ui'
+        ))
+
+    def _on_message_sent_event(self, event):
+        """Handle MESSAGE_SENT event - display user message in UI."""
+        content = event.data.get('content', '')
+        index = event.data.get('index', 0)
+        # Only handle if source is controller (avoid double-display)
+        if event.source == 'controller':
+            formatted = format_response(content)
+            GLib.idle_add(lambda: self.append_message('user', formatted, index))
+
+    def _on_message_received_event(self, event):
+        """Handle MESSAGE_RECEIVED event - display assistant message in UI."""
+        content = event.data.get('content', '')
+        index = event.data.get('index', 0)
+        # Only handle if source is controller (avoid double-display)
+        if event.source == 'controller':
+            formatted = format_response(content)
+            GLib.idle_add(lambda: self.append_message('ai', formatted, index))
+
+    def _on_image_generated_event(self, event):
+        """Handle IMAGE_GENERATED event - log for debugging."""
+        image_path = event.data.get('image_path', '')
+        prompt = event.data.get('prompt', '')[:50]
+        print(f"[Event] Image generated: {image_path} for prompt: {prompt}...")
 
     # -----------------------------------------------------------------------
     # System prompt management
@@ -1280,28 +1341,43 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _normalize_image_tags(self, text):
         """
-        Normalize any <img ...> tags emitted by models into the self-closing
-        <img src="..."/> form that the UI expects, stripping any extra
-        attributes like alt= so they are not shown as raw markup. If the same
-        image src appears multiple times, keep only the first occurrence to
-        avoid displaying duplicate images.
+        Normalize image references into the self-closing <img src="..."/> form
+        that the UI expects. Handles:
+        - HTML <img> tags with extra attributes
+        - Markdown image syntax ![alt](path) or ![alt](sandbox:path)
+        
+        Deduplicates images by src to avoid displaying the same image multiple times.
         """
         if not text:
             return text
         import re
+        
+        seen_src = set()
+        
+        # First, convert markdown images to HTML: ![alt](path) or ![alt](sandbox:path)
+        def md_to_html(match):
+            path = match.group(2)
+            # Strip sandbox: prefix if present
+            if path.startswith('sandbox:'):
+                path = path[8:]
+            if path in seen_src:
+                return ""
+            seen_src.add(path)
+            return f'<img src="{path}"/>'
+        
+        text = re.sub(r'!\[([^\]]*)\]\((?:sandbox:)?([^)]+)\)', md_to_html, text)
+        
+        # Then normalize HTML img tags
         pattern = re.compile(r'<img\s+src="([^"]+)"[^>]*>', re.IGNORECASE)
 
         result_parts = []
         last_end = 0
-        seen_src = set()
 
         for match in pattern.finditer(text):
-            # Add any text before this tag unchanged.
             result_parts.append(text[last_end:match.start()])
             src = match.group(1)
 
             if src in seen_src:
-                # Skip duplicate image tags for the same src.
                 replacement = ""
             else:
                 seen_src.add(src)
@@ -1310,17 +1386,41 @@ class OpenAIGTKClient(Gtk.Window):
             result_parts.append(replacement)
             last_end = match.end()
 
-        # Add any remaining text after the last tag.
         result_parts.append(text[last_end:])
         return "".join(result_parts)
 
     def generate_image_for_model(self, model, prompt, last_msg, chat_id, provider_name, has_attached_images):
         """
-        Central helper to generate an image for any supported provider/model
-        combination, reusing the underlying provider-specific generate_image
-        implementations and attachment semantics.
+        Central helper to generate an image for any supported provider/model.
+        Delegates to ImageGenerationService.
         """
-        provider = None
+        # Prepare image data for editing
+        image_data = None
+        mime_type = None
+        
+        card = get_card(model, self.custom_models)
+        supports_image_edit = card.capabilities.image_edit if card else False
+        
+        if supports_image_edit and has_attached_images and last_msg.get("images"):
+            img = last_msg["images"][0]
+            image_data = img.get("data")
+            mime_type = img.get("mime_type")
+        
+        # Get provider
+        provider = self._get_image_provider(model, provider_name)
+        
+        return self.controller.image_service.generate_image(
+            prompt=prompt,
+            model=model,
+            provider=provider,
+            provider_name=provider_name,
+            chat_id=chat_id,
+            image_data=image_data,
+            mime_type=mime_type,
+        )
+    
+    def _get_image_provider(self, model, provider_name):
+        """Get or initialize provider for image generation."""
         if provider_name == "custom":
             provider = self.custom_providers.get(model)
             if not provider:
@@ -1337,6 +1437,7 @@ class OpenAIGTKClient(Gtk.Window):
                     voice=cfg.get("voice"),
                 )
                 self.custom_providers[model] = provider
+            return provider
         else:
             provider = self.providers.get(provider_name)
             if not provider:
@@ -1344,39 +1445,7 @@ class OpenAIGTKClient(Gtk.Window):
                 provider = self.initialize_provider(provider_name, api_key)
                 if not provider:
                     raise ValueError(f"{provider_name.title()} provider is not initialized")
-
-        # Check if model supports image editing via card
-        card = get_card(model, self.custom_models)
-        supports_image_edit = card.capabilities.image_edit if card else False
-
-        # OpenAI image models.
-        if provider_name == 'openai':
-            image_data = None
-            if supports_image_edit and has_attached_images:
-                image_data = last_msg["images"][0]["data"]
-            return provider.generate_image(prompt, chat_id, model, image_data)
-
-        if provider_name == 'custom':
-            return provider.generate_image(prompt, chat_id, model)
-
-        # Gemini image models support both text→image and image→image.
-        if provider_name == 'gemini':
-            if supports_image_edit and has_attached_images:
-                img = last_msg["images"][0]
-                return provider.generate_image(
-                    prompt,
-                    chat_id,
-                    model,
-                    image_data=img["data"],
-                    mime_type=img.get("mime_type")
-                )
-            return provider.generate_image(prompt, chat_id, model)
-
-        # Grok image models are currently text → image only.
-        if provider_name == 'grok':
-            return provider.generate_image(prompt, chat_id, model)
-
-        raise ValueError(f"Image generation not supported for provider: {provider_name}")
+            return provider
 
     def generate_image_via_preferred_model(self, prompt, last_msg, image_path=None):
         """
@@ -1941,7 +2010,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Pass ai_provider, providers dict, and api_keys to the settings dialog
         dialog = SettingsDialog(
             self,
-            ai_provider=ai_provider,
+            ai_provider=self.providers.get('openai'),
             providers=self.providers,
             api_keys=current_api_keys,
             **{k.lower(): getattr(self, k.lower()) for k in SETTINGS_CONFIG.keys()}
@@ -2233,7 +2302,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.append_message('user', question, msg_index)
             self.conversation_history.append(create_user_message(question))
             self.entry_question.set_text("")
-            self.show_thinking_animation()
+            self.emit_thinking_started(target_model)
             threading.Thread(
                 target=self.call_ai_api,
                 args=(target_model,),
@@ -2413,7 +2482,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.entry_question.set_text("")
         
         # Show thinking animation before API call
-        self.show_thinking_animation()
+        self.emit_thinking_started(target_model)
         
         # Call provider API in a separate thread
         threading.Thread(
@@ -2803,7 +2872,7 @@ class OpenAIGTKClient(Gtk.Window):
 
             # Update UI in main thread
             formatted_answer = format_response(answer)
-            GLib.idle_add(self.hide_thinking_animation)
+            GLib.idle_add(self.emit_thinking_stopped)
             GLib.idle_add(lambda idx=message_index, msg=formatted_answer: self.append_message('ai', msg, idx))
             GLib.idle_add(self.save_current_chat)
             
@@ -2818,14 +2887,14 @@ class OpenAIGTKClient(Gtk.Window):
             # Only show error if not cancelled
             if not (hasattr(self, 'request_cancelled') and self.request_cancelled):
                 print(f"\nAPI Call Error: {error}")
-                GLib.idle_add(self.hide_thinking_animation)
+                GLib.idle_add(self.emit_thinking_stopped)
                 error_message = f"** Error: {str(error)} **"
                 message_index = len(self.conversation_history)
                 self.conversation_history.append(create_assistant_message(error_message))
                 GLib.idle_add(lambda idx=message_index, msg=error_message: self.append_message('ai', msg, idx))
             
         finally:
-            GLib.idle_add(self.hide_thinking_animation)
+            GLib.idle_add(self.emit_thinking_stopped)
 
     def audio_transcription(self, widget):
         """Handle audio transcription."""
@@ -3360,8 +3429,8 @@ class OpenAIGTKClient(Gtk.Window):
         for child in self.history_list.get_children():
             self.history_list.remove(child)
         
-        # Get histories from utils
-        histories = list_chat_histories()
+        # Get histories via controller
+        histories = self.controller.list_chats()
 
         filter_text = (self.history_filter_text or "").strip()
         if filter_text:
@@ -3379,24 +3448,33 @@ class OpenAIGTKClient(Gtk.Window):
             vbox.set_margin_start(10)
             vbox.set_margin_end(10)
             
-            # Get chat title (will use custom title if it exists)
-            title = get_chat_title(history['filename'])
+            # Get chat title - use title from service or fall back to get_chat_title
+            chat_id = history.get('chat_id') or history.get('filename', '')
+            title = history.get('title') or get_chat_title(chat_id)
             
             title_label = Gtk.Label(label=title, xalign=0)
             title_label.get_style_context().add_class('title')
             title_label.set_line_wrap(False)
             title_label.set_ellipsize(Pango.EllipsizeMode.END)
             
-            # Timestamp label
-            timestamp = self.get_chat_timestamp(history['filename'])
-            time_label = Gtk.Label(label=timestamp, xalign=0)
+            # Timestamp label - use timestamp from service or fall back
+            timestamp = history.get('timestamp') or self.get_chat_timestamp(chat_id)
+            if isinstance(timestamp, str) and 'T' in timestamp:
+                # Format ISO timestamp
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    timestamp = dt.strftime("%Y-%m-%d %H:%M")
+                except:
+                    pass
+            time_label = Gtk.Label(label=str(timestamp), xalign=0)
             time_label.get_style_context().add_class('timestamp')
             
             vbox.pack_start(title_label, True, True, 0)
             vbox.pack_start(time_label, True, True, 0)
             
             row.add(vbox)
-            row.filename = history['filename']
+            row.filename = chat_id
             
             self.history_list.add(row)
         
@@ -3466,25 +3544,29 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _history_matches_filter(self, history, filter_text):
         """Check if a history entry matches the current filter."""
+        # Get chat_id from either format
+        chat_id = history.get('chat_id') or history.get('filename', '')
+        title = history.get('title') or get_chat_title(chat_id)
+        
         # Titles/filenames check always applies
-        title = get_chat_title(history['filename'])
-        filename = history['filename']
-        if self._text_matches_filter(f"{title} {filename}", filter_text):
+        if self._text_matches_filter(f"{title} {chat_id}", filter_text):
             return True
 
         # If in titles-only mode, stop here
         if self.history_filter_titles_only:
             return False
 
-        # Full-content search: scan messages for substring match
+        # Full-content search via repository
         try:
-            messages = load_chat_history(history['filename'], messages_only=True)
-            for msg in messages:
-                content = msg.get("content", "")
-                if isinstance(content, str) and self._text_matches_filter(content, filter_text):
-                    return True
+            conv = self.controller._chat_history_repo.get(chat_id)
+            if conv:
+                messages = conv.to_list() if hasattr(conv, 'to_list') else conv
+                for msg in messages:
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and self._text_matches_filter(content, filter_text):
+                        return True
         except Exception as e:
-            print(f"Error filtering history {filename}: {e}")
+            print(f"Error filtering history {chat_id}: {e}")
         return False
 
     def _text_matches_filter(self, text, filter_text):
@@ -3546,15 +3628,15 @@ class OpenAIGTKClient(Gtk.Window):
         if save_current and self.current_chat_id is None and len(self.conversation_history) > 1:
             self.save_current_chat()
         
-        # Load the selected chat history
-        history = load_chat_history(filename, messages_only=True)  # Only get messages
-        if history:
-            # Update conversation history and chat ID
+        # Load via controller
+        chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
+        if self.controller.load_chat(chat_id):
+            # Sync from controller
+            history = self.controller.conversation_history
             self.conversation_history = history
-            self.current_chat_id = filename
+            self.current_chat_id = self.controller.current_chat_id
             
-            # Save the last active chat to settings (remove .json extension for storage)
-            chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
+            # Save the last active chat to settings
             self.last_active_chat = chat_id
             save_object_settings(self)
             
@@ -3647,44 +3729,23 @@ class OpenAIGTKClient(Gtk.Window):
         self.load_chat_by_filename(row.filename)
 
     def save_current_chat(self):
-        """Save the current chat history."""
+        """Save the current chat history via controller."""
         if len(self.conversation_history) > 1:  # More than just the system message
-            # Check if the chat already has a model name
-            if len(self.conversation_history) > 0 and "model" in self.conversation_history[0]:
-                current_model = self.conversation_history[0]["model"]
-            else:
-                current_model = self._get_model_id_from_combo()
-
-            # Only store the model name if it's not dall-e-3 and does not contain "tts" or "audio"
-            # Exception: if no model is saved yet, this is the primary model - save it regardless
+            # Track model in system message
+            current_model = self._get_model_id_from_combo()
             has_existing_model = len(self.conversation_history) > 0 and "model" in self.conversation_history[0]
             is_excluded = "dall-e" in current_model.lower() or "tts" in current_model.lower() or "audio" in current_model.lower()
             if not has_existing_model or not is_excluded:
                 self.conversation_history[0]["model"] = current_model
 
-            # TODO: This may be reduntant
-            if self.current_chat_id is None:
-                # New chat - generate name and save
-                chat_name = generate_chat_name(self.conversation_history[1]['content'])
-                self.current_chat_id = chat_name
-            else:
-                # Existing chat - use current ID
-                chat_name = self.current_chat_id
+            # Sync conversation to controller and save
+            self.controller.conversation_history = self.conversation_history
+            chat_id = self.controller.save_current_chat()
             
-            try:
-                # Get any existing metadata before saving
-                metadata = get_chat_metadata(chat_name)
-                save_chat_history(chat_name, self.conversation_history, metadata)
-            except Exception as e:
-                print(f"Error preserving metadata: {e}")
-                # Fall back to original save behavior
-                save_chat_history(chat_name, self.conversation_history)
-            
-            # Update the last active chat to the current one
-            self.last_active_chat = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
-            save_object_settings(self)
-            
-            self.refresh_history_list()
+            if chat_id:
+                self.current_chat_id = chat_id
+                self.last_active_chat = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
+                save_object_settings(self)
 
     def show_thinking_animation(self):
         """Show an animated thinking indicator with loader and cancel button."""
@@ -3965,12 +4026,14 @@ class OpenAIGTKClient(Gtk.Window):
                 # Update the visible title
                 history_row.get_children()[0].get_children()[0].set_text(new_name)
                 
-                # Load and update the chat history
-                history = load_chat_history(history_row.filename)
-                if history:
-                    # Update the first message which is used as the title
-                    history[1]['content'] = new_name  # Update first user message
-                    save_chat_history(history_row.filename, history)
+                # Load and update the chat history via repository
+                chat_id = history_row.filename.replace('.json', '') if history_row.filename.endswith('.json') else history_row.filename
+                conv = self.controller._chat_history_repo.get(chat_id)
+                if conv:
+                    history = conv.to_list() if hasattr(conv, 'to_list') else conv
+                    # Update the first user message which is used as the title
+                    history[1]['content'] = new_name
+                    self.controller._chat_history_repo.save(chat_id, history)
         
         dialog.destroy()
 
@@ -4016,8 +4079,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if not filename.endswith('.pdf'):
                     filename += '.pdf'
                     
-                # Load the chat history
-                history = load_chat_history(history_row.filename, messages_only=True)
+                # Load the chat history via controller
+                chat_id = history_row.filename.replace('.json', '') if history_row.filename.endswith('.json') else history_row.filename
+                conv = self.controller._chat_history_repo.get(chat_id)
+                history = conv.to_list() if conv and hasattr(conv, 'to_list') else conv
                 if history:
                     # Use the sidebar chat title and present it with capitalized words
                     chat_title = get_chat_title(history_row.filename)

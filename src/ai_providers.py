@@ -894,7 +894,8 @@ class CustomProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                if tool_result and not should_hide_tool_result(tool_result):
+                # Always add stripped result to snippets for UI display
+                if tool_result:
                     tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
@@ -906,11 +907,11 @@ class CustomProvider(AIProvider):
                     "arguments": fc["arguments"],
                 })
                 
-                # Then add the function result
+                # Then add the function result (hidden results send empty to model)
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": "" if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -1563,7 +1564,8 @@ class OpenAIProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                if tool_result and not should_hide_tool_result(tool_result):
+                # Always add stripped result to snippets for UI display
+                if tool_result:
                     tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
@@ -1575,11 +1577,11 @@ class OpenAIProvider(AIProvider):
                     "arguments": fc["arguments"],
                 })
                 
-                # Then add the function result
+                # Then add the function result (hidden results send empty to model)
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": "" if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -3230,10 +3232,15 @@ class GeminiProvider(AIProvider):
                         continue
                     name = fn.get("name")
                     args = fn.get("args") or {}
+                    print(f"[GeminiProvider] Found functionCall: {name} with args: {args}")
 
                     tool_output = run_tool_call(name, args, tool_context)
+                    print(f"[GeminiProvider] Tool output: {tool_output[:100] if tool_output else 'None'}...")
 
                     if tool_output:
+                        # Strip the hide prefix for UI display
+                        display_output = strip_hide_prefix(tool_output)
+                        print(f"[GeminiProvider] Display output: {display_output[:100] if display_output else 'None'}...")
                         # Build a caption based on the tool name.
                         if name == "generate_image":
                             caption = f"Generated image for prompt: {args.get('prompt', '')}".strip()
@@ -3243,9 +3250,11 @@ class GeminiProvider(AIProvider):
                             caption = f"Read aloud: {args.get('text', '')[:50]}...".strip() if len(args.get('text', '')) > 50 else f"Read aloud: {args.get('text', '')}".strip()
                         else:
                             caption = ""
-                        segment = f"{caption}\n{tool_output}" if caption else tool_output
+                        segment = f"{caption}\n{display_output}" if caption else display_output
                         tool_segments.append(segment)
 
+            print(f"[GeminiProvider] base_text: {base_text[:100] if base_text else 'None'}...")
+            print(f"[GeminiProvider] tool_segments count: {len(tool_segments)}")
             if not tool_segments:
                 return base_text
 
