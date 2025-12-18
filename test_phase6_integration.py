@@ -218,6 +218,48 @@ def test_model_selector_component():
     return True
 
 
+def test_toolbar_component():
+    """Test Toolbar component structure."""
+    print("\nTesting Toolbar component...")
+    
+    from ui import Toolbar
+    from events import EventBus
+    
+    bus = EventBus()
+    
+    # Track callbacks
+    toggled = []
+    settings_clicked = []
+    tools_clicked = []
+    
+    # Test creation
+    toolbar = Toolbar(
+        event_bus=bus,
+        on_sidebar_toggle=lambda: toggled.append(True),
+        on_settings=lambda: settings_clicked.append(True),
+        on_tools=lambda: tools_clicked.append(True),
+        sidebar_visible=True,
+    )
+    assert toolbar.widget is not None
+    print("✓ Toolbar creates widget")
+    
+    # Test it has required elements
+    assert hasattr(toolbar, 'sidebar_button')
+    assert hasattr(toolbar, 'btn_settings')
+    assert hasattr(toolbar, 'btn_tools')
+    print("✓ Toolbar has required UI elements")
+    
+    # Test sidebar visibility toggle
+    toolbar.set_sidebar_visible(False)
+    toolbar.set_sidebar_visible(True)
+    print("✓ Sidebar visibility toggle works")
+    
+    # Cleanup
+    toolbar.cleanup()
+    
+    return True
+
+
 def test_event_subscriptions_exist():
     """Test that ChatGTK has event subscription infrastructure."""
     print("\nTesting event subscription infrastructure...")
@@ -283,6 +325,7 @@ def main():
         ("ChatView component", test_chat_view_component),
         ("InputPanel component", test_input_panel_component),
         ("ModelSelector component", test_model_selector_component),
+        ("Toolbar component", test_toolbar_component),
         ("Event subscription infrastructure", test_event_subscriptions_exist),
         ("UI event types", test_event_types_for_ui),
     ]

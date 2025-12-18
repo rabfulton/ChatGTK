@@ -268,6 +268,8 @@ class HistorySidebar(UIComponent):
     
     def _on_new_chat_clicked(self, button) -> None:
         """Handle new chat button click."""
+        self._current_chat_id = None
+        self.history_list.unselect_all()
         if self._on_new_chat:
             self._on_new_chat()
     
@@ -334,8 +336,15 @@ class HistorySidebar(UIComponent):
         return False
     
     def _on_chat_event(self, event) -> None:
-        """Handle chat events - refresh list."""
-        self.schedule_ui_update(self.refresh)
+        """Handle chat events - refresh list and select new chats."""
+        chat_id = event.data.get('chat_id', '')
+        is_new = event.type == EventType.CHAT_CREATED
+        def update():
+            self.refresh()
+            if is_new and chat_id:
+                self._current_chat_id = chat_id
+                self.select_chat(chat_id)
+        self.schedule_ui_update(update)
     
     def _on_chat_loaded(self, event) -> None:
         """Handle chat loaded - update selection."""
