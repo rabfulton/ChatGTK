@@ -16,8 +16,6 @@ DEFAULT_SETTINGS = {key: config['default'] for key, config in SETTINGS_CONFIG.it
 # Known API key fields we persist in a separate JSON file under PARENT_DIR.
 API_KEY_FIELDS = ['openai', 'gemini', 'grok', 'claude', 'perplexity']
 
-import os
-
 def get_api_key_env_vars():
     """
     Scan environment variables and return those matching *API_KEY or *API_SECRET pattern.

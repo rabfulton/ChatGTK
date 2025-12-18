@@ -5,7 +5,6 @@ import gi
 import json
 import re
 import threading
-import os  # Import os to read/write environment variables and settings
 import sounddevice as sd  # For recording audio
 import soundfile as sf    # For saving audio files
 import numpy as np       # For audio processing
@@ -73,8 +72,6 @@ from conversation import (
 )
 from controller import ChatController
 from message_renderer import MessageRenderer, RenderSettings, RenderCallbacks, create_source_view
-# Initialize provider as None
-ai_provider = None
 
 gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
@@ -388,7 +385,6 @@ class OpenAIGTKClient(Gtk.Window):
                     
                     # Verify the file exists before trying to load
                     from config import HISTORY_DIR
-                    import os
                     chat_path = os.path.join(HISTORY_DIR, chat_filename)
                     if os.path.exists(chat_path):
                         self.load_chat_by_filename(chat_filename, save_current=False)
@@ -679,9 +675,6 @@ class OpenAIGTKClient(Gtk.Window):
         card = get_card(model_id, self.custom_models)
         if card and getattr(card, "temperature", None) is not None:
             return float(card.temperature)
-        # Preserve legacy quirk as a hard stop if no explicit temperature is set
-        if card and card.quirks.get("no_temperature"):
-            return None
         return None
 
     def update_model_list(self, models, current_model=None):
