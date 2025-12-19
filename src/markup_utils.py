@@ -126,6 +126,9 @@ def escape_for_pango_markup(text):
 
 def format_response(text):
     """Apply all formatting to a response."""
+    # Unescape literal \$ so currency renders correctly (avoid math delimiters).
+    text = text.replace(r"\$", "$")
+
     # Format bullet points first
     text = format_bullet_points(text)
 

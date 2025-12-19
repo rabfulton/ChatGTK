@@ -87,6 +87,7 @@ CHAT_PDF_TEMPLATE = r"""
 
 # Special characters mapping
 SPECIAL_CHARS = {
+    '$': r'\$',
     'Ω': r'\Omega',
     'π': r'\pi',
     'μ': r'\mu',

@@ -2277,6 +2277,9 @@ class OpenAIGTKClient(Gtk.Window):
             images=images if images else None,
             files=files if files else None,
         )
+        # Store display_content if it differs from the API content
+        if display_text != question:
+            user_msg["display_content"] = display_text
             
         self.conversation_history.append(user_msg)
         
@@ -2879,8 +2882,10 @@ class OpenAIGTKClient(Gtk.Window):
             for idx, message in enumerate(history):
                 if message['role'] != 'system':  # Skip system message
                     message_index = idx
+                    # Use display_content if available, otherwise fall back to content
+                    content = message.get('display_content') or message['content']
                     if message['role'] == 'user':
-                        formatted_content = format_response(message['content'])
+                        formatted_content = format_response(content)
                         self.append_message('user', formatted_content, message_index)
                     elif message['role'] == 'assistant':
                         formatted_content = format_response(message['content'])
