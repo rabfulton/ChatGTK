@@ -1156,57 +1156,23 @@ class OpenAIGTKClient(Gtk.Window):
         # Unknown model - default to openai
         return 'openai'
 
-    def _is_image_model_for_provider(self, model_name, provider_name):
-        """
-        Return True if the given model for the specified provider should be
-        treated as an image-generation model.
-        """
-        return self.controller.tool_service.is_image_model(model_name, provider_name, self.custom_models)
-
-    def _supports_image_tools(self, model_name):
-        """
-        Return True if the given model should be offered the image-generation
-        tool. Delegates to ToolService.
-        """
-        return self.controller.tool_service.supports_image_tools(model_name, self.model_provider_map, self.custom_models)
-
-    def _supports_music_tools(self, model_name):
-        """
-        Return True if the given model should be offered the music-control tool.
-        Delegates to ToolService.
-        """
-        return self.controller.tool_service.supports_music_tools(model_name, self.model_provider_map, self.custom_models)
-
-    def _supports_read_aloud_tools(self, model_name):
-        """
-        Return True if the given model should be offered the read-aloud tool.
-        Delegates to ToolService.
-        """
-        return self.controller.tool_service.supports_read_aloud_tools(model_name, self.model_provider_map, self.custom_models)
-
-    def _supports_search_tools(self, model_name):
-        """
-        Return True if the given model should be offered the search/memory tool.
-        Delegates to ToolService.
-        """
-        return self.controller.tool_service.supports_search_tools(model_name, self.model_provider_map, self.custom_models)
-
     def _build_tool_handlers(self, model: str, last_msg: dict) -> dict:
         """Build tool handler kwargs for a model."""
         handlers = {}
+        ts = self.controller.tool_service
         
-        if self._supports_image_tools(model):
+        if ts.supports_image_tools(model, self.model_provider_map, self.custom_models):
             handlers["image_tool_handler"] = lambda prompt_arg, image_path=None: \
                 self.generate_image_via_preferred_model(prompt_arg, last_msg, image_path)
         
-        if self._supports_music_tools(model):
+        if ts.supports_music_tools(model, self.model_provider_map, self.custom_models):
             handlers["music_tool_handler"] = lambda action, keyword=None, volume=None: \
                 self.control_music_via_beets(action, keyword=keyword, volume=volume)
         
-        if self._supports_read_aloud_tools(model):
+        if ts.supports_read_aloud_tools(model, self.model_provider_map, self.custom_models):
             handlers["read_aloud_tool_handler"] = lambda text: self._handle_read_aloud_tool(text)
         
-        if self._supports_search_tools(model):
+        if ts.supports_search_tools(model, self.model_provider_map, self.custom_models):
             handlers["search_tool_handler"] = lambda keyword, source=None: \
                 self._handle_search_memory_tool(keyword, source)
         
@@ -1288,7 +1254,7 @@ class OpenAIGTKClient(Gtk.Window):
         # For standard image models, verify they're recognized. For custom models,
         # trust the user's selection - they may have configured a responses API model
         # that can generate images.
-        is_standard_image_model = self._is_image_model_for_provider(preferred_model, provider_name)
+        is_standard_image_model = self.controller.tool_service.is_image_model(preferred_model, provider_name, self.custom_models)
         is_custom_model = provider_name == "custom" and preferred_model in (self.custom_models or {})
         
         if not is_standard_image_model and not is_custom_model:
@@ -2314,7 +2280,6 @@ class OpenAIGTKClient(Gtk.Window):
 
     def call_ai_api(self, model):
         """Call AI API - delegates to controller.send_message()."""
-        print(f"[ChatGTK] call_ai_api called with model: {model}")
         # Build tool handlers (these reference UI methods)
         last_msg = self.conversation_history[-1]
         tool_handlers = self._build_tool_handlers(model, last_msg)
@@ -2325,9 +2290,6 @@ class OpenAIGTKClient(Gtk.Window):
             tool_handlers=tool_handlers,
             cancel_check=lambda: getattr(self, 'request_cancelled', False),
         )
-        
-        # Read aloud after response (controller emits MESSAGE_RECEIVED)
-        # This is handled in _on_message_received_event now
 
     def audio_transcription(self, widget):
         """Handle audio transcription."""

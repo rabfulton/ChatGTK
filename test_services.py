@@ -87,10 +87,6 @@ def test_chat_service():
     results = chat_service.search_history("test", limit=5)
     print(f"✓ Search returned {len(results)} results")
     
-    # Test conversation buffer limit
-    limit = chat_service.get_conversation_buffer_limit()
-    print(f"✓ Conversation buffer limit: {limit}")
-    
     # Test message preparation
     history = ConversationHistory(system_message="Test system")
     history.add_user_message("Hello")

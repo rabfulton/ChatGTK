@@ -576,6 +576,8 @@ class ChatController:
         """
         Determine which provider handles a given model.
         
+        Uses model cards as the single source of truth, with fallback heuristics.
+        
         Parameters
         ----------
         model : str
@@ -586,7 +588,17 @@ class ChatController:
         str
             The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom').
         """
-        # Check model_provider_map first
+        from model_cards import get_card
+        
+        if not model:
+            return 'openai'
+        
+        # Model card is the single source of truth
+        card = get_card(model, self.custom_models)
+        if card:
+            return card.provider
+        
+        # Fallback: check model_provider_map (from API fetch)
         if model in self.model_provider_map:
             return self.model_provider_map[model]
         
@@ -594,14 +606,14 @@ class ChatController:
         if model in (self.custom_models or {}):
             return "custom"
         
-        # Infer from model name
+        # Fallback heuristics for unknown models
         model_lower = model.lower()
+        if 'claude' in model_lower:
+            return 'claude'
         if 'gemini' in model_lower:
             return 'gemini'
         if 'grok' in model_lower:
             return 'grok'
-        if 'claude' in model_lower:
-            return 'claude'
         if 'sonar' in model_lower:
             return 'perplexity'
         

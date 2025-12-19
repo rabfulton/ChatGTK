@@ -2,8 +2,7 @@
 Chat service for managing conversation lifecycle and message handling.
 """
 
-import os
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from repositories import (
@@ -12,7 +11,6 @@ from repositories import (
     APIKeysRepository,
 )
 from conversation import ConversationHistory, Message, create_system_message
-from ai_providers import get_ai_provider
 from utils import generate_chat_name
 from events import EventBus, EventType, Event
 
@@ -51,10 +49,6 @@ class ChatService:
         self._settings_repo = settings_repo
         self._api_keys_repo = api_keys_repo
         self._event_bus = event_bus
-        
-        # Cache providers to avoid re-initialization
-        self._providers: Dict[str, Any] = {}
-        self._model_provider_map: Dict[str, str] = {}
     
     def _emit(self, event_type: EventType, **data) -> None:
         """Emit an event if event bus is configured."""
@@ -245,157 +239,4 @@ class ChatService:
         
         return messages
     
-    def get_provider(self, provider_name: str) -> Optional[Any]:
-        """
-        Get or initialize an AI provider.
-        
-        Parameters
-        ----------
-        provider_name : str
-            The provider name (e.g., 'openai', 'gemini').
-            
-        Returns
-        -------
-        Optional[Any]
-            The provider instance if available, None otherwise.
-        """
-        # Check if provider is already initialized
-        if provider_name in self._providers:
-            return self._providers[provider_name]
-        
-        # Get API key for provider
-        api_key = self._api_keys_repo.get_key(provider_name)
-        if not api_key:
-            # Check environment variables
-            env_key = os.environ.get(f'{provider_name.upper()}_API_KEY', '').strip()
-            if not env_key:
-                return None
-            api_key = env_key
-        
-        # Initialize provider
-        try:
-            provider = get_ai_provider(provider_name)
-            provider.initialize(api_key)
-            self._providers[provider_name] = provider
-            return provider
-        except Exception as e:
-            print(f"Error initializing provider {provider_name}: {e}")
-            return None
-    
-    def send_message(
-        self,
-        chat_id: str,
-        content: str,
-        model: str,
-        provider_name: str,
-        images: Optional[List[Dict]] = None,
-        files: Optional[List[Dict]] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        web_search_enabled: bool = False,
-        tool_handlers: Optional[Dict[str, Callable]] = None,
-        stream_callback: Optional[Callable[[str], None]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Send a message and get a response.
-        
-        Parameters
-        ----------
-        chat_id : str
-            The chat identifier.
-        content : str
-            The message content.
-        model : str
-            The model to use.
-        provider_name : str
-            The provider name.
-        images : Optional[List[Dict]]
-            List of image attachments.
-        files : Optional[List[Dict]]
-            List of file attachments.
-        temperature : Optional[float]
-            Temperature parameter for generation.
-        max_tokens : Optional[int]
-            Maximum tokens for generation.
-        web_search_enabled : bool
-            Whether web search is enabled.
-        tool_handlers : Optional[Dict[str, Callable]]
-            Dictionary of tool handler functions.
-        stream_callback : Optional[Callable[[str], None]]
-            Callback for streaming responses.
-            
-        Returns
-        -------
-        Dict[str, Any]
-            Dictionary containing:
-            - 'response': The AI response text
-            - 'chat_id': The actual chat ID used
-            - 'success': Whether the operation succeeded
-            - 'error': Error message if failed
-        """
-        try:
-            # Load or create conversation history
-            history = self.load_chat(chat_id)
-            if history is None:
-                system_message = self._settings_repo.get('SYSTEM_MESSAGE', 'You are a helpful assistant.')
-                history = ConversationHistory(default_system=system_message)
-            
-            # Add user message
-            history.add_user_message(content, images=images, files=files)
-            
-            # Get provider
-            provider = self.get_provider(provider_name)
-            if provider is None:
-                return {
-                    'success': False,
-                    'error': f'Provider {provider_name} not available',
-                    'chat_id': chat_id,
-                }
-            
-            # Prepare messages
-            buffer_limit = self._settings_repo.get('CONVERSATION_BUFFER_LIMIT')
-            messages = self.prepare_messages_for_model(history, model, buffer_limit=buffer_limit)
-            
-            # Generate response
-            response = provider.generate_chat_completion(
-                messages=messages,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                chat_id=chat_id,
-                web_search_enabled=web_search_enabled,
-                **(tool_handlers or {}),
-            )
-            
-            # Add assistant response to history
-            history.add_assistant_message(response)
-            
-            # Save chat
-            actual_chat_id = self.save_chat(chat_id, history)
-            
-            return {
-                'success': True,
-                'response': response,
-                'chat_id': actual_chat_id,
-            }
-            
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'chat_id': chat_id,
-            }
-    
-    def get_conversation_buffer_limit(self) -> Optional[int]:
-        """
-        Get the conversation buffer limit from settings.
-        
-        Returns
-        -------
-        Optional[int]
-            The buffer limit, or None if not set.
-        """
-        limit = self._settings_repo.get('CONVERSATION_BUFFER_LIMIT')
-        if limit is None or limit == 0:
-            return None
-        return int(limit)
+
