@@ -1978,7 +1978,7 @@ class OpenAIGTKClient(Gtk.Window):
         return response == Gtk.ResponseType.YES
 
     def display_error(self, message: str):
-        """Backward-compatible alias used by legacy call sites."""
+        """Display an error dialog. Alias for show_error_dialog."""
         self.show_error_dialog(message)
 
     def on_stream_content_received(self, content: str):
