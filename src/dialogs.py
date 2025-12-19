@@ -4204,12 +4204,18 @@ class SettingsDialog(Gtk.Dialog):
 class ToolsDialog(Gtk.Dialog):
     """Dialog for configuring tool enablement (image, music, web search, read aloud)."""
 
-    def __init__(self, parent, tool_use_supported=True, **settings):
+    def __init__(self, parent, tool_use_supported=True, current_model=None, **settings):
         super().__init__(title="Tools", transient_for=parent, flags=0)
         apply_settings(self, settings)
         self.tool_use_supported = tool_use_supported
+        self.current_model = current_model
         self.set_modal(True)
         self.set_default_size(400, 200)
+
+        # Check if current model is Gemini
+        from model_cards import get_card
+        card = get_card(current_model) if current_model else None
+        self.is_gemini = card and card.provider == "gemini" if card else False
 
         box = self.get_content_area()
         box.set_spacing(6)
@@ -4292,6 +4298,11 @@ class ToolsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_search_tool, False, True, 0)
         list_box.add(row)
 
+        # For Gemini models, disable other tools when web search is enabled
+        if self.is_gemini:
+            self.switch_web_search.connect("notify::active", self._on_gemini_web_search_toggled)
+            self._on_gemini_web_search_toggled(self.switch_web_search, None)
+
         if not self.tool_use_supported:
             frame = Gtk.Frame()
             frame.set_shadow_type(Gtk.ShadowType.IN)
@@ -4320,10 +4331,52 @@ class ToolsDialog(Gtk.Dialog):
             frame.add(notice_box)
             box.pack_start(frame, False, False, 0)
 
+        # Gemini limitation notice
+        if self.is_gemini:
+            frame = Gtk.Frame()
+            frame.set_shadow_type(Gtk.ShadowType.IN)
+            frame.set_margin_top(6)
+            frame.set_margin_bottom(0)
+            frame.set_margin_start(12)
+            frame.set_margin_end(12)
+
+            notice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            notice_box.set_margin_top(8)
+            notice_box.set_margin_bottom(8)
+            notice_box.set_margin_start(8)
+            notice_box.set_margin_end(8)
+
+            info_icon = Gtk.Image.new_from_icon_name("dialog-warning-symbolic", Gtk.IconSize.MENU)
+            notice_box.pack_start(info_icon, False, False, 0)
+
+            self.gemini_notice = Gtk.Label(
+                label="Gemini does not support Web Search with other tools. Enabling Web Search will disable other tools.",
+                xalign=0,
+            )
+            self.gemini_notice.set_line_wrap(True)
+            self.gemini_notice.set_line_wrap_mode(Pango.WrapMode.WORD)
+            notice_box.pack_start(self.gemini_notice, True, True, 0)
+
+            frame.add(notice_box)
+            box.pack_start(frame, False, False, 0)
+
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
 
         self.show_all()
+
+    def _on_gemini_web_search_toggled(self, switch, _pspec):
+        """Disable other tools when web search is enabled for Gemini."""
+        web_search_active = switch.get_active()
+        self.switch_image_tool.set_sensitive(not web_search_active)
+        self.switch_music_tool.set_sensitive(not web_search_active)
+        self.switch_read_aloud_tool.set_sensitive(not web_search_active)
+        self.switch_search_tool.set_sensitive(not web_search_active)
+        if web_search_active:
+            self.switch_image_tool.set_active(False)
+            self.switch_music_tool.set_active(False)
+            self.switch_read_aloud_tool.set_active(False)
+            self.switch_search_tool.set_active(False)
 
     def get_tool_settings(self):
         """Return the tool settings from the dialog."""

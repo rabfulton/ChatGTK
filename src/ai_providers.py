@@ -3001,9 +3001,10 @@ class PerplexityProvider(AIProvider):
 
 
 class GeminiProvider(AIProvider):
-    """AI provider implementation for Google's Gemini API."""
+    """AI provider implementation for Google's Gemini API using OpenAI compatibility."""
     
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
     
     def __init__(self):
         self.api_key = None
@@ -3117,13 +3118,14 @@ class GeminiProvider(AIProvider):
             # Default filtering behavior for Gemini
             allowed_models = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-image",
                             "gemini-3-pro-preview", "gemini-pro", "gemini-pro-vision",
-                            "gemini-pro-latest", "gemini-flash-latest", "gemini-3-pro-image-preview"}
+                            "gemini-2.0-flash", "gemini-2.0-pro", "gemini-3-pro-image-preview",
+                            "gemini-pro-latest", "gemini-flash-latest"}
             filtered_models = [model_id for model_id in models if model_id in allowed_models]
             if filtered_models:
                 return sorted(filtered_models)
         except Exception as exc:
             print(f"Error fetching Gemini models: {exc}")
-        return sorted(["gemini-flash-latest", "gemini-pro-latest"])
+        return sorted(["gemini-2.5-flash", "gemini-2.0-flash"])
     
     def generate_chat_completion(
         self,
@@ -3143,29 +3145,108 @@ class GeminiProvider(AIProvider):
         card = get_card(model)
         if temperature is None and card and getattr(card, "temperature", None) is not None:
             temperature = card.temperature
-        contents, system_instruction = self._convert_messages(messages)
-        payload = {
-            "contents": contents
-        }
 
-        # Reuse any previously returned thought signatures, if present.
-        # We scan the incoming messages for provider-specific Gemini metadata.
-        thought_sigs = None
+        # Check if web search is requested and supported
+        use_web_search = web_search_enabled and card and card.capabilities.web_search
+        
+        # Check if function tools are enabled
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
+
+        # Gemini native API doesn't support combining google_search with function calling
+        # Use native API only for web search WITHOUT function tools
+        if use_web_search and not enabled_tools:
+            return self._generate_with_native_api(
+                messages, model, temperature, max_tokens, chat_id, response_meta,
+                web_search_enabled=True,
+            )
+
+        # Use OpenAI compatibility API for function calling
+        openai_messages = []
         for msg in messages or []:
-            meta = msg.get("provider_meta") if isinstance(msg, dict) else None
-            if not isinstance(meta, dict):
-                continue
-            gem_meta = meta.get("gemini")
-            if isinstance(gem_meta, dict) and "thought_signatures" in gem_meta:
-                thought_sigs = gem_meta["thought_signatures"]
-        if thought_sigs is not None:
-            # Attach exactly as stored; Gemini will interpret or ignore as appropriate.
-            payload["thought_signatures"] = thought_sigs
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                openai_messages.append({"role": "system", "content": content})
+            elif role == "user":
+                openai_messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                openai_messages.append({"role": "assistant", "content": content})
+
+        tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else None
+
+        payload = {
+            "model": model,
+            "messages": openai_messages,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens and max_tokens > 0:
+            payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        try:
+            print(f"[GeminiProvider] Using OpenAI compatibility API for model: {model}")
+            print(f"[GeminiProvider] Tools: {[t['function']['name'] for t in tools] if tools else 'None'}")
+            resp = requests.post(
+                f"{self.OPENAI_BASE_URL}/chat/completions",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
+                json=payload,
+                timeout=60
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            choice = data.get("choices", [{}])[0]
+            message = choice.get("message", {})
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
+
+            if not tool_calls:
+                return content
+
+            tool_context = ToolContext(
+                image_handler=image_tool_handler,
+                music_handler=music_tool_handler,
+                read_aloud_handler=read_aloud_tool_handler,
+                search_handler=search_tool_handler,
+            )
+            tool_segments = []
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                name = fn.get("name")
+                args_str = fn.get("arguments", "{}")
+                args = parse_tool_arguments(args_str)
+                print(f"[GeminiProvider] Tool call: {name} with args: {args}")
+
+                tool_output = run_tool_call(name, args, tool_context)
+                if tool_output:
+                    display_output = strip_hide_prefix(tool_output)
+                    tool_segments.append(display_output)
+
+            if not tool_segments:
+                return content
+            if content:
+                return content + "\n\n" + "\n\n".join(tool_segments)
+            return "\n\n".join(tool_segments)
+
+        except Exception as exc:
+            raise RuntimeError(f"Gemini completion failed: {exc}") from exc
+
+    def _generate_with_native_api(
+        self, messages, model, temperature, max_tokens, chat_id, response_meta,
+        web_search_enabled=False,
+    ):
+        """Use native Gemini API for web search (not supported in OpenAI compatibility mode)."""
+        contents, system_instruction = self._convert_messages(messages)
+        payload = {"contents": contents}
 
         if system_instruction:
-            payload["system_instruction"] = {
-                "parts": [{"text": system_instruction}]
-            }
+            payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
+
         generation_config = {}
         if temperature is not None:
             generation_config["temperature"] = temperature
@@ -3174,108 +3255,27 @@ class GeminiProvider(AIProvider):
         if generation_config:
             payload["generation_config"] = generation_config
 
-        # Optionally enable Google grounding with Search for supported models,
-        # following the Gemini API docs:
-        # https://ai.google.dev/gemini-api/docs/google-search
-        def _supports_google_search_tool(model_name: str) -> bool:
-            if not model_name:
-                return False
-            # Check model card for web_search capability
-            card = get_card(model_name)
-            if card:
-                return card.capabilities.web_search
-            # Unknown model - default to no web search
-            return False
+        if web_search_enabled:
+            payload["tools"] = [{"google_search": {}}]
 
-        if web_search_enabled and _supports_google_search_tool(model):
-            payload.setdefault("tools", []).append({"google_search": {}})
-
-        # When tool handlers are provided, expose corresponding function
-        # declarations to Gemini using its functionDeclarations schema,
-        # mirroring the documented pattern in the Gemini function calling guide:
-        # https://ai.google.dev/gemini-api/docs/function-calling?example=meeting
-        enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
-        )
-        function_declarations = build_tools_for_provider(enabled_tools, "gemini")
-        if function_declarations:
-            payload.setdefault("tools", []).append(
-                {"functionDeclarations": function_declarations}
-            )
-        
         try:
-            print(f"[GeminiProvider] Using generateContent API for model: {model}")
+            print(f"[GeminiProvider] Using native API for model: {model} (web_search={web_search_enabled})")
             resp = requests.post(
                 f"{self.BASE_URL}/models/{model}:generateContent",
                 headers=self._headers(),
                 json=payload,
-                timeout=60
+                timeout=120
             )
             resp.raise_for_status()
             data = resp.json()
-
-            # Capture any thought signatures as opaque provider metadata for the caller.
-            if response_meta is not None:
-                thought_sigs = self._find_thought_signatures(data)
-                if thought_sigs is not None:
-                    gemini_meta = response_meta.setdefault("gemini", {})
-                    gemini_meta["thought_signatures"] = thought_sigs
-
-            # If no tool handlers are supplied, fall back to the existing
-            # simple text-extraction behavior.
-            if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
-                return self._extract_text(data)
-
-            # With tool handlers, inspect the response for any functionCall
-            # parts, invoke the appropriate handler, and append the results
-            # (and a short caption) to the text we return so the UI can render
-            # images and/or show music control feedback.
-            base_text = self._extract_text(data)
-            tool_segments = []
-
-            tool_context = ToolContext(
-                image_handler=image_tool_handler,
-                music_handler=music_tool_handler,
-                read_aloud_handler=read_aloud_tool_handler,
-                search_handler=search_tool_handler,
-            )
-            for candidate in data.get("candidates", []) or []:
-                parts = candidate.get("content", {}).get("parts", []) or []
-                for part in parts:
-                    fn = part.get("functionCall")
-                    if not fn:
-                        continue
-                    name = fn.get("name")
-                    args = fn.get("args") or {}
-                    print(f"[GeminiProvider] Found functionCall: {name} with args: {args}")
-
-                    tool_output = run_tool_call(name, args, tool_context)
-                    print(f"[GeminiProvider] Tool output: {tool_output[:100] if tool_output else 'None'}...")
-
-                    if tool_output:
-                        # Strip the hide prefix for UI display
-                        display_output = strip_hide_prefix(tool_output)
-                        print(f"[GeminiProvider] Display output: {display_output[:100] if display_output else 'None'}...")
-                        # Build a caption based on the tool name.
-                        if name == "generate_image":
-                            caption = f"Generated image for prompt: {args.get('prompt', '')}".strip()
-                        elif name == "control_music":
-                            caption = f"Music control result for action: {args.get('action', '')}".strip()
-                        elif name == "read_aloud":
-                            caption = f"Read aloud: {args.get('text', '')[:50]}...".strip() if len(args.get('text', '')) > 50 else f"Read aloud: {args.get('text', '')}".strip()
-                        else:
-                            caption = ""
-                        segment = f"{caption}\n{display_output}" if caption else display_output
-                        tool_segments.append(segment)
-
-            print(f"[GeminiProvider] base_text: {base_text[:100] if base_text else 'None'}...")
-            print(f"[GeminiProvider] tool_segments count: {len(tool_segments)}")
-            if not tool_segments:
-                return base_text
-
-            if base_text:
-                return base_text + "\n\n" + "\n\n".join(tool_segments)
-            return "\n\n".join(tool_segments)
+            return self._extract_text(data)
+        except requests.exceptions.HTTPError as exc:
+            error_body = ""
+            try:
+                error_body = exc.response.text[:500]
+            except:
+                pass
+            raise RuntimeError(f"Gemini completion failed: {exc} - {error_body}") from exc
         except Exception as exc:
             raise RuntimeError(f"Gemini completion failed: {exc}") from exc
     
