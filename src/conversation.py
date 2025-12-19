@@ -68,12 +68,15 @@ class Message:
         - 'file_id': Provider-assigned ID after upload (e.g., OpenAI file ID).
     provider_meta : ProviderMeta
         Provider-specific metadata.
+    model : Optional[str]
+        Model ID (stored in system message for chat restoration).
     """
     role: str
     content: str
     images: Optional[List[Dict[str, Any]]] = None
     files: Optional[List[Dict[str, Any]]] = None
     provider_meta: ProviderMeta = field(default_factory=ProviderMeta)
+    model: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization or API calls."""
@@ -86,6 +89,8 @@ class Message:
             result["images"] = self.images
         if self.files:
             result["files"] = self.files
+        if self.model:
+            result["model"] = self.model
         return result
     
     @classmethod
@@ -97,6 +102,7 @@ class Message:
             images=data.get("images"),
             files=data.get("files"),
             provider_meta=ProviderMeta.from_dict(data.get("provider_meta")),
+            model=data.get("model"),
         )
 
 

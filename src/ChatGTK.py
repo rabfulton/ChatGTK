@@ -558,6 +558,13 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _get_model_id_from_combo(self):
         """Get the actual model_id from the combo box, mapping display text back to model_id."""
+        # Use ModelSelector if available
+        if hasattr(self, '_model_selector'):
+            model_id = self._model_selector.get_selected_model_id()
+            if model_id:
+                return model_id
+        
+        # Fallback to direct combo access
         display_text = self.combo_model.get_active_text()
         if not display_text:
             return None
@@ -892,11 +899,18 @@ class OpenAIGTKClient(Gtk.Window):
     def _on_message_received_event(self, event):
         """Handle MESSAGE_RECEIVED event - display assistant message in UI."""
         content = event.data.get('content', '')
+        formatted = event.data.get('formatted_content', '') or format_response(content)
         index = event.data.get('index', 0)
-        # Only handle if source is controller (avoid double-display)
+        model = event.data.get('model', '')
+        
+        # Only handle if source is controller
         if event.source == 'controller':
-            formatted = format_response(content)
             GLib.idle_add(lambda: self.append_message('ai', formatted, index))
+            
+            # Read aloud if enabled (skip audio models)
+            card = get_card(model, self.custom_models)
+            if not (card and card.capabilities.audio_out):
+                self.read_aloud_text(formatted, chat_id=self.current_chat_id)
 
     def _on_image_generated_event(self, event):
         """Handle IMAGE_GENERATED event - log for debugging."""
@@ -1121,87 +1135,6 @@ class OpenAIGTKClient(Gtk.Window):
         """Delegate to controller."""
         return self.controller.messages_for_model(model_name)
 
-    def _clean_messages_for_perplexity(self, messages):
-        """
-        Clean messages to ensure proper alternation for Perplexity API.
-        
-        Perplexity requires that after the optional system message(s), user and
-        assistant messages must strictly alternate, starting with a user message.
-        """
-        if not messages:
-            return messages
-
-        cleaned = []
-        
-        # First, extract system messages and other messages
-        system_messages = []
-        other_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            if role == "system":
-                # Keep system message with clean structure
-                system_messages.append({
-                    "role": "system",
-                    "content": content,
-                })
-            elif content:  # Skip empty non-system messages
-                other_messages.append({
-                    "role": role,
-                    "content": content,
-                })
-        
-        # Add system messages first
-        cleaned.extend(system_messages)
-        
-        # Process non-system messages to ensure strict alternation
-        # Perplexity requires: user, assistant, user, assistant, ... ending with user
-        alternating = []
-        expected_role = "user"  # Must start with user after system
-        
-        for msg in other_messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            if role == expected_role:
-                # Correct role - add it
-                alternating.append({"role": role, "content": content})
-                expected_role = "assistant" if role == "user" else "user"
-            elif role == "user" and expected_role == "user":
-                # Another user message when we expected user - merge with previous if exists
-                if alternating and alternating[-1]["role"] == "user":
-                    alternating[-1]["content"] += "\n\n" + content
-                else:
-                    alternating.append({"role": role, "content": content})
-                    expected_role = "assistant"
-            elif role == "assistant" and expected_role == "assistant":
-                # Another assistant message when we expected assistant - merge
-                if alternating and alternating[-1]["role"] == "assistant":
-                    alternating[-1]["content"] += "\n\n" + content
-                else:
-                    alternating.append({"role": role, "content": content})
-                    expected_role = "user"
-            elif role == "user" and expected_role == "assistant":
-                # Got user when expecting assistant - skip the missing assistant and add user
-                # This handles cases where assistant response was empty/missing
-                alternating.append({"role": role, "content": content})
-                expected_role = "assistant"
-            elif role == "assistant" and expected_role == "user":
-                # Got assistant when expecting user - skip this assistant message
-                # The first message after system must be user
-                continue
-        
-        # Ensure we have at least one user message and it ends with user
-        if not alternating:
-            return messages  # Return original if something went wrong
-        
-        # If the last message is assistant, that's fine for Perplexity
-        # (they want alternation, ending with user is for the request)
-        
-        cleaned.extend(alternating)
-        return cleaned
-
     def get_provider_name_for_model(self, model_name):
         if not model_name:
             return 'openai'
@@ -1278,81 +1211,6 @@ class OpenAIGTKClient(Gtk.Window):
                 self._handle_search_memory_tool(keyword, source)
         
         return handlers
-
-    def _get_or_init_provider(self, model: str, provider_name: str):
-        """Get or initialize a provider for the given model."""
-        if provider_name == "custom":
-            provider = self.custom_providers.get(model)
-            if not provider:
-                config = (self.custom_models or {}).get(model, {})
-                if not config:
-                    raise ValueError(f"Custom model '{model}' is not configured")
-                provider = get_ai_provider("custom")
-                from utils import resolve_api_key
-                provider.initialize(
-                    api_key=resolve_api_key(config.get("api_key", "")).strip(),
-                    endpoint=config.get("endpoint"),
-                    model_name=config.get("model_name") or model,
-                    api_type=config.get("api_type") or "chat.completions",
-                    voice=config.get("voice"),
-                )
-                self.custom_providers[model] = provider
-            return provider
-        else:
-            provider = self.controller.get_provider(provider_name)
-            if not provider:
-                raise ValueError(f"{provider_name.title()} provider is not initialized")
-            return provider
-
-    def _normalize_image_tags(self, text):
-        """
-        Normalize image references into the self-closing <img src="..."/> form
-        that the UI expects. Handles:
-        - HTML <img> tags with extra attributes
-        - Markdown image syntax ![alt](path) or ![alt](sandbox:path)
-        
-        Deduplicates images by src to avoid displaying the same image multiple times.
-        """
-        if not text:
-            return text
-        import re
-        
-        seen_src = set()
-        
-        # First, convert markdown images to HTML: ![alt](path) or ![alt](sandbox:path)
-        def md_to_html(match):
-            path = match.group(2)
-            # Strip sandbox: prefix if present
-            if path.startswith('sandbox:'):
-                path = path[8:]
-            if path in seen_src:
-                return ""
-            seen_src.add(path)
-            return f'<img src="{path}"/>'
-        
-        text = re.sub(r'!\[([^\]]*)\]\((?:sandbox:)?([^)]+)\)', md_to_html, text)
-        
-        # Then normalize HTML img tags
-        pattern = re.compile(r'<img\s+src="([^"]+)"[^>]*>', re.IGNORECASE)
-
-        result_parts = []
-        last_end = 0
-
-        for match in pattern.finditer(text):
-            result_parts.append(text[last_end:match.start()])
-            src = match.group(1)
-
-            if src in seen_src:
-                replacement = ""
-            else:
-                seen_src.add(src)
-                replacement = f'<img src="{src}"/>'
-
-            result_parts.append(replacement)
-            last_end = match.end()
-
-        result_parts.append(text[last_end:])
-        return "".join(result_parts)
 
     def generate_image_for_model(self, model, prompt, last_msg, chat_id, provider_name, has_attached_images):
         """
@@ -2455,134 +2313,21 @@ class OpenAIGTKClient(Gtk.Window):
         ).start()
 
     def call_ai_api(self, model):
-        """Call AI API with the given model. Delegates to provider via unified flow."""
-        try:
-            # Check if cancelled
-            if getattr(self, 'request_cancelled', False):
-                return
-            
-            # Ensure valid model
-            if not model:
-                model = "gpt-3.5-turbo"
-                print(f"No model selected, falling back to {model}")
-            
-            provider_name = self.get_provider_name_for_model(model)
-            
-            # Check if cancelled after setup
-            if getattr(self, 'request_cancelled', False):
-                return
-
-            # Get or initialize provider
-            provider = self._get_or_init_provider(model, provider_name)
-            
-            last_msg = self.conversation_history[-1]
-            prompt = last_msg.get("content", "")
-            has_attached_images = bool(last_msg.get("images"))
-            has_attached_files = bool(last_msg.get("files"))
-
-            # Warn about file attachments on non-OpenAI providers
-            if has_attached_files and provider_name != 'openai':
-                print(f"[ChatGTK] Warning: Document attachments only supported with OpenAI models")
-
-            # Route image models to image generation
-            if self._is_image_model_for_provider(model, provider_name):
-                answer = self.generate_image_for_model(
-                    model=model, prompt=prompt, last_msg=last_msg,
-                    chat_id=self.current_chat_id or "temp",
-                    provider_name=provider_name, has_attached_images=has_attached_images,
-                )
-                assistant_provider_meta = None
-            else:
-                # Check for realtime models (OpenAI WebSocket)
-                card = get_card(model, self.custom_models)
-                if card and card.api_family == "realtime":
-                    return
-                
-                # Prepare messages
-                messages_to_send = self._messages_for_model(model)
-                if provider_name == 'perplexity':
-                    messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
-                
-                # Build common kwargs
-                response_meta = {}
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": self._get_temperature_for_model(model),
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                }
-                
-                # Add tool handlers for providers that support them
-                if provider_name != 'perplexity':
-                    kwargs["web_search_enabled"] = bool(getattr(self, "web_search_enabled", False))
-                    kwargs.update(self._build_tool_handlers(model, last_msg))
-                
-                # Add response_meta for providers that use it
-                if provider_name in ('gemini', 'perplexity', 'claude'):
-                    kwargs["response_meta"] = response_meta
-                
-                # Call provider
-                answer = provider.generate_chat_completion(**kwargs)
-                assistant_provider_meta = response_meta if response_meta else None
-                
-                # Append Perplexity sources if present
-                if provider_name == 'perplexity':
-                    answer = self._append_perplexity_sources(answer, response_meta)
-
-            # Check if cancelled before processing
-            if getattr(self, 'request_cancelled', False):
-                return
-            
-            # Process and display response
-            answer = self._normalize_image_tags(answer)
-            assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
-            message_index = len(self.conversation_history)
-            self.conversation_history.append(assistant_message)
-
-            formatted_answer = format_response(answer)
-            GLib.idle_add(self.emit_thinking_stopped)
-            GLib.idle_add(lambda idx=message_index, msg=formatted_answer: self.append_message('ai', msg, idx))
-            GLib.idle_add(self.save_current_chat)
-            
-            # Read aloud if enabled (skip audio models)
-            card = get_card(model, self.custom_models)
-            if not (card and card.capabilities.audio_out):
-                self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
-            
-        except Exception as error:
-            if not getattr(self, 'request_cancelled', False):
-                print(f"\nAPI Call Error: {error}")
-                GLib.idle_add(self.emit_thinking_stopped)
-                error_message = f"** Error: {str(error)} **"
-                message_index = len(self.conversation_history)
-                self.conversation_history.append(create_assistant_message(error_message))
-                GLib.idle_add(lambda idx=message_index, msg=error_message: self.append_message('ai', msg, idx))
-        finally:
-            GLib.idle_add(self.emit_thinking_stopped)
-
-    def _append_perplexity_sources(self, answer: str, response_meta: dict) -> str:
-        """Append Perplexity search results as sources section."""
-        perplexity_meta = (response_meta or {}).get("perplexity", {})
-        search_results = perplexity_meta.get("search_results") if isinstance(perplexity_meta, dict) else None
-        if not search_results:
-            return answer
+        """Call AI API - delegates to controller.send_message()."""
+        print(f"[ChatGTK] call_ai_api called with model: {model}")
+        # Build tool handlers (these reference UI methods)
+        last_msg = self.conversation_history[-1]
+        tool_handlers = self._build_tool_handlers(model, last_msg)
         
-        lines = []
-        for idx, res in enumerate(search_results, start=1):
-            title = res.get("title") or "Source"
-            url = res.get("url") or ""
-            date = res.get("date") or ""
-            line = f"{idx}. {title}"
-            if date:
-                line += f" ({date})"
-            if url:
-                line += f" — {url}"
-            lines.append(line)
+        # Delegate to controller
+        self.controller.send_message(
+            model=model,
+            tool_handlers=tool_handlers,
+            cancel_check=lambda: getattr(self, 'request_cancelled', False),
+        )
         
-        if lines:
-            return (answer.rstrip() + "\n\nSources:\n" + "\n".join(lines)).rstrip()
-        return answer
+        # Read aloud after response (controller emits MESSAGE_RECEIVED)
+        # This is handled in _on_message_received_event now
 
     def audio_transcription(self, widget):
         """Handle audio transcription."""
@@ -3105,28 +2850,20 @@ class OpenAIGTKClient(Gtk.Window):
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:
                 saved_model = history[0]["model"]
-                model_store = self.combo_model.get_model()
-                
-                # Find the matching row by comparing resolved model_ids (handles custom display names)
-                match_index = None
-                for i in range(len(model_store)):
-                    display_text = model_store[i][0]
-                    model_id = self._display_to_model_id.get(display_text, display_text) if hasattr(self, "_display_to_model_id") else display_text
-                    if model_id == saved_model:
-                        match_index = i
-                        break
-                
-                if match_index is None:
-                    # Conversation references a model not currently in the list (e.g., custom); add it so selection stays in sync
-                    display_text = get_model_display_name(saved_model, self.custom_models) or saved_model
-                    if not hasattr(self, "_display_to_model_id"):
-                        self._display_to_model_id = {}
-                    self._display_to_model_id[display_text] = saved_model
-                    match_index = len(model_store)
-                    self.combo_model.append_text(display_text)
-                
-                if match_index is not None:
-                    self.combo_model.set_active(match_index)
+                # Prefer using the ModelSelector API so its internal mappings stay in sync.
+                display_text = (
+                    getattr(self, "_model_id_to_display", {}).get(saved_model)
+                    or get_model_display_name(saved_model, self.custom_models)
+                    or saved_model
+                )
+
+                # Ensure the selector knows about this model (handles missing/custom models).
+                if hasattr(self, "_model_selector"):
+                    if saved_model not in self._model_selector._model_id_to_display:
+                        self._model_selector._model_id_to_display[saved_model] = display_text
+                        self._model_selector._display_to_model_id[display_text] = saved_model
+                        self.combo_model.append_text(display_text)
+                    self._model_selector.select_model(saved_model)
             
             # Sync system prompt selector with the loaded chat's system message
             if history and history[0].get("role") == "system":
@@ -3195,10 +2932,12 @@ class OpenAIGTKClient(Gtk.Window):
         if len(self.conversation_history) > 1:  # More than just the system message
             # Track model in system message
             current_model = self._get_model_id_from_combo()
-            has_existing_model = len(self.conversation_history) > 0 and "model" in self.conversation_history[0]
-            is_excluded = "dall-e" in current_model.lower() or "tts" in current_model.lower() or "audio" in current_model.lower()
-            if not has_existing_model or not is_excluded:
-                self.conversation_history[0]["model"] = current_model
+            if current_model:
+                # Don't overwrite with image/tts models
+                is_excluded = "dall-e" in current_model.lower() or "tts" in current_model.lower() or "audio" in current_model.lower()
+                has_existing_model = "model" in self.conversation_history[0]
+                if not is_excluded or not has_existing_model:
+                    self.conversation_history[0]["model"] = current_model
 
             # Sync conversation to controller and save
             self.controller.conversation_history = self.conversation_history

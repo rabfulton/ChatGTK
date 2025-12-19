@@ -115,6 +115,7 @@ class ModelSelector(UIComponent):
         display = self.widget.get_active_text()
         if not display:
             return None
+        # Check mapping - if no mapping, the display IS the model_id
         return self._display_to_model_id.get(display, display)
     
     def get_selected_display(self) -> Optional[str]:
@@ -124,7 +125,16 @@ class ModelSelector(UIComponent):
     def select_model(self, model_id: str):
         """Select a model by ID."""
         display = self._model_id_to_display.get(model_id, model_id)
-        self._select_display(display)
+        # Force selection even if updating
+        model_store = self.widget.get_model()
+        iter = model_store.get_iter_first()
+        idx = 0
+        while iter:
+            if model_store.get_value(iter, 0) == display:
+                self.widget.set_active(idx)
+                return
+            iter = model_store.iter_next(iter)
+            idx += 1
     
     def _select_display(self, display: str):
         """Select by display text."""

@@ -348,7 +348,7 @@ class ChatController:
                 chat_id = f"new_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             # Convert to ConversationHistory and save via service
-            conv_history = ConversationHistory.from_list(self.conversation_history)
+            conv_history = ConversationHistory.from_list(self.conversation_history, metadata=metadata)
             actual_chat_id = self._chat_service.save_chat(chat_id, conv_history)
             self.current_chat_id = actual_chat_id
             return actual_chat_id
@@ -742,6 +742,306 @@ class ChatController:
                 self.current_chat_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         return self.current_chat_id
+
+    # -----------------------------------------------------------------------
+    # Message sending (main API call flow)
+    # -----------------------------------------------------------------------
+
+    def send_message(
+        self,
+        model: str,
+        tool_handlers: Optional[Dict[str, Callable]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> None:
+        """
+        Send the last user message to the AI and emit response via events.
+        
+        This is the main entry point for AI requests. It handles:
+        - Provider selection and initialization
+        - Image model routing
+        - Message preparation
+        - Tool handler wiring
+        - Response processing
+        
+        Results are emitted via MESSAGE_RECEIVED or ERROR_OCCURRED events.
+        
+        Parameters
+        ----------
+        model : str
+            The model to use for generation.
+        tool_handlers : Optional[Dict[str, Callable]]
+            Tool handler functions (image_tool_handler, music_tool_handler, etc.)
+        cancel_check : Optional[Callable[[], bool]]
+            Function that returns True if request should be cancelled.
+        """
+        from model_cards import get_card
+        from markup_utils import format_response
+        
+        def is_cancelled():
+            return cancel_check() if cancel_check else False
+        
+        try:
+            # Emit thinking started
+            self._event_bus.publish(Event(
+                type=EventType.THINKING_STARTED,
+                data={'model': model},
+                source='controller'
+            ))
+            
+            if is_cancelled():
+                return
+            
+            # Ensure valid model
+            if not model:
+                model = "gpt-3.5-turbo"
+            
+            provider_name = self.get_provider_name_for_model(model)
+            
+            if is_cancelled():
+                return
+            
+            # Get or initialize provider
+            provider = self._get_or_init_provider(model, provider_name)
+            
+            last_msg = self.conversation_history[-1]
+            prompt = last_msg.get("content", "")
+            has_attached_images = bool(last_msg.get("images"))
+            
+            # Check for image model
+            card = get_card(model, self.custom_models)
+            is_image_model = card and card.capabilities.image_gen and not card.capabilities.text
+            
+            if is_image_model:
+                # Route to image generation
+                answer = self._image_service.generate_image(
+                    prompt=prompt,
+                    model=model,
+                    provider=provider,
+                    provider_name=provider_name,
+                    chat_id=self.current_chat_id or "temp",
+                    edit_image=last_msg.get("images", [None])[0] if has_attached_images else None,
+                )
+                assistant_provider_meta = None
+            else:
+                # Check for realtime models
+                if card and card.api_family == "realtime":
+                    return
+                
+                # Prepare messages
+                messages_to_send = self.messages_for_model(model)
+                if provider_name == 'perplexity':
+                    messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
+                
+                # Build kwargs
+                response_meta = {}
+                kwargs = {
+                    "messages": messages_to_send,
+                    "model": model,
+                    "temperature": self.get_temperature_for_model(model),
+                    "max_tokens": self._settings_manager.get('MAX_TOKENS', 0) or None,
+                    "chat_id": self.current_chat_id,
+                }
+                
+                # Add tool handlers and web search for non-perplexity
+                if provider_name != 'perplexity':
+                    kwargs["web_search_enabled"] = self._settings_manager.get('WEB_SEARCH_ENABLED', False)
+                    if tool_handlers:
+                        kwargs.update(tool_handlers)
+                
+                # Add response_meta for providers that use it
+                if provider_name in ('gemini', 'perplexity', 'claude'):
+                    kwargs["response_meta"] = response_meta
+                
+                if is_cancelled():
+                    return
+                
+                # Call provider
+                answer = provider.generate_chat_completion(**kwargs)
+                assistant_provider_meta = response_meta if response_meta else None
+                
+                # Append Perplexity sources
+                if provider_name == 'perplexity':
+                    answer = self._append_perplexity_sources(answer, response_meta)
+            
+            if is_cancelled():
+                return
+            
+            # Normalize image tags
+            answer = self._normalize_image_tags(answer)
+            
+            # Add to conversation history
+            assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
+            message_index = len(self.conversation_history)
+            self.conversation_history.append(assistant_message)
+            
+            # Store model in system message (first message)
+            if self.conversation_history:
+                self.conversation_history[0]['model'] = model
+            
+            # Save chat
+            self.save_current_chat()
+            
+            # Emit response
+            self._event_bus.publish(Event(
+                type=EventType.MESSAGE_RECEIVED,
+                data={
+                    'content': answer,
+                    'formatted_content': format_response(answer),
+                    'index': message_index,
+                    'model': model,
+                    'provider_meta': assistant_provider_meta,
+                },
+                source='controller'
+            ))
+            
+        except Exception as error:
+            if not is_cancelled():
+                error_message = f"** Error: {str(error)} **"
+                message_index = len(self.conversation_history)
+                self.conversation_history.append(create_assistant_message(error_message))
+                
+                self._event_bus.publish(Event(
+                    type=EventType.ERROR_OCCURRED,
+                    data={'error': str(error), 'context': 'send_message', 'index': message_index},
+                    source='controller'
+                ))
+        finally:
+            self._event_bus.publish(Event(
+                type=EventType.THINKING_STOPPED,
+                data={},
+                source='controller'
+            ))
+
+    def _get_or_init_provider(self, model: str, provider_name: str) -> Any:
+        """Get or initialize a provider for the given model."""
+        if provider_name == "custom":
+            provider = self.custom_providers.get(model)
+            if not provider:
+                config = (self.custom_models or {}).get(model, {})
+                if not config:
+                    raise ValueError(f"Custom model '{model}' is not configured")
+                provider = get_ai_provider("custom")
+                from utils import resolve_api_key
+                provider.initialize(
+                    api_key=resolve_api_key(config.get("api_key", "")).strip(),
+                    endpoint=config.get("endpoint"),
+                    model_name=config.get("model_name") or model,
+                    api_type=config.get("api_type") or "chat.completions",
+                    voice=config.get("voice"),
+                )
+                self.custom_providers[model] = provider
+            return provider
+        else:
+            provider = self.get_provider(provider_name)
+            if not provider:
+                raise ValueError(f"{provider_name.title()} provider is not initialized")
+            return provider
+
+    def _clean_messages_for_perplexity(self, messages: List[Dict]) -> List[Dict]:
+        """Clean messages for Perplexity API (strict alternation required)."""
+        if not messages:
+            return messages
+        
+        cleaned = []
+        system_messages = []
+        other_messages = []
+        
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                system_messages.append({"role": "system", "content": content})
+            elif content:
+                other_messages.append({"role": role, "content": content})
+        
+        cleaned.extend(system_messages)
+        
+        # Ensure strict alternation
+        alternating = []
+        expected_role = "user"
+        
+        for msg in other_messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            if role == expected_role:
+                alternating.append({"role": role, "content": content})
+                expected_role = "assistant" if role == "user" else "user"
+            elif role == "user" and expected_role == "user":
+                if alternating and alternating[-1]["role"] == "user":
+                    alternating[-1]["content"] += "\n\n" + content
+                else:
+                    alternating.append({"role": role, "content": content})
+                    expected_role = "assistant"
+            elif role == "assistant" and expected_role == "assistant":
+                if alternating and alternating[-1]["role"] == "assistant":
+                    alternating[-1]["content"] += "\n\n" + content
+                else:
+                    alternating.append({"role": role, "content": content})
+                    expected_role = "user"
+        
+        cleaned.extend(alternating)
+        return cleaned
+
+    def _append_perplexity_sources(self, answer: str, response_meta: dict) -> str:
+        """Append Perplexity search results as sources section."""
+        perplexity_meta = (response_meta or {}).get("perplexity", {})
+        search_results = perplexity_meta.get("search_results") if isinstance(perplexity_meta, dict) else None
+        if not search_results:
+            return answer
+        
+        lines = []
+        for idx, res in enumerate(search_results, start=1):
+            title = res.get("title") or "Source"
+            url = res.get("url") or ""
+            date = res.get("date") or ""
+            line = f"{idx}. {title}"
+            if date:
+                line += f" ({date})"
+            if url:
+                line += f" — {url}"
+            lines.append(line)
+        
+        if lines:
+            return (answer.rstrip() + "\n\nSources:\n" + "\n".join(lines)).rstrip()
+        return answer
+
+    def _normalize_image_tags(self, text: str) -> str:
+        """Normalize image references to consistent format."""
+        if not text:
+            return text
+        import re
+        
+        seen_src = set()
+        
+        def md_to_html(match):
+            path = match.group(2)
+            if path.startswith('sandbox:'):
+                path = path[8:]
+            if path in seen_src:
+                return ""
+            seen_src.add(path)
+            return f'<img src="{path}"/>'
+        
+        text = re.sub(r'!\[([^\]]*)\]\((?:sandbox:)?([^)]+)\)', md_to_html, text)
+        
+        pattern = re.compile(r'<img\s+src="([^"]+)"[^>]*>', re.IGNORECASE)
+        result_parts = []
+        last_end = 0
+        
+        for match in pattern.finditer(text):
+            result_parts.append(text[last_end:match.start()])
+            src = match.group(1)
+            if src in seen_src:
+                replacement = ""
+            else:
+                seen_src.add(src)
+                replacement = f'<img src="{src}"/>'
+            result_parts.append(replacement)
+            last_end = match.end()
+        
+        result_parts.append(text[last_end:])
+        return "".join(result_parts)
 
     @property
     def event_bus(self) -> EventBus:
