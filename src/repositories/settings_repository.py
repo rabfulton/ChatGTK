@@ -107,6 +107,10 @@ class SettingsRepository:
         """
         return self._settings.copy()
     
+    def reload(self) -> None:
+        """Reload settings from disk, discarding any cached values."""
+        self._load()
+    
     def get(self, key: str, default: Any = None) -> Any:
         """
         Get a setting value.

@@ -208,6 +208,21 @@ class MessageRenderer:
         self.conversation_box.pack_start(event_box, False, False, 0)
         self.message_widgets.append(event_box)
         self.conversation_box.show_all()
+        
+        # Scroll to top of message after widget is allocated
+        def on_size_allocate(widget, allocation):
+            widget.disconnect(handler_id)
+            def do_scroll():
+                sw = self.conversation_box
+                while sw and not isinstance(sw, Gtk.ScrolledWindow):
+                    sw = sw.get_parent()
+                if sw:
+                    adj = sw.get_vadjustment()
+                    adj.set_value(allocation.y)
+                return False
+            GLib.idle_add(do_scroll)
+        
+        handler_id = event_box.connect("size-allocate", on_size_allocate)
 
     def append_ai_message(self, message_text: str, message_index: int):
         """Add an AI message with code blocks, tables, and images."""
@@ -278,19 +293,20 @@ class MessageRenderer:
         self.message_widgets.append(response_container)
         self.conversation_box.show_all()
         
-        # Scroll to response
-        def scroll_to_response():
-            widget = self.conversation_box
-            while widget and not isinstance(widget, Gtk.ScrolledWindow):
-                widget = widget.get_parent()
-            
-            if widget:
-                adj = widget.get_vadjustment()
-                alloc = response_container.get_allocation()
-                adj.set_value(alloc.y)
-            return False
+        # Scroll to top of response after widget is allocated
+        def on_size_allocate(widget, allocation):
+            widget.disconnect(handler_id)
+            def do_scroll():
+                sw = self.conversation_box
+                while sw and not isinstance(sw, Gtk.ScrolledWindow):
+                    sw = sw.get_parent()
+                if sw:
+                    adj = sw.get_vadjustment()
+                    adj.set_value(allocation.y)
+                return False
+            GLib.idle_add(do_scroll)
         
-        GLib.idle_add(scroll_to_response)
+        handler_id = response_container.connect("size-allocate", on_size_allocate)
 
     def _attach_popup_to_text_view(self, text_view: Gtk.TextView, message_index: int):
         """Attach right-click popup menu to text view."""

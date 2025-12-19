@@ -156,6 +156,7 @@ class SettingsManager:
     
     def reload(self) -> None:
         """Reload settings from disk, discarding unsaved changes."""
+        self._repo.reload()
         self._cache = self._repo.get_all()
         self._dirty.clear()
     

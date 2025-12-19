@@ -1783,6 +1783,8 @@ class OpenAIGTKClient(Gtk.Window):
             new_settings = dialog.get_settings()
             apply_settings(self, new_settings)
             save_object_settings(self)
+            # Reload settings manager cache so controller sees updated values
+            self.controller.settings_manager.reload()
 
             # Update message renderer settings and refresh existing message colors
             self._update_message_renderer_settings()
@@ -1910,6 +1912,8 @@ class OpenAIGTKClient(Gtk.Window):
             self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
             # Persist all settings, including the updated tool flags.
             save_object_settings(self)
+            # Reload settings manager cache so controller sees updated values
+            self.controller.settings_manager.reload()
         dialog.destroy()
 
 
