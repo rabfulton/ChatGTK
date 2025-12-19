@@ -2608,7 +2608,8 @@ class OpenAIGTKClient(Gtk.Window):
                         temperature=model_temperature,
                         mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
                         realtime_prompt=self._get_realtime_prompt(),
-                        api_key=api_key
+                        api_key=api_key,
+                        vad_threshold=float(getattr(self, "realtime_vad_threshold", 0.1))
                     )
                     
                 except Exception as e:

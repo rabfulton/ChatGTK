@@ -1472,7 +1472,7 @@ class SettingsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Text-to-Speech Model", xalign=0)
+        label = Gtk.Label(label="Text to Speech Model", xalign=0)
         label.set_hexpand(True)
         self.combo_tts_provider = Gtk.ComboBoxText()
 
@@ -1630,6 +1630,41 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, True, True, 0)
         list_box.add(row)
 
+        # Mute mic during playback (echo suppression)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Mute mic during playback", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("May be necessary on systems that use speakers and do not have echo cancellation set up.")
+        self.switch_mute_mic_playback = Gtk.Switch()
+        current_mute = bool(getattr(self, "mute_mic_during_playback", False))
+        self.switch_mute_mic_playback.set_active(current_mute)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_mute_mic_playback, False, True, 0)
+        list_box.add(row)
+
+        # VAD Threshold
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Voice Detection Threshold", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("Controls voice activity detection sensitivity for realtime conversations. "
+                               "Lower values (e.g. 0.1) are more sensitive and detect quieter speech. "
+                               "Higher values (e.g. 0.5) require louder speech and reduce false triggers from background noise. "
+                               "Range: 0.0 to 1.0. Default: 0.1")
+        self.spin_vad_threshold = Gtk.SpinButton()
+        self.spin_vad_threshold.set_adjustment(Gtk.Adjustment(value=0.1, lower=0.0, upper=1.0, step_increment=0.05, page_increment=0.1))
+        self.spin_vad_threshold.set_digits(2)
+        current_vad = float(getattr(self, "realtime_vad_threshold", 0.1))
+        self.spin_vad_threshold.set_value(current_vad)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_vad_threshold, False, True, 0)
+        list_box.add(row)
+
         # Realtime Prompt (expanded like Speech Prompt Template)
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -1645,21 +1680,6 @@ class SettingsDialog(Gtk.Dialog):
         self.entry_realtime_prompt.set_placeholder_text("Your name is {name}, speak quickly and professionally")
         hbox.pack_start(label, False, True, 0)
         hbox.pack_start(self.entry_realtime_prompt, True, True, 0)
-        list_box.add(row)
-
-        # Mute mic during playback (echo suppression)
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Mute mic during playback", xalign=0)
-        label.set_hexpand(True)
-        label.set_tooltip_text("May be necessary on systems that use speakers and do not have echo cancellation set up.")
-        self.switch_mute_mic_playback = Gtk.Switch()
-        current_mute = bool(getattr(self, "mute_mic_during_playback", False))
-        self.switch_mute_mic_playback.set_active(current_mute)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_mute_mic_playback, False, True, 0)
         list_box.add(row)
 
         self.stack.add_named(scroll, "Audio")
@@ -3922,6 +3942,7 @@ class SettingsDialog(Gtk.Dialog):
             'tts_voice': self.combo_tts.get_active_text(),
             'realtime_voice': self.combo_realtime.get_active_text(),
             'realtime_prompt': self.entry_realtime_prompt.get_text(),
+            'realtime_vad_threshold': self.spin_vad_threshold.get_value(),
             'mute_mic_during_playback': self.switch_mute_mic_playback.get_active(),
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),

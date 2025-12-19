@@ -206,6 +206,7 @@ SETTINGS_CONFIG = {
     'TTS_PROMPT_TEMPLATE': {'type': str, 'default': ''},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},
     'REALTIME_PROMPT': {'type': str, 'default': 'Your name is {name}, speak quickly and professionally. Respond in the same language as the user unless directed otherwise.'},
+    'REALTIME_VAD_THRESHOLD': {'type': float, 'default': 0.1},
     'MUTE_MIC_DURING_PLAYBACK': {'type': bool, 'default': True},
     'SIDEBAR_VISIBLE': {'type': bool, 'default': True},
     'SIDEBAR_WIDTH': {'type': int, 'default': 200},
@@ -226,7 +227,7 @@ SETTINGS_CONFIG = {
     'OPENAI_MODEL_WHITELIST': {
         'type': str,
         # Include current realtime releases first, keep legacy preview IDs for backward compatibility.
-        'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview-2024-12-17,gpt-4o-realtime-preview-2024-12-17,gpt-realtime,gpt-realtime-mini,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-4o-mini-realtime-preview,gpt-realtime-2025-08-28,gpt-realtime-mini-2025-10-06,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
+        'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-realtime,gpt-realtime-mini,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-realtime-2025-08-28,gpt-realtime-mini-2025-10-06,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
     },
     'CUSTOM_MODEL_WHITELIST': {
         'type': str,

@@ -1610,15 +1610,10 @@ class OpenAIProvider(AIProvider):
                 "gpt-image-1",
                 "gpt-image-1-mini",
                 # Realtime (current)
-                "gpt-4o-mini-realtime-preview-2024-12-17",
-                "gpt-4o-realtime-preview-2024-12-17",
                 "gpt-realtime",
                 "gpt-realtime-mini",
                 "gpt-realtime-2025-08-28",
                 "gpt-realtime-mini-2025-10-06",
-                # Legacy preview IDs kept for compatibility
-                "gpt-4o-mini-realtime-preview",
-                "gpt-4o-realtime-preview",
                 "chatgpt-4o-latest",
                 "gpt-4-turbo",
                 "gpt-4.1",
@@ -3497,12 +3492,17 @@ class OpenAIWebSocketProvider:
         self.channels = 1
         self.dtype = np.int16
         self.min_audio_ms = 75
-        self.response_started = False  # Track if we already asked for a response for this session
+        self.response_started = False  # Track if a response is in flight for this turn
         self.last_send_error = None
-        
+        self.buffer_started = False  # Track per-turn buffering (no explicit start message)
+        self.awaiting_response = False  # Pause mic while waiting for response.done
+        self.has_pending_audio = False  # Track whether we've sent audio this turn
+        self.awaiting_final_transcript = False
+
         self.output_stream = None
         self.message_lock = asyncio.Lock()  # Add lock for message handling
         self._lock = threading.Lock()
+        self.drain_requested = False  # Track shutdown drain phase
 
     def _schedule_callback(self, callback, *args):
         """Schedule a callback on the main thread."""
@@ -3601,7 +3601,7 @@ class OpenAIWebSocketProvider:
                 raise ValueError("OPENAI_API_KEY environment variable not set")
             
             # Get model from URL parameters
-            model = getattr(self, 'model', 'gpt-4o-realtime-preview-2024-12-17')  # Default fallback
+            model = getattr(self, 'model', 'gpt-realtime')  # Default fallback
 
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -3626,6 +3626,7 @@ class OpenAIWebSocketProvider:
             
             # Send initial configuration with session parameters
             instructions = (self.realtime_prompt or "Your name is {name}, speak quickly and professionally").strip()
+            vad_threshold = getattr(self, 'vad_threshold', 0.1)
             config_message = {
                 "type": "session.update",
                 "session": {
@@ -3635,13 +3636,15 @@ class OpenAIWebSocketProvider:
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
                     "input_audio_transcription": {
-                        "model": "whisper-1"
+                        "model": "gpt-4o-transcribe",
+                        "language": "en"
                     },
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.1,
+                        "threshold": vad_threshold,
                         "prefix_padding_ms": 10,
-                        "silence_duration_ms": 400
+                        "silence_duration_ms": 400,
+                        "create_response": True
                     },
                 }
             }
@@ -3654,18 +3657,6 @@ class OpenAIWebSocketProvider:
                     data = json.loads(response)
                     if data.get("type") == "session.updated":
                         self.last_event_id = data.get("event_id")  # Store the event ID
-                        # Ask the model to start a response stream for incoming audio
-                        if not self.response_started:
-                            await self.ws.send(json.dumps({
-                                "type": "response.create",
-                                "response": {
-                                    "modalities": ["audio", "text"],
-                                    "voice": voice or "alloy",
-                                    "output_audio_format": "pcm16",
-                                    **({"temperature": self.temperature} if self.temperature is not None else {})
-                                }
-                            }))
-                            self.response_started = True
                         break
             
     def _initialize_output_stream(self):
@@ -3742,9 +3733,14 @@ class OpenAIWebSocketProvider:
                 print(f"Resampling from {self.input_sample_rate}Hz to {self.output_sample_rate}Hz")
                 self._log("start_audio_stream: entering receive loop")
                 
-                while self.is_recording:
+                while self.is_recording or self.drain_requested:
                     try:
-                        message = await self.ws.recv()
+                        try:
+                            message = await asyncio.wait_for(self.ws.recv(), timeout=0.5)
+                        except asyncio.TimeoutError:
+                            if not (self.is_recording or self.drain_requested):
+                                break
+                            continue
                         if isinstance(message, str):
                             response = json.loads(message)
                             
@@ -3755,8 +3751,13 @@ class OpenAIWebSocketProvider:
                             # Track when the model is speaking so we can suppress mic capture
                             if response.get("type") in ("response.created", "response.output_item.added", "response.audio.delta"):
                                 self.is_ai_speaking = True
+                                self.awaiting_response = True
+                                if response.get("type") in ("response.created",):
+                                    print("AI response starting")
                             elif response.get("type") in ("response.output_item.done", "response.done"):
                                 self.is_ai_speaking = False
+                                self.awaiting_response = False
+                                print("AI response stopping")
                             
                             # Handle user speech transcript
                             if response.get("type") == "conversation.item.input_audio_transcription.completed":
@@ -3773,8 +3774,23 @@ class OpenAIWebSocketProvider:
                                             transcript = content.get("transcript", "")
                                             if transcript and self.on_assistant_transcript:
                                                 self._schedule_callback(self.on_assistant_transcript, transcript)
+                                # End drain phase once final response processed
+                                self.drain_requested = False
+                                self.response_started = False
+                                self.buffer_started = False
+                                self.awaiting_response = False
+                                self.has_pending_audio = False
+                                self.awaiting_final_transcript = False
                             
-                            if "text" in response:
+                            # Handle server VAD speech detection events
+                            elif response.get("type") == "input_audio_buffer.speech_started":
+                                self._log("Server VAD: speech started")
+                            elif response.get("type") == "input_audio_buffer.speech_stopped":
+                                self._log("Server VAD: speech stopped")
+                                # Server VAD will auto-commit, just track state
+                                self.awaiting_response = True
+                                
+                            if "text" in response and not self.awaiting_response:
                                 self._schedule_callback(callback, response["text"])
                             elif response.get("type") == "response.audio.delta":
                                 try:
@@ -3795,9 +3811,18 @@ class OpenAIWebSocketProvider:
                                     import traceback
                                     traceback.print_exc()
                             elif response.get("type") == "error":
+                                err_code = response.get("error", {}).get("code")
+                                # Ignore empty buffer errors (common during shutdown)
+                                if err_code == "input_audio_buffer_commit_empty":
+                                    self._log("Ignoring empty buffer commit error")
+                                    continue
                                 print(f"Error from server: {response}")
-                                if response.get("error", {}).get("code") != "end_of_speech":
-                                    break
+                                # Reset buffer state on invalid audio errors
+                                self.buffer_started = False
+                                self.has_pending_audio = False
+                                if err_code == "invalid_value":
+                                    continue
+                                break
                             elif "audio" in response:  # Audio data in base64
                                 try:
                                     # Decode base64 audio data
@@ -3823,7 +3848,7 @@ class OpenAIWebSocketProvider:
                         
                     except websockets.exceptions.ConnectionClosed as e:
                         print(f"WebSocket closed with code {e.code}: {e.reason}")
-                        if not self.is_recording:  # Only break if we're stopping
+                        if not (self.is_recording or self.drain_requested):  # Only break if we're stopping
                             break
                         # Try to reconnect
                         try:
@@ -3856,12 +3881,15 @@ class OpenAIWebSocketProvider:
         if status:
             if self.debug:
                 print(f"Audio input status: {status}")
-            
+
         if not self.is_recording:
             self._log("audio_callback: not recording; skipping")
             return
         if not self.ws:
             self._log("audio_callback: no websocket; skipping")
+            return
+        if self.awaiting_response:
+            # Don't send new audio while waiting for the current response turn to finish
             return
         if not self._ws_is_open():
             self._log(f"audio_callback: websocket not open; attempting reconnect ({self._ws_state_debug()})")
@@ -3874,13 +3902,14 @@ class OpenAIWebSocketProvider:
             except Exception as e:
                 self._log(f"audio_callback: reconnect failed {e!r}")
                 return
-        if self.is_ai_speaking and getattr(self, "mute_mic_during_playback", False):
+        if (self.is_ai_speaking or self.awaiting_response) and getattr(self, "mute_mic_during_playback", False):
             return
         
         try:
             # Normalize and scale the audio data
             audio_data = indata.copy()
             audio_data = audio_data.flatten()
+            # Logging only; rely on server VAD
             try:
                 peak = float(np.max(np.abs(audio_data))) if audio_data.size else 0.0
             except Exception:
@@ -3935,29 +3964,22 @@ class OpenAIWebSocketProvider:
             return
         try:
             self._log(f"_send_audio_chunk bytes={len(audio_bytes)} commit={commit_now}")
-            append = {
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(audio_bytes).decode("utf-8"),
-            }
-            await self.ws.send(json.dumps(append))
+            if audio_bytes:
+                self.buffer_started = True
+                self.has_pending_audio = True
+                append = {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(audio_bytes).decode("utf-8"),
+                }
+                await self.ws.send(json.dumps(append))
             if commit_now:
+                if not self.has_pending_audio:
+                    return
                 commit = {"type": "input_audio_buffer.commit"}
                 await self.ws.send(json.dumps(commit))
                 self._log("send_audio_chunk: sent commit")
-                # Trigger a response if we haven't already for this session
-                if not self.response_started:
-                    self._log("send_audio_chunk: creating response stream after commit")
-                    await self.ws.send(json.dumps({
-                        "type": "response.create",
-                        "response": {
-                            "modalities": ["audio", "text"],
-                            "voice": self.voice or "alloy",
-                            "instructions": self.system_message,
-                            "output_audio_format": "pcm16",
-                            **({"temperature": self.temperature} if self.temperature is not None else {})
-                        },
-                    }))
-                    self.response_started = True
+                self.buffer_started = False
+                self.has_pending_audio = False
         except Exception as e:
             print(f"Error sending audio chunk: {e}")
             self.last_send_error = e
@@ -3969,7 +3991,7 @@ class OpenAIWebSocketProvider:
         except Exception as e:
             print(f"Error sending audio data: {e}")
 
-    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None):
+    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None, vad_threshold=None):
         """Start streaming audio in a background task"""
         self._log("Starting streaming")
         # Store the configuration
@@ -3983,6 +4005,8 @@ class OpenAIWebSocketProvider:
             self.realtime_prompt = realtime_prompt
         if mute_mic_during_playback is not None:
             self.mute_mic_during_playback = bool(mute_mic_during_playback)
+        if vad_threshold is not None:
+            self.vad_threshold = float(vad_threshold)
         
         self.start_loop()
         
@@ -4005,14 +4029,37 @@ class OpenAIWebSocketProvider:
         """Stop audio streaming"""
         self._log("Stopping audio stream...")
         self.is_recording = False
+        self.drain_requested = True
+        
+        # Only try to commit if we have local buffered audio (at least 100ms worth)
+        # Server requires minimum 100ms = 2400 bytes at 24kHz 16-bit mono
+        min_buffer_bytes = int(self.output_sample_rate * 0.1 * 2)  # 100ms
+        has_sufficient_audio = len(self.audio_buffer) >= min_buffer_bytes
         
         if self.loop and self.ws and self._ws_is_open():
             try:
-                # Commit once, then close/await close
-                asyncio.run_coroutine_threadsafe(
-                    self._send_audio_chunk(b"", commit_now=True),
-                    self.loop
-                ).result(timeout=2.0)
+                if has_sufficient_audio:
+                    # Send remaining buffer then commit
+                    chunk_bytes = bytes(self.audio_buffer)
+                    self.audio_buffer = bytearray()
+                    asyncio.run_coroutine_threadsafe(
+                        self._send_audio_chunk(chunk_bytes, commit_now=True),
+                        self.loop
+                    ).result(timeout=1.0)
+            except Exception as e:
+                # Ignore empty buffer errors on shutdown
+                if "buffer_commit_empty" not in str(e) and "buffer too small" not in str(e):
+                    print(f"Error during final commit: {e}")
+            
+            # Wait for drain/final transcript to finish or timeout
+            import time
+            start = time.time()
+            self.awaiting_final_transcript = True
+            while (self.drain_requested or self.awaiting_final_transcript) and (time.time() - start) < 3.0:
+                time.sleep(0.05)
+            
+            # Close the websocket
+            try:
                 asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop).result(timeout=2.0)
                 asyncio.run_coroutine_threadsafe(self.ws.wait_closed(), self.loop).result(timeout=2.0)
             except Exception as e:
@@ -4057,8 +4104,6 @@ class OpenAIWebSocketProvider:
                                 "type": "response.create",
                                 "response": {
                                     "modalities": ["audio", "text"],
-                                    "voice": self.voice or "alloy",
-                                    "instructions": self.system_message,
                                     "output_audio_format": "pcm16"
                                 }
                             }
@@ -4101,7 +4146,7 @@ class OpenAIWebSocketProvider:
     def connect(self, model=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None):
         """Initialize WebSocket connection without starting audio stream"""
         # Store the configuration
-        self.model = model or 'gpt-4o-realtime-preview-2024-12-17'
+        self.model = model or 'gpt-realtime'
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature
         self.voice = voice or "alloy"
