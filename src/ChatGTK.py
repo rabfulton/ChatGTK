@@ -215,6 +215,9 @@ class OpenAIGTKClient(Gtk.Window):
         self._refresh_system_prompt_combo()
         self._toolbar.widget.pack_start(self.combo_system_prompt, False, False, 0)
         self._toolbar.widget.reorder_child(self.combo_system_prompt, 2)
+        
+        # Initialize tool indicators
+        self._update_tool_indicators()
 
         vbox_main.pack_start(self._toolbar.widget, False, False, 0)
 
@@ -996,6 +999,21 @@ class OpenAIGTKClient(Gtk.Window):
         success = event.data.get('success', False)
         status = "success" if success else "failed"
         print(f"[Event] Tool result: {tool_name} - {status}")
+
+    # -----------------------------------------------------------------------
+    # Toolbar helpers
+    # -----------------------------------------------------------------------
+
+    def _update_tool_indicators(self):
+        """Update the toolbar tool indicators based on current settings."""
+        if hasattr(self, '_toolbar'):
+            self._toolbar.update_tool_indicators(
+                image=bool(getattr(self, "image_tool_enabled", False)),
+                music=bool(getattr(self, "music_tool_enabled", False)),
+                web_search=bool(getattr(self, "web_search_enabled", False)),
+                read_aloud=bool(getattr(self, "read_aloud_tool_enabled", False)),
+                search=bool(getattr(self, "search_tool_enabled", False)),
+            )
 
     # -----------------------------------------------------------------------
     # System prompt management
@@ -1804,6 +1822,9 @@ class OpenAIGTKClient(Gtk.Window):
             self.controller.tool_service.enable_tool('music', bool(getattr(self, "music_tool_enabled", False)))
             self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
             self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
+            
+            # Update toolbar indicators
+            self._update_tool_indicators()
 
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()
@@ -1914,6 +1935,8 @@ class OpenAIGTKClient(Gtk.Window):
             save_object_settings(self)
             # Reload settings manager cache so controller sees updated values
             self.controller.settings_manager.reload()
+            # Update toolbar indicators
+            self._update_tool_indicators()
         dialog.destroy()
 
 

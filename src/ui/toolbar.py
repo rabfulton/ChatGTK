@@ -95,7 +95,46 @@ class Toolbar(UIComponent):
         self.btn_tools.connect("clicked", self._on_tools_clicked)
         box.pack_start(self.btn_tools, False, False, 0)
         
+        # Spacer to push tool indicators to the right
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        box.pack_start(spacer, True, True, 0)
+        
+        # Active tools indicator (right edge)
+        self.tools_indicator = Gtk.Label()
+        self.tools_indicator.set_opacity(0.7)
+        css = Gtk.CssProvider()
+        css.load_from_data(b"label { font-size: 0.85em; }")
+        self.tools_indicator.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        box.pack_end(self.tools_indicator, False, False, 6)
+        
         return box
+    
+    def update_tool_indicators(self, image=False, music=False, web_search=False, read_aloud=False, search=False):
+        """Update the active tools indicator."""
+        indicators = []
+        if image:
+            indicators.append("I")
+        if music:
+            indicators.append("M")
+        if web_search:
+            indicators.append("W")
+        if read_aloud:
+            indicators.append("R")
+        if search:
+            indicators.append("S")
+        
+        if indicators:
+            self.tools_indicator.set_text(" · ".join(indicators))
+            self.tools_indicator.set_tooltip_text(
+                "Active tools: " + ", ".join([
+                    n for n, a in [("Image", image), ("Music", music), 
+                    ("Web Search", web_search), ("Read Aloud", read_aloud), ("Search", search)] if a
+                ])
+            )
+        else:
+            self.tools_indicator.set_text("")
+            self.tools_indicator.set_tooltip_text("")
     
     def set_sidebar_visible(self, visible: bool):
         """Update sidebar toggle button arrow direction."""
