@@ -2996,7 +2996,7 @@ class OpenAIGTKClient(Gtk.Window):
             if new_name:
                 # Set the custom title via utils function
                 from utils import set_chat_title
-                chat_id = history_row.filename.replace('.json', '') if history_row.filename.endswith('.json') else history_row.filename
+                chat_id = history_row.chat_id
                 set_chat_title(chat_id, new_name)
                 # Refresh sidebar to show new title
                 self.refresh_history_list()
@@ -3033,7 +3033,8 @@ class OpenAIGTKClient(Gtk.Window):
             dialog.add_filter(pdf_filter)
             
             # Set default filename from the chat history
-            default_name = f"chat_{history_row.filename.replace('.json', '.pdf')}"
+            chat_id = history_row.chat_id
+            default_name = f"chat_{chat_id}.pdf"
             dialog.set_current_name(default_name)
             
             # Show the dialog
@@ -3046,19 +3047,18 @@ class OpenAIGTKClient(Gtk.Window):
                     filename += '.pdf'
                     
                 # Load the chat history via chat service
-                chat_id = history_row.filename.replace('.json', '') if history_row.filename.endswith('.json') else history_row.filename
                 conv = self.controller.chat_service.load_chat(chat_id)
                 history = conv.to_list() if conv and hasattr(conv, 'to_list') else conv
                 if history:
                     # Use the sidebar chat title and present it with capitalized words
-                    chat_title = get_chat_title(history_row.filename)
+                    chat_title = get_chat_title(chat_id)
+                    # Remove timestamp suffix (e.g., _20250211_203903) and convert underscores to spaces
+                    clean_title = re.sub(r'_\d{8}_\d{6}$', '', chat_title)
+                    clean_title = clean_title.replace('_', ' ')
                     formatted_title = " ".join(
                         word[:1].upper() + word[1:] if word else ""
-                        for word in chat_title.split()
+                        for word in clean_title.split()
                     )
-                    
-                    # Get the chat ID from the filename
-                    chat_id = history_row.filename
                     
                     try:
                         result = export_chat_to_pdf(history, filename, formatted_title, chat_id)
