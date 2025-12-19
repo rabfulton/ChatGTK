@@ -82,17 +82,17 @@ class CustomProvider(AIProvider):
     def __init__(self):
         self.api_key = None
         self.endpoint = None
-        self.model_name = None
+        self.model_id = None
         self.api_type = "chat.completions"
         self.voice = None
         self.session = requests.Session()
 
-    def initialize(self, api_key: str, endpoint: str = None, model_name: str = None, api_type: str = None, voice: str = None):
+    def initialize(self, api_key: str, endpoint: str = None, model_id: str = None, api_type: str = None, voice: str = None):
         self.api_key = api_key
         if endpoint:
             self.endpoint = endpoint.rstrip("/")
-        if model_name:
-            self.model_name = model_name
+        if model_id:
+            self.model_id = model_id
         if api_type:
             self.api_type = api_type
         if voice:
@@ -118,6 +118,20 @@ class CustomProvider(AIProvider):
                 break
             cleaned = new_cleaned
         return cleaned
+
+    def _strip_invalid_img_tags(self, text: str) -> str:
+        """Remove <img> tags with absolute paths to non-existent files (model hallucinations)."""
+        if not text or "<img" not in text:
+            return text
+        import os
+        def check_img(match):
+            path = match.group(1)
+            # Only check absolute paths - leave relative paths, URLs, and examples alone
+            if path.startswith("/") and not os.path.exists(path):
+                print(f"[WARNING] Removing hallucinated img tag (file does not exist): {path}")
+                return ""
+            return match.group(0)
+        return re.sub(r'<img\s+src="([^"]+)"\s*/?\s*>', check_img, text)
 
     def _headers(self):
         headers = {"Content-Type": "application/json"}
@@ -200,7 +214,9 @@ class CustomProvider(AIProvider):
                         # Handle message output (contains text and potentially images)
                         if item_type == "message":
                             content = item.get("content", [])
-                            if isinstance(content, list):
+                            if isinstance(content, str):
+                                text_content += content
+                            elif isinstance(content, list):
                                 for content_item in content:
                                     if isinstance(content_item, dict):
                                         if "text" in content_item:
@@ -235,12 +251,13 @@ class CustomProvider(AIProvider):
                     else:
                         text_content = "\n\n".join(image_tags)
                 text_content = self._strip_think_content(text_content)
+                text_content = self._strip_invalid_img_tags(text_content)
                 if text_content:
                     return text_content
         
         # Try Responses output_text (legacy/simple format)
         if "output_text" in data:
-            return self._strip_think_content(data.get("output_text") or "")
+            return self._strip_invalid_img_tags(self._strip_think_content(data.get("output_text") or ""))
         
         return ""
 
@@ -248,7 +265,7 @@ class CustomProvider(AIProvider):
     # APIProvider interface
     # -----------------------------
     def get_available_models(self, disable_filter: bool = False):
-        return [self.model_name] if self.model_name else []
+        return [self.model_id] if self.model_id else []
 
     def generate_chat_completion(
         self,
@@ -270,7 +287,7 @@ class CustomProvider(AIProvider):
         if card and card.quirks.get("no_temperature") and temperature is None:
             temperature = None
         if api_type == "responses":
-            print(f"[CustomProvider] Using Responses API for model: {model or self.model_name}")
+            print(f"[CustomProvider] Using Responses API for model: {model or self.model_id}")
             return self._call_responses(
                 messages,
                 temperature,
@@ -283,7 +300,7 @@ class CustomProvider(AIProvider):
             )
         
         if api_type == "tts":
-            print(f"[CustomProvider] Using TTS API for model: {model or self.model_name}")
+            print(f"[CustomProvider] Using TTS API for model: {model or self.model_id}")
             self._debug("API Type", api_type)
             self._debug("Endpoint", self.endpoint)
             # Extract text from the last user message
@@ -314,7 +331,7 @@ class CustomProvider(AIProvider):
                 audio_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'audio'
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or "tts"))
+                safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_id or "tts"))
                 audio_path = audio_dir / f"{safe_model}_{timestamp}.mp3"
                 audio_path.write_bytes(audio_bytes)
                 
@@ -336,7 +353,7 @@ class CustomProvider(AIProvider):
                 return f"TTS Error: {e}"
         
         # Default to chat.completions
-        print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_name}")
+        print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_id}")
         url = self._url("/chat/completions")
         
         # Determine which tools are enabled
@@ -348,7 +365,7 @@ class CustomProvider(AIProvider):
         tools = build_tools_for_provider(enabled_tools, "custom")
         
         # Check reasoning effort from model card
-        model_name = model or self.model_name
+        model_name = model or self.model_id
         card = get_card(model_name)
         reasoning_effort = None
         if card and card.quirks.get("reasoning_effort_enabled"):
@@ -531,7 +548,7 @@ class CustomProvider(AIProvider):
             images_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or "custom"))
+            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_id or "custom"))
             image_path = images_dir / f"{safe_model}_{timestamp}.png"
             
             image_path.write_bytes(final_image_bytes)
@@ -573,7 +590,9 @@ class CustomProvider(AIProvider):
                         # Handle message output (contains text and potentially images)
                         if item_type == "message":
                             content = item.get("content", [])
-                            if isinstance(content, list):
+                            if isinstance(content, str):
+                                text_content += content
+                            elif isinstance(content, list):
                                 for content_item in content:
                                     if isinstance(content_item, dict):
                                         # Extract text
@@ -622,6 +641,7 @@ class CustomProvider(AIProvider):
                 text_content = "\n\n".join(image_tags)
         
         text_content = self._strip_think_content(text_content)
+        text_content = self._strip_invalid_img_tags(text_content)
         return text_content, function_calls
 
     def _build_responses_tools(self, enabled_tools: set, model: str = None) -> list:
@@ -638,7 +658,7 @@ class CustomProvider(AIProvider):
         
         # Add native image_generation tool if model supports it AND function tool not enabled
         if "generate_image" not in enabled_tools:
-            model_id = model or self.model_name
+            model_id = model or self.model_id
             card = get_card(model_id)
             if card and (card.capabilities.image_gen or card.capabilities.image_edit):
                 tools.append({"type": "image_generation"})
@@ -801,11 +821,11 @@ class CustomProvider(AIProvider):
         )
         
         # Build tools array
-        tools = self._build_responses_tools(enabled_tools, self.model_name)
+        tools = self._build_responses_tools(enabled_tools, self.model_id)
         
         # Build base params
         params = {
-            "model": self.model_name,
+            "model": self.model_id,
             "input": input_items,
         }
         
@@ -822,7 +842,7 @@ class CustomProvider(AIProvider):
             params["tools"] = tools
         
         # Add reasoning effort if enabled in model card
-        card = get_card(self.model_name)
+        card = get_card(self.model_id)
         if card and card.quirks.get("reasoning_effort_enabled"):
             effort_level = card.quirks.get("reasoning_effort_level", "low")
             params["reasoning"] = {"effort": effort_level}
@@ -911,7 +931,7 @@ class CustomProvider(AIProvider):
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": "" if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": "Image generated successfully." if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -938,7 +958,7 @@ class CustomProvider(AIProvider):
             ]
             
             params = {
-                "model": self.model_name or model,
+                "model": self.model_id or model,
                 "input": input_items,
             }
             
@@ -987,7 +1007,7 @@ class CustomProvider(AIProvider):
         
         # Handle /images/generations endpoint (standard image API)
         url = self._url("/images/generations")
-        payload = {"model": self.model_name or model, "prompt": prompt}
+        payload = {"model": self.model_id or model, "prompt": prompt}
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
         resp.raise_for_status()
         data = resp.json()
@@ -1021,7 +1041,7 @@ class CustomProvider(AIProvider):
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             # Sanitize model name for filename
-            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or model))
+            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_id or model))
             image_path = images_dir / f"{safe_model}_{timestamp}.png"
             
             image_path.write_bytes(final_image_bytes)
@@ -1036,7 +1056,7 @@ class CustomProvider(AIProvider):
     def generate_speech(self, text, voice):
         base = self._get_base_endpoint()
         url = base + "/audio/speech" if base else "/audio/speech"
-        payload = {"model": self.model_name, "input": text}
+        payload = {"model": self.model_id, "input": text}
         if voice:
             payload["voice"] = voice
         self._debug("TTS URL", url)
@@ -1071,7 +1091,7 @@ class CustomProvider(AIProvider):
             else:
                 _ = self.generate_chat_completion(
                     [{"role": "user", "content": "ping"}],
-                    model=self.model_name,
+                    model=self.model_id,
                     temperature=1.0,
                     max_tokens=16,
                 )
@@ -1581,7 +1601,7 @@ class OpenAIProvider(AIProvider):
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": "" if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": "Image generated successfully." if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have

@@ -564,7 +564,7 @@ class CustomModelDialog(Gtk.Dialog):
         provider.initialize(
             api_key=resolved_key,
             endpoint=data["endpoint"],
-            model_name=data["model_id"],
+            model_id=data["model_id"],
             api_type=data["api_type"],
             voice=data.get("voice"),
         )
@@ -2973,7 +2973,7 @@ class SettingsDialog(Gtk.Dialog):
             provider.initialize(
                 api_key=resolve_api_key(cfg.get("api_key", "")),
                 endpoint=cfg.get("endpoint"),
-                model_name=cfg.get("model_name") or cfg.get("model_id"),
+                model_id=cfg.get("model_name") or cfg.get("model_id"),
                 api_type=cfg.get("api_type") or "chat.completions",
                 voice=voice,
             )
@@ -3530,7 +3530,7 @@ class SettingsDialog(Gtk.Dialog):
                 provider.initialize(
                     api_key=resolve_api_key(custom_model_cfg.get("api_key", "")),
                     endpoint=custom_model_cfg.get("endpoint", ""),
-                    model_name=custom_model_cfg.get("model_name") or custom_model_cfg.get("model_id") or selected_provider,
+                    model_id=custom_model_cfg.get("model_name") or custom_model_cfg.get("model_id") or selected_provider,
                     api_type="tts",
                     voice=voice_to_use,
                 )

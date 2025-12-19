@@ -937,7 +937,7 @@ class ChatController:
                 provider.initialize(
                     api_key=resolve_api_key(config.get("api_key", "")).strip(),
                     endpoint=config.get("endpoint"),
-                    model_name=config.get("model_name") or model,
+                    model_id=config.get("model_name") or model,
                     api_type=config.get("api_type") or "chat.completions",
                     voice=config.get("voice"),
                 )

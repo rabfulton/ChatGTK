@@ -1210,7 +1210,15 @@ class OpenAIGTKClient(Gtk.Window):
         
         if supports_image_edit and has_attached_images and last_msg.get("images"):
             img = last_msg["images"][0]
-            image_data = img.get("data")
+            # Load image data from path if not already loaded
+            if img.get("data"):
+                image_data = img.get("data")
+            elif img.get("path"):
+                try:
+                    with open(img["path"], "rb") as f:
+                        image_data = base64.b64encode(f.read()).decode("utf-8")
+                except Exception as e:
+                    print(f"[Image Edit] Error loading image from path: {e}")
             mime_type = img.get("mime_type")
         
         # Get provider via controller
@@ -1952,7 +1960,7 @@ class OpenAIGTKClient(Gtk.Window):
         )
 
     def show_error_dialog(self, message: str):
-        """Display a simple modal error dialog."""
+        """Display a simple modal error dialog with selectable text."""
         dialog = Gtk.MessageDialog(
             transient_for=self,
             flags=0,
@@ -1960,7 +1968,13 @@ class OpenAIGTKClient(Gtk.Window):
             buttons=Gtk.ButtonsType.OK,
             text="Error",
         )
-        dialog.format_secondary_text(str(message))
+        # Use a selectable label instead of format_secondary_text
+        label = Gtk.Label(label=str(message))
+        label.set_selectable(True)
+        label.set_line_wrap(True)
+        label.set_max_width_chars(60)
+        label.show()
+        dialog.get_message_area().pack_start(label, False, False, 0)
         dialog.run()
         dialog.destroy()
 
@@ -2144,7 +2158,10 @@ class OpenAIGTKClient(Gtk.Window):
                     "mime_type": "image/png",
                     "is_edit_source": True,
                 })
+                # Include path in message so model can pass it to generate_image tool
+                edit_instruction = f"[Edit the image at: {self.pending_edit_image}]"
                 display_text = f"[Editing image]\n{question}" if question else "[Editing image]"
+                question = f"{edit_instruction}\n{question}" if question else edit_instruction
             except Exception as e:
                 print(f"Error loading edit image: {e}")
             finally:
@@ -3410,28 +3427,23 @@ class OpenAIGTKClient(Gtk.Window):
         
         def on_edit_toggled(widget):
             if widget.get_active():
-                # Check if current model supports image editing
-                model = self._get_model_id_from_combo()
                 from model_cards import get_card
-                card = get_card(model, getattr(self, 'custom_models', {}))
-                supports_edit = card and card.capabilities.image_edit if card else False
                 
-                if not supports_edit:
+                # Check if either the chat model OR the image model supports editing
+                chat_model = self._get_model_id_from_combo()
+                chat_card = get_card(chat_model, getattr(self, 'custom_models', {}))
+                chat_supports_edit = chat_card and chat_card.capabilities.image_edit if chat_card else False
+                
+                image_model = self.controller.get_setting('IMAGE_MODEL', 'dall-e-3')
+                image_card = get_card(image_model, getattr(self, 'custom_models', {})) if image_model else None
+                image_supports_edit = image_card and image_card.capabilities.image_edit if image_card else False
+                
+                if not chat_supports_edit and not image_supports_edit:
                     widget.set_active(False)
-                    dialog = Gtk.MessageDialog(
-                        transient_for=self,
-                        modal=True,
-                        message_type=Gtk.MessageType.WARNING,
-                        buttons=Gtk.ButtonsType.OK,
-                        text="Model does not support image editing",
-                    )
-                    dialog.format_secondary_text(
-                        f"The current model '{model}' does not support image editing.\n\n"
-                        "Either switch to a model that supports editing (e.g., gpt-image-1), "
-                        "or enable 'Image Edit' for this model in Settings → Model Whitelist."
-                    )
-                    dialog.run()
-                    dialog.destroy()
+                    msg = (f"Neither the chat model '{chat_model}' nor the image model '{image_model}' supports image editing.\n\n"
+                           "Switch to a model that supports editing (e.g., gpt-image-1), "
+                           "or enable 'Image Edit' in Settings → Model Whitelist.")
+                    self.show_error_dialog(msg)
                     return
                 
                 # Deactivate any other edit buttons
@@ -3556,7 +3568,7 @@ class OpenAIGTKClient(Gtk.Window):
         provider.initialize(
             api_key=resolve_api_key(cfg.get('api_key', '')),
             endpoint=cfg.get('endpoint', ''),
-            model_name=cfg.get('model_name') or cfg.get('model_id') or model_id,
+            model_id=cfg.get('model_name') or cfg.get('model_id') or model_id,
             api_type='tts',
             voice=voice
         )

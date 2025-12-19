@@ -82,9 +82,13 @@ DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX = (
     "You have access to a generate_image tool that can create or edit images for the user "
     "from a natural language description. Use this tool when the user explicitly asks for "
     "an image or when a diagram, illustration, or example image would significantly help "
-    "them understand the answer. To edit an existing image, provide the image_path parameter "
-    "with the path to the source image (e.g., from a previous generation). After using the "
-    "tool, describe the generated or edited image in your reply so the user knows what it contains."
+    "them understand the answer.\n\n"
+    "Examples:\n"
+    "  - 'Create an image of a cat' → prompt='A cute cat sitting comfortably'\n"
+    "  - 'Draw a sunset over mountains' → prompt='A vibrant sunset with orange and pink hues over snow-capped mountains'\n"
+    "  - 'Generate a diagram of a neural network' → prompt='A clear diagram showing neural network layers with nodes and connections'\n\n"
+    "To edit an existing image, provide the image_path parameter with the path to the source image. "
+    "After using the tool, describe the generated or edited image in your reply so the user knows what it contains."
 )
 
 _MUSIC_TOOL_PROMPT_BASE = (
