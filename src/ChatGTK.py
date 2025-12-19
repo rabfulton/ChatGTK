@@ -1195,8 +1195,10 @@ class OpenAIGTKClient(Gtk.Window):
             image_data = img.get("data")
             mime_type = img.get("mime_type")
         
-        # Get provider
-        provider = self._get_image_provider(model, provider_name)
+        # Get provider via controller
+        provider = self.controller.get_provider_for_model(model)
+        if not provider:
+            raise ValueError(f"{provider_name.title()} provider is not initialized")
         
         return self.controller.image_service.generate_image(
             prompt=prompt,
@@ -1207,32 +1209,6 @@ class OpenAIGTKClient(Gtk.Window):
             image_data=image_data,
             mime_type=mime_type,
         )
-    
-    def _get_image_provider(self, model, provider_name):
-        """Get or initialize provider for image generation."""
-        if provider_name == "custom":
-            provider = self.custom_providers.get(model)
-            if not provider:
-                cfg = (self.custom_models or {}).get(model, {})
-                if not cfg:
-                    raise ValueError(f"Custom model '{model}' is not configured")
-                provider = get_ai_provider("custom")
-                from utils import resolve_api_key
-                provider.initialize(
-                    api_key=resolve_api_key(cfg.get("api_key", "")).strip(),
-                    endpoint=cfg.get("endpoint"),
-                    model_name=cfg.get("model_name") or model,
-                    api_type=cfg.get("api_type") or "images",
-                    voice=cfg.get("voice"),
-                )
-                self.custom_providers[model] = provider
-            return provider
-        else:
-            # Get provider via controller
-            provider = self.controller.get_provider(provider_name)
-            if not provider:
-                raise ValueError(f"{provider_name.title()} provider is not initialized")
-            return provider
 
     def generate_image_via_preferred_model(self, prompt, last_msg, image_path=None):
         """

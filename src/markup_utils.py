@@ -234,8 +234,8 @@ def process_text_formatting(text, font_size):
     pattern0 = r'\*\*`([^`]+)`\*\*'
     text = re.sub(pattern0, r'<b><span font_family="monospace" background="#404040" foreground="#ffffff">\1</span></b>', text)
 
-    # Handle all bold text
-    pattern1 = r'\*\*([^*`]+?)\*\*'
+    # Handle all bold text (allow single asterisks inside for nested italic)
+    pattern1 = r'\*\*(.+?)\*\*'
     text = re.sub(pattern1, r'<b>\1</b>', text)
 
     # Apply other formatting and normalize line breaks.
@@ -284,8 +284,8 @@ def process_inline_markup(text, font_size):
     pattern0 = r'\*\*`([^`]+)`\*\*'
     text = re.sub(pattern0, lambda m: f'<b><span font_family="monospace" background="{bg_color}" foreground="{fg_color}">{m.group(1)}</span></b>', text)
     
-    # Handle remaining bold text
-    pattern1 = r'\*\*([^*]+?)\*\*'
+    # Handle remaining bold text (allow single asterisks inside for nested italic)
+    pattern1 = r'\*\*(.+?)\*\*'
     text = re.sub(pattern1, r'<b>\1</b>', text)
     
     # Handle remaining inline code
