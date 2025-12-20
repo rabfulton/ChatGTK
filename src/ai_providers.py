@@ -107,10 +107,11 @@ class CustomProvider(AIProvider):
             print(f"[DEBUG CustomProvider] {label}: {json.dumps(data, indent=2, default=str)}")
 
     def _clean_messages(self, messages: list) -> list:
-        """Strip provider_meta and other non-standard fields from messages."""
+        """Strip internal app fields that shouldn't be sent to APIs."""
+        internal_keys = {"provider_meta", "model"}
         cleaned = []
         for msg in messages:
-            clean_msg = {k: v for k, v in msg.items() if k != "provider_meta"}
+            clean_msg = {k: v for k, v in msg.items() if k not in internal_keys}
             cleaned.append(clean_msg)
         return cleaned
 
