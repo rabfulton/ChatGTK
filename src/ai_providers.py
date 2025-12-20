@@ -106,6 +106,14 @@ class CustomProvider(AIProvider):
         if os.environ.get("DEBUG_CHATGTK"):
             print(f"[DEBUG CustomProvider] {label}: {json.dumps(data, indent=2, default=str)}")
 
+    def _clean_messages(self, messages: list) -> list:
+        """Strip provider_meta and other non-standard fields from messages."""
+        cleaned = []
+        for msg in messages:
+            clean_msg = {k: v for k, v in msg.items() if k != "provider_meta"}
+            cleaned.append(clean_msg)
+        return cleaned
+
     def _strip_think_content(self, text: str) -> str:
         """Remove leading <think>...</think> blocks some models prepend."""
         if not text:
@@ -371,9 +379,12 @@ class CustomProvider(AIProvider):
         if card and card.quirks.get("reasoning_effort_enabled"):
             reasoning_effort = card.quirks.get("reasoning_effort_level", "low")
         
+        # Clean messages to remove provider_meta and other non-standard fields
+        clean_messages = self._clean_messages(messages)
+        
         # Simple one-shot path when no tools are involved
         if not enabled_tools:
-            payload = {"model": model_name, "messages": messages}
+            payload = {"model": model_name, "messages": clean_messages}
             if temperature is not None:
                 payload["temperature"] = temperature
             if max_tokens and max_tokens > 0:
@@ -392,7 +403,7 @@ class CustomProvider(AIProvider):
         
         # Tool-aware flow: allow the model to call tools, route those through
         # handlers, then continue the conversation until we get a final answer.
-        tool_aware_messages = messages.copy()
+        tool_aware_messages = clean_messages.copy()
         max_tool_rounds = 3
         tool_result_snippets = []
         last_response_data = None
