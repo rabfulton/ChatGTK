@@ -65,6 +65,29 @@ class MessageRenderer:
         """Update the current chat ID for image paths."""
         self.current_chat_id = chat_id
 
+    def _scroll_to_widget(self, widget: Gtk.Widget):
+        """Scroll so the widget is at the top of the visible area."""
+        def do_scroll():
+            # Find the ScrolledWindow ancestor
+            sw = self.conversation_box
+            while sw and not isinstance(sw, Gtk.ScrolledWindow):
+                sw = sw.get_parent()
+            if not sw:
+                return False
+            
+            adj = sw.get_vadjustment()
+            # Get widget's position relative to conversation_box
+            result = widget.translate_coordinates(self.conversation_box, 0, 0)
+            if result:
+                x, y = result
+                # Only scroll if content exceeds visible area
+                if adj.get_upper() > adj.get_page_size():
+                    adj.set_value(y)
+            return False
+        
+        # Wait for layout to complete
+        GLib.timeout_add(50, do_scroll)
+
     def _apply_css_override(self, widget, css_string: str):
         """Apply CSS with APPLICATION priority to override existing styles."""
         style_provider = Gtk.CssProvider()
@@ -209,20 +232,7 @@ class MessageRenderer:
         self.message_widgets.append(event_box)
         self.conversation_box.show_all()
         
-        # Scroll to top of message after widget is allocated
-        def on_size_allocate(widget, allocation):
-            widget.disconnect(handler_id)
-            def do_scroll():
-                sw = self.conversation_box
-                while sw and not isinstance(sw, Gtk.ScrolledWindow):
-                    sw = sw.get_parent()
-                if sw:
-                    adj = sw.get_vadjustment()
-                    adj.set_value(allocation.y)
-                return False
-            GLib.idle_add(do_scroll)
-        
-        handler_id = event_box.connect("size-allocate", on_size_allocate)
+        self._scroll_to_widget(event_box)
 
     def append_ai_message(self, message_text: str, message_index: int):
         """Add an AI message with code blocks, tables, and images."""
@@ -293,20 +303,7 @@ class MessageRenderer:
         self.message_widgets.append(response_container)
         self.conversation_box.show_all()
         
-        # Scroll to top of response after widget is allocated
-        def on_size_allocate(widget, allocation):
-            widget.disconnect(handler_id)
-            def do_scroll():
-                sw = self.conversation_box
-                while sw and not isinstance(sw, Gtk.ScrolledWindow):
-                    sw = sw.get_parent()
-                if sw:
-                    adj = sw.get_vadjustment()
-                    adj.set_value(allocation.y)
-                return False
-            GLib.idle_add(do_scroll)
-        
-        handler_id = response_container.connect("size-allocate", on_size_allocate)
+        self._scroll_to_widget(response_container)
 
     def _attach_popup_to_text_view(self, text_view: Gtk.TextView, message_index: int):
         """Attach right-click popup menu to text view."""
