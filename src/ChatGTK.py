@@ -2319,27 +2319,45 @@ class OpenAIGTKClient(Gtk.Window):
         """Handle audio transcription."""
         print("Audio transcription...")
         stt_model = getattr(self, "speech_to_text_model", "") or "whisper-1"
+        stt_provider = None
         stt_base_url = None
         stt_api_key = None
-        try:
-            card = get_card(stt_model, self.custom_models)
-            if card:
-                stt_base_url = card.base_url or None
-                # Try to resolve a key for custom models
-                if card.provider == "custom":
-                    cfg = (self.custom_models or {}).get(stt_model, {})
-                    if cfg:
-                        from utils import resolve_api_key
-                        stt_api_key = resolve_api_key(cfg.get("api_key", ""))
-                elif card.key_name:
-                    stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
-        except Exception as e:
-            print(f"[Audio STT] Error reading card for {stt_model}: {e}")
         
-        # Get OpenAI provider via controller
-        openai_provider = self.controller.get_provider('openai')
-        if not openai_provider:
-            self.show_error_dialog("Audio transcription requires an OpenAI API key")
+        # Check if this is a custom STT model
+        cfg = (self.custom_models or {}).get(stt_model, {})
+        is_custom_stt = (cfg.get("api_type") or "").lower() == "stt"
+        
+        if is_custom_stt:
+            # Use CustomProvider for custom STT models
+            from ai_providers import CustomProvider
+            from utils import resolve_api_key
+            stt_provider = CustomProvider()
+            stt_provider.initialize(
+                api_key=resolve_api_key(cfg.get("api_key", "")),
+                endpoint=cfg.get("endpoint", ""),
+                model_id=stt_model,
+                api_type="stt",
+            )
+        else:
+            try:
+                card = get_card(stt_model, self.custom_models)
+                if card:
+                    stt_base_url = card.base_url or None
+                    # Try to resolve a key for custom models
+                    if card.provider == "custom":
+                        if cfg:
+                            from utils import resolve_api_key
+                            stt_api_key = resolve_api_key(cfg.get("api_key", ""))
+                    elif card.key_name:
+                        stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
+            except Exception as e:
+                print(f"[Audio STT] Error reading card for {stt_model}: {e}")
+            
+            # Get OpenAI provider via controller
+            stt_provider = self.controller.get_provider('openai')
+        
+        if not stt_provider:
+            self.show_error_dialog("Audio transcription requires an API key")
             return
         
         if not self.recording:
@@ -2364,15 +2382,15 @@ class OpenAIGTKClient(Gtk.Window):
                                 # Save recording
                                 temp_file = audio_service.save_recording(recording, sample_rate)
                                 
-                                # Transcribe with selected model (fallback to whisper-1)
+                                # Transcribe with selected model (fallback to whisper-1 for non-custom)
                                 transcript = None
                                 models_to_try = [stt_model]
-                                if "whisper-1" not in models_to_try:
+                                if not is_custom_stt and "whisper-1" not in models_to_try:
                                     models_to_try.append("whisper-1")
 
                                 for model in models_to_try:
                                     transcript = audio_service.transcribe(
-                                        temp_file, openai_provider,
+                                        temp_file, stt_provider,
                                         model=model,
                                         base_url=stt_base_url,
                                         api_key=stt_api_key,
@@ -2421,26 +2439,44 @@ class OpenAIGTKClient(Gtk.Window):
     def _audio_transcription_to_textview(self, textview):
         """Handle audio transcription and insert result into a textview at cursor position."""
         stt_model = getattr(self, "speech_to_text_model", "") or "whisper-1"
+        stt_provider = None
         stt_base_url = None
         stt_api_key = None
-        try:
-            card = get_card(stt_model, self.custom_models)
-            if card:
-                stt_base_url = card.base_url or None
-                if card.provider == "custom":
-                    cfg = (self.custom_models or {}).get(stt_model, {})
-                    if cfg:
-                        from utils import resolve_api_key
-                        stt_api_key = resolve_api_key(cfg.get("api_key", ""))
-                elif card.key_name:
-                    stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
-        except Exception as e:
-            print(f"[Audio STT] Error reading card for {stt_model}: {e}")
+        
+        # Check if this is a custom STT model
+        cfg = (self.custom_models or {}).get(stt_model, {})
+        is_custom_stt = (cfg.get("api_type") or "").lower() == "stt"
+        
+        if is_custom_stt:
+            # Use CustomProvider for custom STT models
+            from ai_providers import CustomProvider
+            from utils import resolve_api_key
+            stt_provider = CustomProvider()
+            stt_provider.initialize(
+                api_key=resolve_api_key(cfg.get("api_key", "")),
+                endpoint=cfg.get("endpoint", ""),
+                model_id=stt_model,
+                api_type="stt",
+            )
+        else:
+            try:
+                card = get_card(stt_model, self.custom_models)
+                if card:
+                    stt_base_url = card.base_url or None
+                    if card.provider == "custom":
+                        if cfg:
+                            from utils import resolve_api_key
+                            stt_api_key = resolve_api_key(cfg.get("api_key", ""))
+                    elif card.key_name:
+                        stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
+            except Exception as e:
+                print(f"[Audio STT] Error reading card for {stt_model}: {e}")
 
-        # Get OpenAI provider via controller
-        openai_provider = self.controller.get_provider('openai')
-        if not openai_provider:
-            self.show_error_dialog("Audio transcription requires an OpenAI API key")
+            # Get OpenAI provider via controller
+            stt_provider = self.controller.get_provider('openai')
+        
+        if not stt_provider:
+            self.show_error_dialog("Audio transcription requires an API key")
             return
 
         # Get the dialog to update recording state
@@ -2469,12 +2505,12 @@ class OpenAIGTKClient(Gtk.Window):
 
                                 transcript = None
                                 models_to_try = [stt_model]
-                                if "whisper-1" not in models_to_try:
+                                if not is_custom_stt and "whisper-1" not in models_to_try:
                                     models_to_try.append("whisper-1")
 
                                 for model in models_to_try:
                                     transcript = audio_service.transcribe(
-                                        temp_file, openai_provider,
+                                        temp_file, stt_provider,
                                         model=model,
                                         base_url=stt_base_url,
                                         api_key=stt_api_key,

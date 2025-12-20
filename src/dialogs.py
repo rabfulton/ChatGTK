@@ -123,6 +123,7 @@ class CustomModelDialog(Gtk.Dialog):
         ("responses", "responses"),
         ("images", "images"),
         ("tts", "tts"),
+        ("stt", "stt"),
     ]
 
     def __init__(self, parent, initial: dict = None):
@@ -1429,10 +1430,14 @@ class SettingsDialog(Gtk.Dialog):
             for mid, card in list_cards().items():
                 if card.capabilities.audio_in and not card.capabilities.audio_out:
                     extra_models.add(mid)
-            for mid in self.custom_models.keys():
-                card = get_card(mid, self.custom_models)
-                if card and card.capabilities.audio_in and not card.capabilities.audio_out:
+            for mid, cfg in (self.custom_models or {}).items():
+                # Include custom models with api_type "stt"
+                if (cfg.get("api_type") or "").lower() == "stt":
                     extra_models.add(mid)
+                else:
+                    card = get_card(mid, self.custom_models)
+                    if card and card.capabilities.audio_in and not card.capabilities.audio_out:
+                        extra_models.add(mid)
         except Exception as e:
             print(f"Error gathering STT models: {e}")
 

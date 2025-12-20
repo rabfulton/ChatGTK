@@ -157,7 +157,7 @@ class CustomProvider(AIProvider):
         # https://api.example.com/v1/chat/completions
         # We want to extract: https://api.example.com/v1
         # Remove /chat/completions, /responses, /images/generations, etc.
-        base = re.sub(r'/(chat/completions|responses|images/generations|audio/speech)(/.*)?$', '', base)
+        base = re.sub(r'/(chat/completions|responses|images/generations|audio/speech|audio/transcriptions)(/.*)?$', '', base)
         return base
 
     def _extract_text(self, data: dict, chat_id: str = None) -> str:
@@ -1050,8 +1050,40 @@ class CustomProvider(AIProvider):
         except Exception as e:
             return f"Error saving generated image: {e}"
 
-    def transcribe_audio(self, audio_file):
-        raise NotImplementedError("Transcription not implemented for custom provider")
+    def transcribe_audio(self, audio_file, model: str = None, prompt: str = None, **kwargs):
+        """Transcribe audio using the /audio/transcriptions endpoint."""
+        base = self._get_base_endpoint()
+        url = base + "/audio/transcriptions" if base else "/audio/transcriptions"
+        
+        # Read audio bytes
+        if hasattr(audio_file, "read"):
+            audio_bytes = audio_file.read()
+            filename = getattr(audio_file, "name", "audio.wav")
+        else:
+            audio_path = Path(audio_file)
+            audio_bytes = audio_path.read_bytes()
+            filename = audio_path.name
+        
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        
+        files = {"file": (filename, audio_bytes)}
+        data = {"model": model or self.model_id}
+        if prompt:
+            data["prompt"] = prompt
+        
+        self._debug("STT URL", url)
+        self._debug("STT Model", data["model"])
+        
+        resp = self.session.post(url, headers=headers, files=files, data=data, timeout=60)
+        self._debug("STT Response Status", resp.status_code)
+        resp.raise_for_status()
+        
+        result = resp.json()
+        text = result.get("text", "")
+        self._debug("STT Response Text", text[:200] if text else "(empty)")
+        return text
 
     def generate_speech(self, text, voice):
         base = self._get_base_endpoint()
@@ -1088,6 +1120,36 @@ class CustomProvider(AIProvider):
             elif api_type == "tts":
                 # Attempt a minimal TTS call; do not save output.
                 _ = self.generate_speech("ping", voice=None)
+            elif api_type == "stt":
+                # STT requires audio - just verify endpoint is reachable
+                base = self._get_base_endpoint()
+                url = base + "/audio/transcriptions" if base else "/audio/transcriptions"
+                # Send minimal request to check auth/endpoint
+                headers = {}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                # Create minimal silent WAV (44 bytes header + minimal data)
+                wav_header = bytes([
+                    0x52, 0x49, 0x46, 0x46,  # "RIFF"
+                    0x24, 0x00, 0x00, 0x00,  # file size - 8
+                    0x57, 0x41, 0x56, 0x45,  # "WAVE"
+                    0x66, 0x6D, 0x74, 0x20,  # "fmt "
+                    0x10, 0x00, 0x00, 0x00,  # chunk size
+                    0x01, 0x00,              # PCM
+                    0x01, 0x00,              # mono
+                    0x44, 0xAC, 0x00, 0x00,  # 44100 Hz
+                    0x88, 0x58, 0x01, 0x00,  # byte rate
+                    0x02, 0x00,              # block align
+                    0x10, 0x00,              # bits per sample
+                    0x64, 0x61, 0x74, 0x61,  # "data"
+                    0x00, 0x00, 0x00, 0x00,  # data size
+                ])
+                files = {"file": ("test.wav", wav_header)}
+                data = {"model": self.model_id}
+                resp = self.session.post(url, headers=headers, files=files, data=data, timeout=30)
+                # Accept 200 or 400 (bad audio but endpoint works) as success
+                if resp.status_code not in (200, 400):
+                    resp.raise_for_status()
             else:
                 _ = self.generate_chat_completion(
                     [{"role": "user", "content": "ping"}],
