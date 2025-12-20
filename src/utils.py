@@ -9,14 +9,51 @@ from config import SETTINGS_FILE, HISTORY_DIR, SETTINGS_CONFIG, API_KEYS_FILE, C
 # These are defined in gtk_utils.py to keep this module toolkit-agnostic
 from gtk_utils import parse_color_to_rgba, insert_resized_image
 
+# Global repository instances (lazy-initialized)
+# Import is deferred to avoid circular dependencies
+_settings_repo = None
+_api_keys_repo = None
+_model_cache_repo = None
+_chat_history_repo = None
+
+def _get_settings_repo():
+    """Get or create the settings repository instance."""
+    global _settings_repo
+    if _settings_repo is None:
+        from repositories import SettingsRepository
+        _settings_repo = SettingsRepository()
+    return _settings_repo
+
+def _get_api_keys_repo():
+    """Get or create the API keys repository instance."""
+    global _api_keys_repo
+    if _api_keys_repo is None:
+        from repositories import APIKeysRepository
+        _api_keys_repo = APIKeysRepository()
+    return _api_keys_repo
+
+def _get_model_cache_repo():
+    """Get or create the model cache repository instance."""
+    global _model_cache_repo
+    if _model_cache_repo is None:
+        from repositories import ModelCacheRepository
+        _model_cache_repo = ModelCacheRepository()
+    return _model_cache_repo
+
+def _get_chat_history_repo():
+    """Get or create the chat history repository instance."""
+    global _chat_history_repo
+    if _chat_history_repo is None:
+        from repositories import ChatHistoryRepository
+        _chat_history_repo = ChatHistoryRepository()
+    return _chat_history_repo
+
 
 # Create DEFAULT_SETTINGS from SETTINGS_CONFIG
 DEFAULT_SETTINGS = {key: config['default'] for key, config in SETTINGS_CONFIG.items()}
 
 # Known API key fields we persist in a separate JSON file under PARENT_DIR.
 API_KEY_FIELDS = ['openai', 'gemini', 'grok', 'claude', 'perplexity']
-
-import os
 
 def get_api_key_env_vars():
     """
@@ -130,57 +167,24 @@ def _migrate_legacy_tts_settings(settings, explicit_keys=None):
     return settings
 
 def load_settings():
-    """Load settings with type conversion based on config."""
-    settings = DEFAULT_SETTINGS.copy()
-    explicit_keys = set()  # Track which keys were explicitly set in the file
+    """Load settings with type conversion based on config.
     
-    try:
-        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                # Expect format KEY=VALUE
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    key = key.strip().upper()
-                    value = value.strip()
-                    if key in SETTINGS_CONFIG:
-                        explicit_keys.add(key)  # Mark this key as explicitly set
-                        try:
-                            # Special handling for boolean values
-                            if SETTINGS_CONFIG[key]['type'] == bool:
-                                settings[key] = value.lower() == 'true'
-                            elif SETTINGS_CONFIG[key]['type'] == str:
-                                # Unescape newlines for string values
-                                settings[key] = value.replace('\\n', '\n').replace('\\r', '')
-                            else:
-                                settings[key] = SETTINGS_CONFIG[key]['type'](value)
-                        except ValueError:
-                            # If conversion fails, keep default value
-                            pass 
-    except FileNotFoundError:
-        print(f"Settings file not found at: {SETTINGS_FILE}")
-    except Exception as e:
-        print(f"Error loading settings: {e}")
-    
-    # Apply migration for legacy TTS settings (only for keys not explicitly set)
-    settings = _migrate_legacy_tts_settings(settings, explicit_keys)
-    
-    return settings
+    DEPRECATED: Use SettingsRepository or SettingsManager directly.
+    """
+    # Use repository backend
+    repo = _get_settings_repo()
+    return repo.get_all()
 
 def save_settings(settings_dict):
-    """Save the settings dictionary to the SETTINGS_FILE in a simple key=value format."""
-    try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            f.write("# Application settings\n")
-            for key, value in settings_dict.items():
-                # Escape newlines for string values to keep them on one line in the file
-                if isinstance(value, str):
-                    value = value.replace('\n', '\\n').replace('\r', '')
-                f.write(f"{key}={value}\n")
-    except Exception as e:
-        print(f"Error saving settings: {e}")
+    """Save the settings dictionary to the SETTINGS_FILE in a simple key=value format.
+    
+    DEPRECATED: Use SettingsRepository or SettingsManager directly.
+    """
+    # Use repository backend
+    repo = _get_settings_repo()
+    for key, value in settings_dict.items():
+        repo.set(key, value)
+    repo.save()
 
 
 def load_api_keys():
@@ -190,34 +194,22 @@ def load_api_keys():
     Returns a dict keyed by provider name (openai, gemini, grok, claude, perplexity),
     plus any custom keys, defaulting to empty strings when no file or value exists.
     """
+    # Use repository backend
+    repo = _get_api_keys_repo()
     keys = {k: '' for k in API_KEY_FIELDS}
-    try:
-        with open(API_KEYS_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            # Load standard keys
-            for name in API_KEY_FIELDS:
-                value = data.get(name, '')
-                if value is None:
-                    value = ''
-                keys[name] = str(value).strip()
-            # Load custom keys (keys that aren't in API_KEY_FIELDS)
-            for name, value in data.items():
-                if name not in API_KEY_FIELDS and name != '_custom':
-                    if value is None:
-                        value = ''
-                    keys[name] = str(value).strip()
-            # Also check for legacy _custom section
-            if '_custom' in data and isinstance(data['_custom'], dict):
-                for name, value in data['_custom'].items():
-                    if value is None:
-                        value = ''
-                    keys[name] = str(value).strip()
-    except FileNotFoundError:
-        # No keys saved yet – this is fine.
-        pass
-    except Exception as e:
-        print(f"Error loading API keys: {e}")
+    
+    # Get all raw (unresolved) keys from repository
+    all_keys = repo.get_all_raw()
+    
+    # Populate standard keys
+    for name in API_KEY_FIELDS:
+        keys[name] = all_keys.get(name, '')
+    
+    # Add custom keys
+    for name, value in all_keys.items():
+        if name not in API_KEY_FIELDS:
+            keys[name] = value
+    
     return keys
 
 
@@ -227,25 +219,21 @@ def save_api_keys(api_keys: dict):
 
     Standard provider fields and custom keys are written; all values are stored as strings.
     """
-    try:
-        Path(API_KEYS_FILE).parent.mkdir(parents=True, exist_ok=True)
-        data = {}
-        # Save standard keys
-        for name in API_KEY_FIELDS:
-            value = api_keys.get(name, '')
-            if value is None:
-                value = ''
-            data[name] = str(value).strip()
-        # Save custom keys (keys that aren't in API_KEY_FIELDS)
-        for name, value in api_keys.items():
-            if name not in API_KEY_FIELDS:
-                if value is None:
-                    value = ''
-                data[name] = str(value).strip()
-        with open(API_KEYS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"Error saving API keys: {e}")
+    # Use repository backend
+    repo = _get_api_keys_repo()
+    
+    # Update all keys in repository
+    for name, value in api_keys.items():
+        if value is None:
+            value = ''
+        value = str(value).strip()
+        if value:
+            repo.set_key(name, value)
+        else:
+            # Remove empty keys
+            repo.delete_key(name)
+    
+    repo.save()
 
 
 def load_custom_models() -> dict:
@@ -381,54 +369,38 @@ def generate_chat_name(first_message):
     return f"{safe_msg}_{timestamp}.json"
 
 def save_chat_history(chat_name, conversation_history, metadata=None):
-    """Save a chat history to a file with optional metadata."""
-    ensure_history_dir()
+    """Save a chat history to a file with optional metadata.
     
-    # Add .json extension if not present
-    if not chat_name.endswith('.json'):
-        chat_name = f"{chat_name}.json"
-    
-    file_path = os.path.join(HISTORY_DIR, chat_name)
-    
-    # Create the full data structure
-    chat_data = {
-        "messages": conversation_history,
-        "metadata": metadata or {}
-    }
-    
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(chat_data, f, indent=2)
+    DEPRECATED: Use ChatHistoryRepository or ChatService directly.
+    """
+    # Use repository backend
+    repo = _get_chat_history_repo()
+    chat_id = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
+    repo.save(chat_id, conversation_history, metadata)
 
 def load_chat_history(chat_name, messages_only=True):
     """Load a chat history from a file.
+    
+    DEPRECATED: Use ChatHistoryRepository or ChatService directly.
     
     Args:
         chat_name: Name of the chat file
         messages_only: If True, returns only the messages. If False, returns full data structure
     """
-    if not chat_name.endswith('.json'):
-        chat_name = f"{chat_name}.json"
-    
-    file_path = os.path.join(HISTORY_DIR, chat_name)
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            
-        # Handle old format (just an array of messages)
-        if isinstance(data, list):
-            return data if messages_only else {"messages": data, "metadata": {}}
-            
-        # Handle new format
-        if messages_only:
-            return data.get("messages", [])
-        return data
-            
-    except FileNotFoundError:
+    # Use repository backend
+    repo = _get_chat_history_repo()
+    chat_id = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
+    conv = repo.get(chat_id)
+    if conv is None:
         return [] if messages_only else {"messages": [], "metadata": {}}
+    if messages_only:
+        return conv.to_list()
+    return {"messages": conv.to_list(), "metadata": conv.metadata or {}}
 
 def delete_chat_history(chat_name):
     """Delete a chat history and its associated files (images, audio, etc.).
+    
+    DEPRECATED: Use ChatHistoryRepository or ChatService directly.
     
     Args:
         chat_name: Name of the chat file (with or without .json extension)
@@ -436,26 +408,10 @@ def delete_chat_history(chat_name):
     Returns:
         bool: True if deletion was successful, False otherwise
     """
-    import shutil
-    
-    if not chat_name.endswith('.json'):
-        chat_name = f"{chat_name}.json"
-    
-    try:
-        # Delete the associated directory (images, audio, etc.)
-        chat_dir = Path(HISTORY_DIR) / chat_name.replace('.json', '')
-        if chat_dir.exists():
-            shutil.rmtree(chat_dir)
-        
-        # Delete the history JSON file
-        history_file = Path(HISTORY_DIR) / chat_name
-        if history_file.exists():
-            history_file.unlink()
-        
-        return True
-    except Exception as e:
-        print(f"Error deleting chat history {chat_name}: {e}")
-        return False
+    # Use repository backend
+    repo = _get_chat_history_repo()
+    chat_id = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
+    return repo.delete(chat_id)
 
 
 def get_chat_dir(chat_name):
@@ -502,42 +458,18 @@ def get_chat_title(chat_name):
 
 def list_chat_histories():
     """List all saved chat histories."""
-    ensure_history_dir()
+    # Use repository backend
+    repo = _get_chat_history_repo()
+    metadata_list = repo.list_all()
+    
     histories = []
-    
-    try:
-        for file in os.listdir(HISTORY_DIR):
-            if file.endswith('.json'):
-                file_path = os.path.join(HISTORY_DIR, file)
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        # Handle both old and new formats
-                        messages = data.get("messages", []) if isinstance(data, dict) else data
-                        # Get first user message for display
-                        first_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), "Empty chat")
-                        
-                        # Clean display text (strip markdown and newlines)
-                        display_text = clean_display_text(first_message)
-                        
-                        histories.append({
-                            'filename': file,
-                            'first_message': display_text[:50] + '...' if len(display_text) > 50 else display_text
-                        })
-                except Exception as e:
-                    print(f"Error reading history file {file}: {e}")
-    except Exception as e:
-        print(f"Error listing chat histories: {e}")
-    
-    # Extract timestamp from filename and sort by it (newest first)
-    def get_timestamp(filename):
-        # Extract YYYYMMDD_HHMMSS from filename
-        match = re.search(r'_(\d{8}_\d{6})\.json$', filename)
-        timestamp = match.group(1) if match else '00000000_000000'
-        return timestamp
-    
-    # Sort and print the order
-    histories.sort(key=lambda x: get_timestamp(x['filename']), reverse=True)
+    for meta in metadata_list:
+        # Clean display text (strip markdown and newlines)
+        display_text = clean_display_text(meta.title or "Empty chat")
+        histories.append({
+            'filename': f"{meta.chat_id}.json",
+            'first_message': display_text[:50] + '...' if len(display_text) > 50 else display_text
+        })
     
     return histories
 

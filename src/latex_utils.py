@@ -68,12 +68,10 @@ CHAT_PDF_TEMPLATE = r"""
 % Code listing style
 \lstset{
     basicstyle=\ttfamily\small,
-    backgroundcolor=\color{codebg},
-    basicstyle=\color{codetext}\ttfamily\small,
     breaklines=true,
     frame=single,
     numbers=left,
-    numberstyle=\tiny\color{codetext},
+    numberstyle=\tiny,
     showstringspaces=false
 }
 
@@ -89,6 +87,7 @@ CHAT_PDF_TEMPLATE = r"""
 
 # Special characters mapping
 SPECIAL_CHARS = {
+    '$': r'\$',
     'Ω': r'\Omega',
     'π': r'\pi',
     'μ': r'\mu',
@@ -571,6 +570,8 @@ def escape_latex_text_simple(text: str) -> str:
         '_': r'\_',
         '{': r'\{',
         '}': r'\}',
+        '[': r'{[}',  # Protect from being interpreted as optional argument
+        ']': r'{]}',  # Protect from being interpreted as optional argument
         '~': r'\textasciitilde{}',
         '^': r'\textasciicircum{}',
         '|': r'\textbar{}',
@@ -727,7 +728,7 @@ class ProtectedRegions:
         supported_languages = {
             'bash', 'c', 'cpp', 'c++', 'cmake', 'css', 'dockerfile', 'go', 'html',
             'ini', 'java', 'javascript', 'json', 'kotlin', 'latex', '{[latex]tex}',
-            'lua', 'make', 'markdown', 'php', 'plain', 'powershell', 'ps1', 'python',
+            'lua', 'make', 'php', 'plain', 'powershell', 'ps1', 'python',
             'r', 'ruby', 'rust', 'scala', 'shell', 'sql', 'swift', 'text', 'toml',
             'ts', 'typescript', 'xml', 'yaml'
         }
@@ -759,10 +760,7 @@ class ProtectedRegions:
             if language and language.lower() not in supported_languages:
                 language = ""
             
-            # Escape HTML/XML tags in code to prevent LaTeX UTF-8 errors
-            # Replace < and > with LaTeX equivalents
-            code = code.replace('<', r'\textless{}')
-            code = code.replace('>', r'\textgreater{}')
+            # lstlisting handles < and > natively, no escaping needed
             
             # Create lstlisting environment
             if language:
@@ -1748,8 +1746,14 @@ def escape_latex_text(text):
 def process_image_path(src, chat_id=None):
     """Convert a source path to a full path in the images directory."""
     try:
+        src_path = Path(src)
+        
+        # If src is already an absolute path that exists, use it directly
+        if src_path.is_absolute() and src_path.exists():
+            return str(src_path.resolve())
+        
         # Extract the image filename from the src
-        image_filename = Path(src).name
+        image_filename = src_path.name
         
         if chat_id:
             # Construct the path in the chat-specific images directory
@@ -1757,10 +1761,13 @@ def process_image_path(src, chat_id=None):
         else:
             # Fallback to temp directory if no chat_id provided
             image_path = Path(HISTORY_DIR) / 'temp' / 'images' / image_filename
-            
-        # Escape underscores in the path for LaTeX
-        latex_path = str(image_path.resolve()).replace('_', r'\_')
-        return latex_path
+        
+        # Only return path if file exists
+        if image_path.exists():
+            return str(image_path.resolve())
+        else:
+            print(f"DEBUG: Image not found: {image_path}")
+            return None
     except Exception as e:
         print(f"DEBUG: Failed to process image path: {e}")
         return None
@@ -1995,13 +2002,11 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
 
 % Code listing style
 \lstset{
-    basicstyle=\ttfamily\small\color{codetext},
-    commentstyle=\color{codecomment},
-    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
     breaklines=true,
     frame=single,
     numbers=left,
-    numberstyle=\tiny\color{codetext},
+    numberstyle=\tiny,
     showstringspaces=false,
     columns=flexible,
     keepspaces=true,

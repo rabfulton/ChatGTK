@@ -82,9 +82,13 @@ DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX = (
     "You have access to a generate_image tool that can create or edit images for the user "
     "from a natural language description. Use this tool when the user explicitly asks for "
     "an image or when a diagram, illustration, or example image would significantly help "
-    "them understand the answer. To edit an existing image, provide the image_path parameter "
-    "with the path to the source image (e.g., from a previous generation). After using the "
-    "tool, describe the generated or edited image in your reply so the user knows what it contains."
+    "them understand the answer.\n\n"
+    "Examples:\n"
+    "  - 'Create an image of a cat' → prompt='A cute cat sitting comfortably'\n"
+    "  - 'Draw a sunset over mountains' → prompt='A vibrant sunset with orange and pink hues over snow-capped mountains'\n"
+    "  - 'Generate a diagram of a neural network' → prompt='A clear diagram showing neural network layers with nodes and connections'\n\n"
+    "To edit an existing image, provide the image_path parameter with the path to the source image. "
+    "After using the tool, describe the generated or edited image in your reply so the user knows what it contains."
 )
 
 _MUSIC_TOOL_PROMPT_BASE = (
@@ -206,6 +210,7 @@ SETTINGS_CONFIG = {
     'TTS_PROMPT_TEMPLATE': {'type': str, 'default': ''},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},
     'REALTIME_PROMPT': {'type': str, 'default': 'Your name is {name}, speak quickly and professionally. Respond in the same language as the user unless directed otherwise.'},
+    'REALTIME_VAD_THRESHOLD': {'type': float, 'default': 0.1},
     'MUTE_MIC_DURING_PLAYBACK': {'type': bool, 'default': True},
     'SIDEBAR_VISIBLE': {'type': bool, 'default': True},
     'SIDEBAR_WIDTH': {'type': int, 'default': 200},
@@ -226,7 +231,7 @@ SETTINGS_CONFIG = {
     'OPENAI_MODEL_WHITELIST': {
         'type': str,
         # Include current realtime releases first, keep legacy preview IDs for backward compatibility.
-        'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-4o-mini-realtime-preview-2024-12-17,gpt-4o-realtime-preview-2024-12-17,gpt-realtime,gpt-realtime-mini,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-4o-realtime-preview,gpt-4o-mini-realtime-preview,gpt-realtime-2025-08-28,gpt-realtime-mini-2025-10-06,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
+        'default': 'dall-e-3,gpt-image-1,gpt-image-1-mini,gpt-realtime,gpt-realtime-mini,chatgpt-4o-latest,gpt-4o-mini,gpt-4o-audio-preview,gpt-4o-mini-audio-preview,gpt-4o,gpt-realtime-2025-08-28,gpt-realtime-mini-2025-10-06,o3,o3-mini,gpt-5.1,gpt-5.1-chat-latest'
     },
     'CUSTOM_MODEL_WHITELIST': {
         'type': str,

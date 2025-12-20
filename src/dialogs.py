@@ -23,11 +23,10 @@ import sounddevice as sd
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
 from model_cards import get_card, list_cards
+from repositories import ModelCacheRepository, SettingsRepository
 from utils import (
-    load_settings,
     apply_settings,
     parse_color_to_rgba,
-    save_settings,
     save_api_keys,
     load_api_keys,
     load_custom_models,
@@ -41,7 +40,6 @@ from config import (
     BASE_DIR,
     PARENT_DIR,
     SETTINGS_CONFIG,
-    MODEL_CACHE_FILE,
     DEFAULT_SYSTEM_PROMPT_APPENDIX,
     DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX,
     DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX,
@@ -63,16 +61,25 @@ def load_model_cache() -> dict:
     each value being a list of model ID strings.
     Returns an empty dict if the cache file does not exist or is invalid.
     """
-    if not os.path.exists(MODEL_CACHE_FILE):
-        return {}
-    try:
-        with open(MODEL_CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return data
-    except Exception as e:
-        print(f"Warning: could not load model cache: {e}")
-    return {}
+    # Use repository backend
+    repo = ModelCacheRepository()
+    result = {}
+    for provider in ['openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom']:
+        models = repo.get_models(provider)
+        if models:
+            result[provider] = models
+    return result
+
+
+# Settings repository singleton for dialogs
+_settings_repo = None
+
+def _get_settings_repo():
+    """Get or create the settings repository singleton."""
+    global _settings_repo
+    if _settings_repo is None:
+        _settings_repo = SettingsRepository()
+    return _settings_repo
 
 
 def save_model_cache(cache: dict) -> None:
@@ -80,11 +87,11 @@ def save_model_cache(cache: dict) -> None:
     Save the model cache to disk.
     `cache` should be a dict keyed by provider ID, each value a list of model IDs.
     """
-    try:
-        with open(MODEL_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, indent=2)
-    except Exception as e:
-        print(f"Warning: could not save model cache: {e}")
+    # Use repository backend
+    repo = ModelCacheRepository()
+    for provider, models in cache.items():
+        if isinstance(models, list):
+            repo.set_models(provider, models)
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +123,7 @@ class CustomModelDialog(Gtk.Dialog):
         ("responses", "responses"),
         ("images", "images"),
         ("tts", "tts"),
+        ("stt", "stt"),
     ]
 
     def __init__(self, parent, initial: dict = None):
@@ -557,7 +565,7 @@ class CustomModelDialog(Gtk.Dialog):
         provider.initialize(
             api_key=resolved_key,
             endpoint=data["endpoint"],
-            model_name=data["model_id"],
+            model_id=data["model_id"],
             api_type=data["api_type"],
             voice=data.get("voice"),
         )
@@ -1019,9 +1027,9 @@ class SettingsDialog(Gtk.Dialog):
         self.set_modal(True)
 
         # Load saved dialog size or use defaults
-        settings_dict = load_settings()
-        dialog_width = settings_dict.get('SETTINGS_DIALOG_WIDTH', 800)
-        dialog_height = settings_dict.get('SETTINGS_DIALOG_HEIGHT', 800)
+        settings_repo = _get_settings_repo()
+        dialog_width = settings_repo.get('SETTINGS_DIALOG_WIDTH', 800)
+        dialog_height = settings_repo.get('SETTINGS_DIALOG_HEIGHT', 800)
         self.set_default_size(dialog_width, dialog_height)
 
         # Connect to size change signal to save dialog size
@@ -1106,11 +1114,10 @@ class SettingsDialog(Gtk.Dialog):
         width = event.width
         height = event.height
 
-        # Load current settings and update dialog size
-        settings_dict = load_settings()
-        settings_dict['SETTINGS_DIALOG_WIDTH'] = width
-        settings_dict['SETTINGS_DIALOG_HEIGHT'] = height
-        save_settings(settings_dict)
+        # Save dialog size via repository
+        settings_repo = _get_settings_repo()
+        settings_repo.set('SETTINGS_DIALOG_WIDTH', width)
+        settings_repo.set('SETTINGS_DIALOG_HEIGHT', height)
 
         return False  # Allow the event to continue
 
@@ -1277,8 +1284,7 @@ class SettingsDialog(Gtk.Dialog):
         self.combo_theme = Gtk.ComboBoxText()
         scheme_manager = GtkSource.StyleSchemeManager.get_default()
         themes = scheme_manager.get_scheme_ids()
-        settings_dict = load_settings()
-        current_theme = settings_dict.get('SOURCE_THEME', 'solarized-dark')
+        current_theme = _get_settings_repo().get('SOURCE_THEME', 'solarized-dark')
         current_idx = 0
         for idx, theme_id in enumerate(sorted(themes)):
             self.combo_theme.append_text(theme_id)
@@ -1424,10 +1430,14 @@ class SettingsDialog(Gtk.Dialog):
             for mid, card in list_cards().items():
                 if card.capabilities.audio_in and not card.capabilities.audio_out:
                     extra_models.add(mid)
-            for mid in self.custom_models.keys():
-                card = get_card(mid, self.custom_models)
-                if card and card.capabilities.audio_in and not card.capabilities.audio_out:
+            for mid, cfg in (self.custom_models or {}).items():
+                # Include custom models with api_type "stt"
+                if (cfg.get("api_type") or "").lower() == "stt":
                     extra_models.add(mid)
+                else:
+                    card = get_card(mid, self.custom_models)
+                    if card and card.capabilities.audio_in and not card.capabilities.audio_out:
+                        extra_models.add(mid)
         except Exception as e:
             print(f"Error gathering STT models: {e}")
 
@@ -1467,7 +1477,7 @@ class SettingsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Text-to-Speech Model", xalign=0)
+        label = Gtk.Label(label="Text to Speech Model", xalign=0)
         label.set_hexpand(True)
         self.combo_tts_provider = Gtk.ComboBoxText()
 
@@ -1625,6 +1635,41 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(voice_box, True, True, 0)
         list_box.add(row)
 
+        # Mute mic during playback (echo suppression)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Mute mic during playback", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("May be necessary on systems that use speakers and do not have echo cancellation set up.")
+        self.switch_mute_mic_playback = Gtk.Switch()
+        current_mute = bool(getattr(self, "mute_mic_during_playback", False))
+        self.switch_mute_mic_playback.set_active(current_mute)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_mute_mic_playback, False, True, 0)
+        list_box.add(row)
+
+        # VAD Threshold
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Voice Detection Threshold", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("Controls voice activity detection sensitivity for realtime conversations. "
+                               "Lower values (e.g. 0.1) are more sensitive and detect quieter speech. "
+                               "Higher values (e.g. 0.5) require louder speech and reduce false triggers from background noise. "
+                               "Range: 0.0 to 1.0. Default: 0.1")
+        self.spin_vad_threshold = Gtk.SpinButton()
+        self.spin_vad_threshold.set_adjustment(Gtk.Adjustment(value=0.1, lower=0.0, upper=1.0, step_increment=0.05, page_increment=0.1))
+        self.spin_vad_threshold.set_digits(2)
+        current_vad = float(getattr(self, "realtime_vad_threshold", 0.1))
+        self.spin_vad_threshold.set_value(current_vad)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_vad_threshold, False, True, 0)
+        list_box.add(row)
+
         # Realtime Prompt (expanded like Speech Prompt Template)
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -1640,21 +1685,6 @@ class SettingsDialog(Gtk.Dialog):
         self.entry_realtime_prompt.set_placeholder_text("Your name is {name}, speak quickly and professionally")
         hbox.pack_start(label, False, True, 0)
         hbox.pack_start(self.entry_realtime_prompt, True, True, 0)
-        list_box.add(row)
-
-        # Mute mic during playback (echo suppression)
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Mute mic during playback", xalign=0)
-        label.set_hexpand(True)
-        label.set_tooltip_text("May be necessary on systems that use speakers and do not have echo cancellation set up.")
-        self.switch_mute_mic_playback = Gtk.Switch()
-        current_mute = bool(getattr(self, "mute_mic_during_playback", False))
-        self.switch_mute_mic_playback.set_active(current_mute)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_mute_mic_playback, False, True, 0)
         list_box.add(row)
 
         self.stack.add_named(scroll, "Audio")
@@ -2506,10 +2536,10 @@ class SettingsDialog(Gtk.Dialog):
     def _get_whitelisted_models(self) -> list:
         """Get all whitelisted models from settings."""
         models = []
-        settings = load_settings()
+        settings_repo = _get_settings_repo()
         for key in ['OPENAI_MODEL_WHITELIST', 'GEMINI_MODEL_WHITELIST', 'GROK_MODEL_WHITELIST', 
                     'CLAUDE_MODEL_WHITELIST', 'PERPLEXITY_MODEL_WHITELIST', 'CUSTOM_MODEL_WHITELIST']:
-            whitelist = settings.get(key, '')
+            whitelist = settings_repo.get(key, '')
             if whitelist:
                 models.extend([m.strip() for m in whitelist.split(',') if m.strip()])
         return sorted(set(models))
@@ -2846,9 +2876,10 @@ class SettingsDialog(Gtk.Dialog):
                 if model_id not in whitelist_models:
                     whitelist_models.add(model_id)
                     self.custom_model_whitelist = ",".join(sorted(whitelist_models))
-                    # Save the updated whitelist immediately
-                    settings = get_object_settings(self)
-                    save_settings(convert_settings_for_save(settings))
+                    # Save the updated whitelist immediately via repository
+                    settings_repo = _get_settings_repo()
+                    for key, value in convert_settings_for_save(get_object_settings(self)).items():
+                        settings_repo.set(key, value)
                 
                 # Refresh image model dropdown if this is an image model
                 if (data.get("api_type") or "").lower() == "images":
@@ -2947,7 +2978,7 @@ class SettingsDialog(Gtk.Dialog):
             provider.initialize(
                 api_key=resolve_api_key(cfg.get("api_key", "")),
                 endpoint=cfg.get("endpoint"),
-                model_name=cfg.get("model_name") or cfg.get("model_id"),
+                model_id=cfg.get("model_name") or cfg.get("model_id"),
                 api_type=cfg.get("api_type") or "chat.completions",
                 voice=voice,
             )
@@ -3504,7 +3535,7 @@ class SettingsDialog(Gtk.Dialog):
                 provider.initialize(
                     api_key=resolve_api_key(custom_model_cfg.get("api_key", "")),
                     endpoint=custom_model_cfg.get("endpoint", ""),
-                    model_name=custom_model_cfg.get("model_name") or custom_model_cfg.get("model_id") or selected_provider,
+                    model_id=custom_model_cfg.get("model_name") or custom_model_cfg.get("model_id") or selected_provider,
                     api_type="tts",
                     voice=voice_to_use,
                 )
@@ -3916,6 +3947,7 @@ class SettingsDialog(Gtk.Dialog):
             'tts_voice': self.combo_tts.get_active_text(),
             'realtime_voice': self.combo_realtime.get_active_text(),
             'realtime_prompt': self.entry_realtime_prompt.get_text(),
+            'realtime_vad_threshold': self.spin_vad_threshold.get_value(),
             'mute_mic_during_playback': self.switch_mute_mic_playback.get_active(),
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),
@@ -3951,8 +3983,7 @@ class SettingsDialog(Gtk.Dialog):
             # Window / tray behavior
             'minimize_to_tray_enabled': self.switch_minimize_to_tray.get_active(),
             # Model display names - preserve what was saved during the dialog session
-            # Load current value from settings file (already in JSON string format)
-            'model_display_names': load_settings().get('MODEL_DISPLAY_NAMES', ''),
+            'model_display_names': _get_settings_repo().get('MODEL_DISPLAY_NAMES', ''),
             
             # Advanced / Prompt Appendices
             # Helper to get text from stored buffers
@@ -4178,12 +4209,18 @@ class SettingsDialog(Gtk.Dialog):
 class ToolsDialog(Gtk.Dialog):
     """Dialog for configuring tool enablement (image, music, web search, read aloud)."""
 
-    def __init__(self, parent, tool_use_supported=True, **settings):
+    def __init__(self, parent, tool_use_supported=True, current_model=None, **settings):
         super().__init__(title="Tools", transient_for=parent, flags=0)
         apply_settings(self, settings)
         self.tool_use_supported = tool_use_supported
+        self.current_model = current_model
         self.set_modal(True)
         self.set_default_size(400, 200)
+
+        # Check if current model is Gemini
+        from model_cards import get_card
+        card = get_card(current_model) if current_model else None
+        self.is_gemini = card and card.provider == "gemini" if card else False
 
         box = self.get_content_area()
         box.set_spacing(6)
@@ -4266,6 +4303,11 @@ class ToolsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_search_tool, False, True, 0)
         list_box.add(row)
 
+        # For Gemini models, disable other tools when web search is enabled
+        if self.is_gemini:
+            self.switch_web_search.connect("notify::active", self._on_gemini_web_search_toggled)
+            self._on_gemini_web_search_toggled(self.switch_web_search, None)
+
         if not self.tool_use_supported:
             frame = Gtk.Frame()
             frame.set_shadow_type(Gtk.ShadowType.IN)
@@ -4294,10 +4336,52 @@ class ToolsDialog(Gtk.Dialog):
             frame.add(notice_box)
             box.pack_start(frame, False, False, 0)
 
+        # Gemini limitation notice
+        if self.is_gemini:
+            frame = Gtk.Frame()
+            frame.set_shadow_type(Gtk.ShadowType.IN)
+            frame.set_margin_top(6)
+            frame.set_margin_bottom(0)
+            frame.set_margin_start(12)
+            frame.set_margin_end(12)
+
+            notice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            notice_box.set_margin_top(8)
+            notice_box.set_margin_bottom(8)
+            notice_box.set_margin_start(8)
+            notice_box.set_margin_end(8)
+
+            info_icon = Gtk.Image.new_from_icon_name("dialog-warning-symbolic", Gtk.IconSize.MENU)
+            notice_box.pack_start(info_icon, False, False, 0)
+
+            self.gemini_notice = Gtk.Label(
+                label="Gemini does not support Web Search with other tools. Enabling Web Search will disable other tools.",
+                xalign=0,
+            )
+            self.gemini_notice.set_line_wrap(True)
+            self.gemini_notice.set_line_wrap_mode(Pango.WrapMode.WORD)
+            notice_box.pack_start(self.gemini_notice, True, True, 0)
+
+            frame.add(notice_box)
+            box.pack_start(frame, False, False, 0)
+
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
 
         self.show_all()
+
+    def _on_gemini_web_search_toggled(self, switch, _pspec):
+        """Disable other tools when web search is enabled for Gemini."""
+        web_search_active = switch.get_active()
+        self.switch_image_tool.set_sensitive(not web_search_active)
+        self.switch_music_tool.set_sensitive(not web_search_active)
+        self.switch_read_aloud_tool.set_sensitive(not web_search_active)
+        self.switch_search_tool.set_sensitive(not web_search_active)
+        if web_search_active:
+            self.switch_image_tool.set_active(False)
+            self.switch_music_tool.set_active(False)
+            self.switch_read_aloud_tool.set_active(False)
+            self.switch_search_tool.set_active(False)
 
     def get_tool_settings(self):
         """Return the tool settings from the dialog."""
@@ -4323,9 +4407,9 @@ class PromptEditorDialog(Gtk.Dialog):
         self.on_voice_input_callback = on_voice_input
 
         # Load saved dialog size or use defaults
-        settings_dict = load_settings()
-        dialog_width = settings_dict.get('PROMPT_EDITOR_DIALOG_WIDTH', 800)
-        dialog_height = settings_dict.get('PROMPT_EDITOR_DIALOG_HEIGHT', 500)
+        settings_repo = _get_settings_repo()
+        dialog_width = settings_repo.get('PROMPT_EDITOR_DIALOG_WIDTH', 800)
+        dialog_height = settings_repo.get('PROMPT_EDITOR_DIALOG_HEIGHT', 500)
         self.set_default_size(dialog_width, dialog_height)
 
         # Connect to size change signal to save dialog size
@@ -4434,10 +4518,9 @@ class PromptEditorDialog(Gtk.Dialog):
         response = super().run()
         # Save size when dialog closes
         if hasattr(self, '_current_width') and hasattr(self, '_current_height'):
-            settings_dict = load_settings()
-            settings_dict['PROMPT_EDITOR_DIALOG_WIDTH'] = self._current_width
-            settings_dict['PROMPT_EDITOR_DIALOG_HEIGHT'] = self._current_height
-            save_settings(convert_settings_for_save(settings_dict))
+            settings_repo = _get_settings_repo()
+            settings_repo.set('PROMPT_EDITOR_DIALOG_WIDTH', self._current_width)
+            settings_repo.set('PROMPT_EDITOR_DIALOG_HEIGHT', self._current_height)
         return response
 
     def _on_voice_clicked(self, widget):
@@ -4828,9 +4911,8 @@ class PromptEditorDialog(Gtk.Dialog):
 
     def _on_key_press(self, widget, event):
         """Handle keyboard shortcuts using configurable bindings."""
-        # Load shortcuts
-        settings = load_settings()
-        shortcuts_json = settings.get('KEYBOARD_SHORTCUTS', '')
+        # Load shortcuts via repository
+        shortcuts_json = _get_settings_repo().get('KEYBOARD_SHORTCUTS', '')
         try:
             shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
         except json.JSONDecodeError:

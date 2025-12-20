@@ -68,12 +68,15 @@ class Message:
         - 'file_id': Provider-assigned ID after upload (e.g., OpenAI file ID).
     provider_meta : ProviderMeta
         Provider-specific metadata.
+    model : Optional[str]
+        Model ID (stored in system message for chat restoration).
     """
     role: str
     content: str
     images: Optional[List[Dict[str, Any]]] = None
     files: Optional[List[Dict[str, Any]]] = None
     provider_meta: ProviderMeta = field(default_factory=ProviderMeta)
+    model: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization or API calls."""
@@ -86,6 +89,8 @@ class Message:
             result["images"] = self.images
         if self.files:
             result["files"] = self.files
+        if self.model:
+            result["model"] = self.model
         return result
     
     @classmethod
@@ -97,6 +102,7 @@ class Message:
             images=data.get("images"),
             files=data.get("files"),
             provider_meta=ProviderMeta.from_dict(data.get("provider_meta")),
+            model=data.get("model"),
         )
 
 
@@ -112,7 +118,7 @@ class ConversationHistory:
     and converting it for different purposes (API calls, serialization, etc.).
     """
     
-    def __init__(self, system_message: str = "You are a helpful assistant."):
+    def __init__(self, system_message: str = "You are a helpful assistant.", metadata: Optional[Dict[str, Any]] = None):
         """
         Initialize a new conversation history.
         
@@ -120,10 +126,13 @@ class ConversationHistory:
         ----------
         system_message : str
             The initial system message for the conversation.
+        metadata : Optional[Dict[str, Any]]
+            Optional chat-level metadata (e.g., title, tags).
         """
         self._messages: List[Message] = [
             Message(role="system", content=system_message)
         ]
+        self.metadata: Dict[str, Any] = metadata or {}
     
     @property
     def messages(self) -> List[Message]:
@@ -225,7 +234,7 @@ class ConversationHistory:
         return [msg.to_dict() for msg in self._messages]
     
     @classmethod
-    def from_list(cls, data: List[Dict[str, Any]], default_system: str = "You are a helpful assistant.") -> "ConversationHistory":
+    def from_list(cls, data: List[Dict[str, Any]], default_system: str = "You are a helpful assistant.", metadata: Optional[Dict[str, Any]] = None) -> "ConversationHistory":
         """
         Create from a list of dictionaries.
         
@@ -235,6 +244,8 @@ class ConversationHistory:
             The conversation history as a list of dicts.
         default_system : str
             Default system message if none is present.
+        metadata : Optional[Dict[str, Any]]
+            Optional chat-level metadata.
         
         Returns
         -------
@@ -243,6 +254,7 @@ class ConversationHistory:
         """
         history = cls.__new__(cls)
         history._messages = [Message.from_dict(d) for d in data] if data else []
+        history.metadata = metadata or {}
         
         # Ensure there's a system message at the start
         if not history._messages or history._messages[0].role != "system":
@@ -314,11 +326,39 @@ class ConversationHistory:
 
 
 # ---------------------------------------------------------------------------
-# Standalone helper functions for backward compatibility
+# Standalone helper functions (deprecated - use ConversationHistory methods)
+# ---------------------------------------------------------------------------
+# These functions are maintained for backward compatibility but are deprecated.
+# New code should use ConversationHistory class methods instead:
+#   - ConversationHistory.add_user_message()
+#   - ConversationHistory.add_assistant_message()
+#   - ConversationHistory(system_message=...) for system messages
 # ---------------------------------------------------------------------------
 
+import warnings
+
+_DEPRECATION_WARNED = set()  # Track which warnings have been shown
+
+
+def _warn_once(func_name: str, alternative: str) -> None:
+    """Show deprecation warning once per function."""
+    if func_name not in _DEPRECATION_WARNED:
+        _DEPRECATION_WARNED.add(func_name)
+        warnings.warn(
+            f"{func_name}() is deprecated. Use {alternative} instead. "
+            "This function will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=3
+        )
+
+
 def create_system_message(content: str) -> Dict[str, Any]:
-    """Create a system message dict."""
+    """Create a system message dict.
+    
+    .. deprecated::
+        Use ``ConversationHistory(system_message=content)`` instead.
+    """
+    # Note: Not warning for system messages as they're commonly used at init
     return {"role": "system", "content": content, "provider_meta": {}}
 
 
@@ -328,6 +368,9 @@ def create_user_message(
     files: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Create a user message dict.
+    
+    .. deprecated::
+        Use ``ConversationHistory.add_user_message()`` instead.
     
     Parameters
     ----------
@@ -359,7 +402,11 @@ def create_assistant_message(
     content: str,
     provider_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Create an assistant message dict."""
+    """Create an assistant message dict.
+    
+    .. deprecated::
+        Use ``ConversationHistory.add_assistant_message()`` instead.
+    """
     return {
         "role": "assistant",
         "content": content,
@@ -368,7 +415,11 @@ def create_assistant_message(
 
 
 def get_first_user_content(history: List[Dict[str, Any]]) -> str:
-    """Get the content of the first user message in a history."""
+    """Get the content of the first user message in a history.
+    
+    .. deprecated::
+        Use ``ConversationHistory.get_first_user_message()`` instead.
+    """
     for msg in history:
         if msg.get("role") == "user":
             return msg.get("content", "")

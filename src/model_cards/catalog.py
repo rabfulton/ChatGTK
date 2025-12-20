@@ -762,46 +762,6 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
     # ---------------------------------------------------------------------------
     # OpenAI Realtime Models
     # ---------------------------------------------------------------------------
-    "gpt-4o-realtime-preview": ModelCard(
-        id="gpt-4o-realtime-preview",
-        provider="openai",
-        display_name="GPT-4o Realtime Preview",
-        api_family="realtime",
-        capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
-        quirks={"realtime_websocket": True},
-    ),
-    "gpt-4o-realtime-preview-2024-12-17": ModelCard(
-        id="gpt-4o-realtime-preview-2024-12-17",
-        provider="openai",
-        display_name="GPT-4o Realtime Preview (2024-12-17)",
-        api_family="realtime",
-        capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
-        quirks={"realtime_websocket": True},
-    ),
-    "gpt-4o-realtime-preview-2025-06-03": ModelCard(
-        id="gpt-4o-realtime-preview-2025-06-03",
-        provider="openai",
-        display_name="GPT-4o Realtime Preview (2025-06-03)",
-        api_family="realtime",
-        capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
-        quirks={"realtime_websocket": True},
-    ),
-    "gpt-4o-mini-realtime-preview": ModelCard(
-        id="gpt-4o-mini-realtime-preview",
-        provider="openai",
-        display_name="GPT-4o Mini Realtime Preview",
-        api_family="realtime",
-        capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
-        quirks={"realtime_websocket": True},
-    ),
-    "gpt-4o-mini-realtime-preview-2024-12-17": ModelCard(
-        id="gpt-4o-mini-realtime-preview-2024-12-17",
-        provider="openai",
-        display_name="GPT-4o Mini Realtime Preview (2024-12-17)",
-        api_family="realtime",
-        capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
-        quirks={"realtime_websocket": True},
-    ),
     "gpt-realtime": ModelCard(
         id="gpt-realtime",
         provider="openai",

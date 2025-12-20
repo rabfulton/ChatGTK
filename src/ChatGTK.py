@@ -5,7 +5,6 @@ import gi
 import json
 import re
 import threading
-import os  # Import os to read/write environment variables and settings
 import sounddevice as sd  # For recording audio
 import soundfile as sf    # For saving audio files
 import numpy as np       # For audio processing
@@ -25,16 +24,10 @@ from latex_utils import (
     export_chat_to_pdf,
 )
 from utils import (
-    load_settings,
-    save_settings,
     generate_chat_name,
-    save_chat_history,
-    load_chat_history,
-    list_chat_histories,
     get_chat_metadata,
     get_chat_title,
     get_chat_dir,
-    delete_chat_history,
     parse_color_to_rgba,
     rgb_to_hex,
     insert_resized_image,
@@ -58,7 +51,6 @@ from markup_utils import (
 from gi.repository import Gdk
 from datetime import datetime
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG
-from audio import record_audio
 from tools import (
     ToolManager,
     is_chat_completion_model,
@@ -72,9 +64,8 @@ from conversation import (
     get_first_user_content,
 )
 from controller import ChatController
+from events import EventType, Event
 from message_renderer import MessageRenderer, RenderSettings, RenderCallbacks, create_source_view
-# Initialize provider as None
-ai_provider = None
 
 gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
@@ -103,9 +94,13 @@ class OpenAIGTKClient(Gtk.Window):
         self.controller = ChatController()
         self.controller.initialize_providers_from_env()
 
+        # Subscribe to events for reactive UI updates
+        self._init_event_subscriptions()
+
         # Load and apply settings (for UI settings like window_width, font_size, etc.)
         # Note: settings like system_message will be routed to controller via properties
-        loaded = load_settings()
+        # Settings are loaded via controller's settings_manager
+        loaded = self.controller.settings_manager.get_all()
         apply_settings(self, loaded)
         
         # Initialize window
@@ -117,17 +112,8 @@ class OpenAIGTKClient(Gtk.Window):
         # Flag to prevent minimize events during restoration
         self._restoring_from_tray = False
 
-        # Reference controller's mutable objects (dicts/lists share the same object)
-        # These aliases allow existing code to work without changes
-        # Note: conversation_history is now a property, not an alias
-        self.message_widgets = []  # UI-only, stays on window
-        self.providers = self.controller.providers
-        self.model_provider_map = self.controller.model_provider_map
-        self.api_keys = self.controller.api_keys
-        self.custom_models = self.controller.custom_models
-        self.custom_providers = self.controller.custom_providers
-        self.tool_manager = self.controller.tool_manager
-        self.system_prompts = self.controller.system_prompts
+        # UI-only state (not delegated to controller)
+        self.message_widgets = []
 
         # Remember the current geometry if not maximized
         self.current_geometry = (self.window_width, self.window_height)
@@ -140,75 +126,25 @@ class OpenAIGTKClient(Gtk.Window):
         self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         
         main_hbox.pack_start(self.paned, True, True, 0)
-        # Create sidebar
-        self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        self.sidebar.set_size_request(200, -1)
-        self.sidebar.set_margin_top(10)
-        self.sidebar.set_margin_bottom(10)
-        self.sidebar.set_margin_start(10)
-        self.sidebar.set_margin_end(10)
-
-        # Add "New Chat" button at the top of sidebar
-        new_chat_button = Gtk.Button(label="New Chat")
-        new_chat_button.connect("clicked", self.on_new_chat_clicked)
-        self.sidebar.pack_start(new_chat_button, False, False, 0)
-
-        # Add scrolled window for history list
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.sidebar.pack_start(scrolled, True, True, 0)
         
-        # Create list box for chat histories
-        self.history_list = Gtk.ListBox()
-        self.history_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self.history_list.connect('row-activated', self.on_history_selected)
-        self.history_list.connect('button-press-event', self.on_history_button_press)
-        
-        # Add navigation-sidebar style class
-        self.history_list.get_style_context().add_class('navigation-sidebar')
-        
-        scrolled.add(self.history_list)
-
-        # History filter entry at bottom of sidebar
+        # Create sidebar using UI component
+        from ui import HistorySidebar
+        self._history_sidebar = HistorySidebar(
+            event_bus=self.controller.event_bus,
+            controller=self.controller,
+            on_chat_selected=self.load_chat_by_filename,
+            on_new_chat=lambda: self.on_new_chat_clicked(None),
+            on_context_menu=self._on_sidebar_context_menu,
+            width=int(getattr(self, 'sidebar_width', 200)),
+        )
+        self.sidebar = self._history_sidebar.widget
+        # Expose history_list for backward compatibility
+        self.history_list = self._history_sidebar.history_list
+        # Expose filter state for backward compatibility
         self.history_filter_text = ""
-        self.history_filter_timeout_id = None
-        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        filter_entry = Gtk.Entry()
-        filter_entry.set_placeholder_text("Filter history...")
-        filter_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
-        filter_entry.connect("changed", self.on_history_filter_changed)
-        filter_entry.connect("icon-press", self.on_history_filter_icon_pressed)
-        filter_entry.connect("key-press-event", self.on_history_filter_keypress)
-        self.history_filter_entry = filter_entry
-        filter_box.pack_start(filter_entry, True, True, 0)
-        self.history_filter_box = filter_box
-        self.sidebar.pack_start(filter_box, False, False, 0)
-
-        filter_box.show_all()
-
-        # Filter options row (height aligned with typical button height)
-        options_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.history_options_box = options_box
-        self.sidebar.pack_start(options_box, False, False, 0)
-
-        # Titles-only toggle for filtering
         self.history_filter_titles_only = True
-        self.history_filter_toggle = Gtk.CheckButton(label="Titles only")
-        self.history_filter_toggle.set_active(True)
-        self.history_filter_toggle.connect("toggled", self.on_history_filter_mode_toggled)
-        options_box.pack_start(self.history_filter_toggle, False, False, 0)
-        self.history_filter_toggle.show()
-
-        # Whole-words toggle
         self.history_filter_whole_words = False
-        self.history_filter_whole_words_toggle = Gtk.CheckButton(label="Whole Words")
-        self.history_filter_whole_words_toggle.set_active(False)
-        self.history_filter_whole_words_toggle.connect("toggled", self.on_history_filter_whole_words_toggled)
-        options_box.pack_start(self.history_filter_whole_words_toggle, False, False, 0)
-        self.history_filter_whole_words_toggle.show()
-
-        options_box.show_all()
-
+        
         # Pack sidebar into left pane
         self.paned.pack1(self.sidebar, False, False)
 
@@ -224,42 +160,47 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Track sidebar width in memory
         self.current_sidebar_width = int(getattr(self, 'sidebar_width', 200))
-        self.paned.set_position(self.current_sidebar_width)
+        self._sidebar_initialized = False
 
         # Update memory value without saving to file
         def on_paned_position_changed(paned, param):
-            if not self.is_maximized():
+            if self._sidebar_initialized and not self.is_maximized():
                 self.current_sidebar_width = paned.get_position()
                 self.sidebar_width = self.current_sidebar_width
 
         self.paned.connect('notify::position', on_paned_position_changed)
-
-        # Top row: API Key, Model, Settings
-        hbox_top = Gtk.Box(spacing=6)
-
-        # Add sidebar toggle button to top bar
-        self.sidebar_button = Gtk.Button()
-        # Set arrow direction based on initial sidebar visibility state
-        # LEFT arrow = sidebar is visible (clicking will hide it)
-        # RIGHT arrow = sidebar is hidden (clicking will show it)
-        initial_arrow_type = Gtk.ArrowType.LEFT if getattr(self, 'sidebar_visible', True) else Gtk.ArrowType.RIGHT
-        arrow = Gtk.Arrow(arrow_type=initial_arrow_type, shadow_type=Gtk.ShadowType.NONE)
-        self.sidebar_button.add(arrow)
-        self.sidebar_button.connect("clicked", self.on_sidebar_toggle)
-        # Style to match other buttons
-        css_provider = Gtk.CssProvider()
-        css_provider.load_from_data(b"button { background: @theme_bg_color; }")
-        self.sidebar_button.get_style_context().add_provider(
-            css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        hbox_top.pack_start(self.sidebar_button, False, False, 0)
-
-        # Initialize model combo before trying to use it
-        self.combo_model = Gtk.ComboBoxText()
-        self.combo_model.connect('changed', self.on_model_changed)
         
-        # Provider initialization is now handled by self.controller.initialize_providers_from_env()
-        # called above. Here we just fetch models if we have any providers.
+        # Set paned position after window is realized
+        def set_initial_position(widget):
+            self.paned.set_position(self.current_sidebar_width)
+            self._sidebar_initialized = True
+        self.connect('realize', set_initial_position)
+
+        # Toolbar component
+        from ui import Toolbar
+        self._toolbar = Toolbar(
+            event_bus=self.controller.event_bus,
+            on_sidebar_toggle=lambda: self.on_sidebar_toggle(None),
+            on_settings=lambda: self.on_open_settings(None),
+            on_tools=lambda: self.on_open_tools(None),
+            sidebar_visible=getattr(self, 'sidebar_visible', True),
+        )
+        self.sidebar_button = self._toolbar.sidebar_button
+        
+        # Model selector component
+        from ui import ModelSelector
+        self._model_selector = ModelSelector(
+            event_bus=self.controller.event_bus,
+            on_model_changed=self._handle_model_changed,
+        )
+        self._toolbar.widget.pack_start(self._model_selector.widget, False, False, 0)
+        self._toolbar.widget.reorder_child(self._model_selector.widget, 1)
+        # Expose combo_model for backward compatibility
+        self.combo_model = self._model_selector.widget
+        self._display_to_model_id = self._model_selector._display_to_model_id
+        self._model_id_to_display = self._model_selector._model_id_to_display
+        
+        # Provider initialization
         if self.providers or self.custom_models:
             self.fetch_models_async()
         else:
@@ -268,93 +209,58 @@ class OpenAIGTKClient(Gtk.Window):
             self.controller.model_provider_map = self.model_provider_map
             self.update_model_list(default_models, self.default_model)
 
-        hbox_top.pack_start(self.combo_model, False, False, 0)
-
-        # System prompt selector (only visible when multiple prompts exist)
+        # System prompt selector
         self.combo_system_prompt = Gtk.ComboBoxText()
-        # Connect signal first, then refresh (refresh blocks/unblocks the handler)
         self.combo_system_prompt.connect("changed", self.on_system_prompt_changed)
         self._refresh_system_prompt_combo()
-        hbox_top.pack_start(self.combo_system_prompt, False, False, 0)
+        self._toolbar.widget.pack_start(self.combo_system_prompt, False, False, 0)
+        self._toolbar.widget.reorder_child(self.combo_system_prompt, 2)
+        
+        # Initialize tool indicators
+        self._update_tool_indicators()
 
-        # Settings button
-        btn_settings = Gtk.Button(label="Settings")
-        btn_settings.connect("clicked", self.on_open_settings)
-        hbox_top.pack_start(btn_settings, False, False, 0)
+        vbox_main.pack_start(self._toolbar.widget, False, False, 0)
 
-        # Tools button (for configuring model tools such as images and music)
-        btn_tools = Gtk.Button(label="Tools")
-        btn_tools.connect("clicked", self.on_open_tools)
-        hbox_top.pack_start(btn_tools, False, False, 0)
-
-        vbox_main.pack_start(hbox_top, False, False, 0)
-
-        # Scrolled window for conversation
-        scrolled_window = Gtk.ScrolledWindow()
-        scrolled_window.set_vexpand(True)
-        vbox_main.pack_start(scrolled_window, True, True, 0)
-
-        # Conversation box – we will add each message as a separate widget
-        self.conversation_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.conversation_box.set_margin_start(0)
-        self.conversation_box.set_margin_end(5)
-        self.conversation_box.set_margin_top(0)
-        self.conversation_box.set_margin_bottom(5)
-        scrolled_window.add(self.conversation_box)
+        # Chat view component for message display
+        from ui import ChatView
+        self._chat_view = ChatView(
+            event_bus=self.controller.event_bus,
+            window=self,
+            ai_name=self.ai_name,
+            ai_color=self.ai_color,
+            on_cancel=self._on_thinking_cancelled,
+        )
+        vbox_main.pack_start(self._chat_view.widget, True, True, 0)
+        # Expose conversation_box and message_widgets for backward compatibility
+        self.conversation_box = self._chat_view.conversation_box
+        self.message_widgets = self._chat_view.message_widgets
 
         # Initialize the message renderer for displaying chat messages
         self._init_message_renderer()
 
-        # Question input, prompt editor button, and send button
-        hbox_input = Gtk.Box(spacing=6)
-
-        self.entry_question = Gtk.Entry()
-        self.entry_question.set_placeholder_text("Enter your question here...")
-        self.entry_question.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic")
-        self.entry_question.connect("icon-press", self.on_question_icon_pressed)
-        self.entry_question.connect("activate", self.on_submit)
-
-        # Button to open a larger prompt editor dialog
-        btn_edit_prompt = Gtk.Button()
-        btn_edit_prompt.set_tooltip_text("Open prompt editor")
-        edit_icon = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
-        btn_edit_prompt.add(edit_icon)
-        btn_edit_prompt.set_relief(Gtk.ReliefStyle.NONE)
-        btn_edit_prompt.connect("clicked", self.on_open_prompt_editor)
-
-        btn_send = Gtk.Button(label="Send")
-        btn_send.connect("clicked", self.on_submit)
-        self.btn_send = btn_send
-
-        hbox_input.pack_start(self.entry_question, True, True, 0)
-        hbox_input.pack_start(btn_edit_prompt, False, False, 0)
-        hbox_input.pack_start(btn_send, False, False, 0)
-        vbox_main.pack_start(hbox_input, False, False, 0)
-
-        # Create horizontal box for buttons
-        button_box = Gtk.Box(spacing=6)
-
-        # Voice input button with recording state
+        # Input panel component
+        from ui import InputPanel
+        self._input_panel = InputPanel(
+            event_bus=self.controller.event_bus,
+            on_submit=lambda text: self.on_submit(None),
+            on_voice_input=lambda: self.on_voice_input(None),
+            on_attach_file=lambda: self.on_attach_file(None),
+            on_open_prompt_editor=lambda: self.on_open_prompt_editor(None),
+        )
+        vbox_main.pack_start(self._input_panel.widget, False, False, 0)
+        
+        # Expose widgets for backward compatibility
+        self.entry_question = self._input_panel.entry
+        self.btn_send = self._input_panel.btn_send
+        self.btn_voice = self._input_panel.btn_voice
+        self.btn_attach = self._input_panel.btn_attach
+        
+        # State (also tracked in component)
         self.recording = False
         self.attached_file_path = None
-        self.pending_edit_image = None  # Image path selected for editing
-        self.pending_edit_message_index = None  # Message index of the image
-        self._edit_buttons = []  # Track edit buttons for clearing
-        self.btn_voice = Gtk.Button(label="Start Voice Input")
-        self.btn_voice.connect("clicked", self.on_voice_input)
-        
-        # Add voice button to horizontal box
-        button_box.pack_start(self.btn_voice, True, True, 0)
-
-        # Attach File button
-        self.btn_attach = Gtk.Button(label="Attach File")
-        self.btn_attach.connect("clicked", self.on_attach_file)
-        button_box.pack_start(self.btn_attach, True, True, 0)
-
-        vbox_main.pack_start(button_box, False, False, 0)
-        # Keep sidebar row heights aligned with button height
-        button_box.connect("size-allocate", lambda w, alloc: self._update_sidebar_row_heights())
-        self._update_sidebar_row_heights()
+        self.pending_edit_image = None
+        self.pending_edit_message_index = None
+        self._edit_buttons = []
 
         # Check LaTeX installation
         if not is_latex_installed():
@@ -388,7 +294,6 @@ class OpenAIGTKClient(Gtk.Window):
                     
                     # Verify the file exists before trying to load
                     from config import HISTORY_DIR
-                    import os
                     chat_path = os.path.join(HISTORY_DIR, chat_filename)
                     if os.path.exists(chat_path):
                         self.load_chat_by_filename(chat_filename, save_current=False)
@@ -543,16 +448,16 @@ class OpenAIGTKClient(Gtk.Window):
         if hasattr(self, 'ws_provider'):
             self.ws_provider.stop_streaming()
             
-        # Load existing settings first to preserve values we don't manage
-        existing = load_settings()
-        # Get settings from this object
+        # Save settings via controller's settings_manager
         to_save = get_object_settings(self)
         to_save['WINDOW_WIDTH'] = self.current_geometry[0]
         to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
         to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
-        # Merge: existing settings + our updates
-        existing.update(to_save)
-        save_settings(convert_settings_for_save(existing))
+        for key, value in convert_settings_for_save(to_save).items():
+            self.controller.settings_manager.set(key, value, emit_event=False)
+        # Persist to disk
+        self.controller.settings_manager.save()
+        
         # Hide tray icon on exit (only for StatusIcon backend)
         if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
             try:
@@ -656,6 +561,13 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _get_model_id_from_combo(self):
         """Get the actual model_id from the combo box, mapping display text back to model_id."""
+        # Use ModelSelector if available
+        if hasattr(self, '_model_selector'):
+            model_id = self._model_selector.get_selected_model_id()
+            if model_id:
+                return model_id
+        
+        # Fallback to direct combo access
         display_text = self.combo_model.get_active_text()
         if not display_text:
             return None
@@ -679,9 +591,6 @@ class OpenAIGTKClient(Gtk.Window):
         card = get_card(model_id, self.custom_models)
         if card and getattr(card, "temperature", None) is not None:
             return float(card.temperature)
-        # Preserve legacy quirk as a hard stop if no explicit temperature is set
-        if card and card.quirks.get("no_temperature"):
-            return None
         return None
 
     def update_model_list(self, models, current_model=None):
@@ -690,116 +599,39 @@ class OpenAIGTKClient(Gtk.Window):
             models = self._default_models_for_provider('openai')
             self.model_provider_map = {model: 'openai' for model in models}
         
-        # Create mapping from display text to model_id
-        self._display_to_model_id = {}
+        # Build display names mapping
+        display_names = {}
         for model_id in models:
             display_name = get_model_display_name(model_id, self.custom_models)
-            # Only show display name if one is set, otherwise use model_id
             if display_name:
-                display_text = display_name
-            else:
-                display_text = model_id
-            self._display_to_model_id[display_text] = model_id
+                display_names[model_id] = display_name
         
-        # Find active model (map from display text to model_id if needed)
-        active_display = current_model
-        if current_model:
-            # Check if current_model is a display text or model_id
-            if current_model in self._display_to_model_id:
-                active_model = self._display_to_model_id[current_model]
-            elif current_model in models:
-                active_model = current_model
-                # Find the display text for this model_id
-                display_name = get_model_display_name(current_model, self.custom_models)
-                if display_name:
-                    active_display = display_name
-                else:
-                    active_display = current_model
-            else:
-                active_model = None
-        else:
-            active_display = self.combo_model.get_active_text()
-            if active_display:
-                active_model = self._display_to_model_id.get(active_display)
-            else:
-                active_model = None
-        
+        # Determine active model
+        active_model = current_model
         if not active_model or active_model not in models:
-            preferred_default = self.default_model if self.default_model in models else None
-            active_model = preferred_default or models[0]
-            display_name = get_model_display_name(active_model, self.custom_models)
-            if display_name:
-                active_display = display_name
-            else:
-                active_display = active_model
+            active_model = self.default_model if self.default_model in models else models[0] if models else None
         
-        self._updating_model = True
-        try:
-            self.combo_model.remove_all()
-            # Add active model first
-            self.combo_model.append_text(active_display)
-            # Add other models sorted by display text
-            other_displays = []
-            for model in models:
-                if model != active_model:
-                    display_name = get_model_display_name(model, self.custom_models)
-                    if display_name:
-                        display_text = display_name
-                    else:
-                        display_text = model
-                    other_displays.append((display_text, model))
-            # Sort by display text
-            other_displays.sort(key=lambda x: x[0])
-            for display_text, _ in other_displays:
-                self.combo_model.append_text(display_text)
-            self.combo_model.set_active(0)
-        finally:
-            self._updating_model = False
+        # Use component to set models
+        if hasattr(self, '_model_selector'):
+            self._model_selector.set_models(models, display_names, active_model)
+            # Sync mappings
+            self._display_to_model_id = self._model_selector._display_to_model_id
+            self._model_id_to_display = self._model_selector._model_id_to_display
+        
         return False
 
-    def on_model_changed(self, combo):
-        """Handle model selection changes."""
-        # Check if we're already updating to avoid recursive calls.
-        if getattr(self, '_updating_model', False):
-            return
-        self._updating_model = True
-        try:
-            # Get newly selected display text
-            selected_display = combo.get_active_text()
-            if not selected_display:
-                return
-
-            # Map display text back to model_id
-            selected_model_id = None
-            if hasattr(self, '_display_to_model_id') and selected_display in self._display_to_model_id:
-                selected_model_id = self._display_to_model_id[selected_display]
-            else:
-                # If not in mapping, assume it's the model_id itself
-                selected_model_id = selected_display
-
-            # Get all display texts from the combo box
-            model_store = combo.get_model()
-            display_texts = []
-            iter = model_store.get_iter_first()
-            while iter:
-                display_texts.append(model_store.get_value(iter, 0))
-                iter = model_store.iter_next(iter)
-
-            # Update the list with new order
-            combo.remove_all()
-
-            # Add the selected model first
-            combo.append_text(selected_display)
-
-            # Add other models alphabetically, excluding the selected model
-            other_displays = sorted(d for d in display_texts if d != selected_display)
-            for display_text in other_displays:
-                combo.append_text(display_text)
-
-            # Set active to the first item (the selected model)
-            combo.set_active(0)
-        finally:
-            self._updating_model = False
+    def _handle_model_changed(self, model_id: str, display_name: str):
+        """Handle model selection from ModelSelector component."""
+        # Emit MODEL_CHANGED event
+        self.controller.event_bus.publish(Event(
+            type=EventType.MODEL_CHANGED,
+            data={'model_id': model_id, 'display_name': display_name},
+            source='ui'
+        ))
+        # Sync mappings from component
+        if hasattr(self, '_model_selector'):
+            self._display_to_model_id = self._model_selector._display_to_model_id
+            self._model_id_to_display = self._model_selector._model_id_to_display
 
     def _init_message_renderer(self):
         """Initialize the MessageRenderer with current settings and callbacks."""
@@ -827,6 +659,9 @@ class OpenAIGTKClient(Gtk.Window):
             window=self,
             current_chat_id=self.current_chat_id,
         )
+        # Connect renderer to chat view component
+        if hasattr(self, '_chat_view'):
+            self._chat_view.set_message_renderer(self.message_renderer)
 
     def _update_message_renderer_settings(self):
         """Update renderer settings after settings change."""
@@ -886,6 +721,66 @@ class OpenAIGTKClient(Gtk.Window):
         """Set the conversation history on controller."""
         self.controller.conversation_history = value
 
+    @property
+    def providers(self):
+        """Get providers from controller."""
+        return self.controller.providers
+
+    @property
+    def model_provider_map(self):
+        """Get model_provider_map from controller."""
+        return self.controller.model_provider_map
+
+    @model_provider_map.setter
+    def model_provider_map(self, value):
+        """Set model_provider_map on controller."""
+        self.controller.model_provider_map = value
+
+    @property
+    def api_keys(self):
+        """Get api_keys from controller."""
+        return self.controller.api_keys
+
+    @property
+    def custom_models(self):
+        """Get custom_models from controller."""
+        return self.controller.custom_models
+
+    @custom_models.setter
+    def custom_models(self, value):
+        """Set custom_models on controller."""
+        self.controller.custom_models = value
+
+    @property
+    def custom_providers(self):
+        """Get custom_providers from controller."""
+        return self.controller.custom_providers
+
+    @custom_providers.setter
+    def custom_providers(self, value):
+        """Set custom_providers on controller."""
+        self.controller.custom_providers = value
+
+    @property
+    def tool_manager(self):
+        """Get tool_manager from controller."""
+        return self.controller.tool_manager
+
+    @tool_manager.setter
+    def tool_manager(self, value):
+        """Set tool_manager on controller."""
+        self.controller.tool_manager = value
+
+    @property
+    def system_prompts(self):
+        """Get system_prompts from controller."""
+        return self.controller.system_prompts
+
+    @system_prompts.setter
+    def system_prompts(self, value):
+        """Set system_prompts on controller."""
+        self.controller.system_prompts = value
+
     def _get_system_prompt_by_id(self, prompt_id):
         """Delegate to controller."""
         return self.controller.get_system_prompt_by_id(prompt_id)
@@ -894,22 +789,235 @@ class OpenAIGTKClient(Gtk.Window):
         """
         Re-initialize system prompts from updated settings.
         
-        This delegates to the controller to parse the settings and then
-        syncs the local state (system_prompts, active_system_prompt_id).
+        This delegates to the controller to parse the settings.
+        Properties handle the delegation automatically.
         """
-        # Ensure controller has the latest settings (pushed via apply_settings on self)
-        # Note: self.system_prompts_json was updated in on_open_settings via apply_settings
+        # Ensure controller has the latest settings
         self.controller.system_prompts_json = getattr(self, "system_prompts_json", "")
         self.controller.active_system_prompt_id = getattr(self, "active_system_prompt_id", "")
         
         # Let controller parse/init
-        if hasattr(self.controller, '_init_system_prompts_from_settings'):
-            self.controller._init_system_prompts_from_settings()
+        self.controller.init_system_prompts()
+
+    # -----------------------------------------------------------------------
+    # Event subscriptions for reactive UI updates
+    # -----------------------------------------------------------------------
+
+    def _init_event_subscriptions(self):
+        """Subscribe to events from controller/services for reactive UI updates."""
+        bus = self.controller.event_bus
         
-        # Sync back local references
-        self.system_prompts = self.controller.system_prompts
-        self.active_system_prompt_id = self.controller.active_system_prompt_id
-        self.system_message = self.controller.system_message
+        # Chat events - CHAT_LOADED/SAVED/DELETED handled by HistorySidebar
+        bus.subscribe(EventType.CHAT_CREATED, self._on_chat_created_event)
+        
+        # Settings events
+        bus.subscribe(EventType.SETTINGS_CHANGED, self._on_settings_changed_event)
+        
+        # Error events
+        bus.subscribe(EventType.ERROR_OCCURRED, self._on_error_event)
+        
+        # Note: THINKING_STARTED/STOPPED handled by ChatView component
+        
+        # Message events
+        bus.subscribe(EventType.MESSAGE_SENT, self._on_message_sent_event)
+        bus.subscribe(EventType.MESSAGE_RECEIVED, self._on_message_received_event)
+        
+        # Image events
+        bus.subscribe(EventType.IMAGE_GENERATED, self._on_image_generated_event)
+        
+        # Audio events
+        bus.subscribe(EventType.RECORDING_STARTED, self._on_recording_started_event)
+        bus.subscribe(EventType.RECORDING_STOPPED, self._on_recording_stopped_event)
+        bus.subscribe(EventType.TRANSCRIPTION_COMPLETE, self._on_transcription_complete_event)
+        bus.subscribe(EventType.PLAYBACK_STARTED, self._on_playback_started_event)
+        bus.subscribe(EventType.PLAYBACK_STOPPED, self._on_playback_stopped_event)
+        bus.subscribe(EventType.TTS_COMPLETE, self._on_tts_complete_event)
+        
+        # Model events
+        bus.subscribe(EventType.MODEL_CHANGED, self._on_model_changed_event)
+        bus.subscribe(EventType.MODELS_FETCHED, self._on_models_fetched_event)
+        
+        # Tool events
+        bus.subscribe(EventType.TOOL_EXECUTED, self._on_tool_executed_event)
+        bus.subscribe(EventType.TOOL_RESULT, self._on_tool_result_event)
+
+    def _on_settings_changed_event(self, event):
+        """Handle SETTINGS_CHANGED event - update UI if needed."""
+        key = event.data.get('key', '')
+        value = event.data.get('value')
+        
+        # Update local attribute for settings that affect UI
+        if key:
+            attr = key.lower()
+            if hasattr(self, attr):
+                setattr(self, attr, value)
+        
+        # Handle specific settings that need UI updates
+        if key == 'FONT_SIZE':
+            GLib.idle_add(self._update_message_renderer_settings)
+        elif key == 'LATEX_DPI':
+            GLib.idle_add(self._update_message_renderer_settings)
+
+    def _on_error_event(self, event):
+        """Handle ERROR_OCCURRED event - show error to user."""
+        error = event.data.get('error', 'Unknown error')
+        context = event.data.get('context', '')
+        message = f"{context}: {error}" if context else error
+        GLib.idle_add(self.display_error, message)
+
+    def _on_thinking_cancelled(self):
+        """Handle cancel button click from ChatView."""
+        self.request_cancelled = True
+        cancel_text = "** Request cancelled by user **"
+        message_index = len(self.conversation_history)
+        self.conversation_history.append(create_assistant_message(cancel_text))
+        GLib.idle_add(lambda idx=message_index: self.append_message('ai', cancel_text, idx))
+
+    def emit_thinking_started(self, model: str = None):
+        """Emit THINKING_STARTED event and show animation."""
+        self.request_cancelled = False
+        self.controller.event_bus.publish(Event(
+            type=EventType.THINKING_STARTED,
+            data={'model': model},
+            source='ui'
+        ))
+
+    def emit_thinking_stopped(self):
+        """Emit THINKING_STOPPED event and hide animation."""
+        self.controller.event_bus.publish(Event(
+            type=EventType.THINKING_STOPPED,
+            data={},
+            source='ui'
+        ))
+
+    def _on_message_sent_event(self, event):
+        """Handle MESSAGE_SENT event - display user message in UI."""
+        content = event.data.get('content', '')
+        index = event.data.get('index', 0)
+        # Only handle if source is controller (avoid double-display)
+        if event.source == 'controller':
+            formatted = format_response(content)
+            GLib.idle_add(lambda: self.append_message('user', formatted, index))
+
+    def _on_message_received_event(self, event):
+        """Handle MESSAGE_RECEIVED event - display assistant message in UI."""
+        content = event.data.get('content', '')
+        formatted = event.data.get('formatted_content', '') or format_response(content)
+        index = event.data.get('index', 0)
+        model = event.data.get('model', '')
+        
+        # Only handle if source is controller
+        if event.source == 'controller':
+            GLib.idle_add(lambda: self.append_message('ai', formatted, index))
+            
+            # Read aloud if enabled (skip audio models)
+            card = get_card(model, self.custom_models)
+            if not (card and card.capabilities.audio_out):
+                self.read_aloud_text(formatted, chat_id=self.current_chat_id)
+
+    def _on_image_generated_event(self, event):
+        """Handle IMAGE_GENERATED event - log for debugging."""
+        image_path = event.data.get('image_path', '')
+        prompt = event.data.get('prompt', '')[:50]
+        print(f"[Event] Image generated: {image_path} for prompt: {prompt}...")
+
+    def _on_chat_created_event(self, event):
+        """Handle CHAT_CREATED event - refresh history list."""
+        GLib.idle_add(self.refresh_history_list)
+
+    def _on_recording_started_event(self, event):
+        """Handle RECORDING_STARTED event - update voice button state."""
+        def update():
+            self.recording = True
+            self.btn_voice.set_label("Recording... Click to Stop")
+        GLib.idle_add(update)
+
+    def _on_recording_stopped_event(self, event):
+        """Handle RECORDING_STOPPED event - reset voice button state."""
+        def update():
+            self.recording = False
+            self.btn_voice.set_label("Start Voice Input")
+        GLib.idle_add(update)
+
+    def _on_transcription_complete_event(self, event):
+        """Handle TRANSCRIPTION_COMPLETE event - log completion."""
+        text = event.data.get('text', '')[:50]
+        print(f"[Event] Transcription complete: {text}...")
+
+    def _on_playback_started_event(self, event):
+        """Handle PLAYBACK_STARTED event - log playback start."""
+        audio_path = event.data.get('audio_path', '')
+        print(f"[Event] Playback started: {audio_path}")
+
+    def _on_playback_stopped_event(self, event):
+        """Handle PLAYBACK_STOPPED event - log playback stop."""
+        audio_path = event.data.get('audio_path', '')
+        print(f"[Event] Playback stopped: {audio_path}")
+
+    def _on_tts_complete_event(self, event):
+        """Handle TTS_COMPLETE event - log TTS completion."""
+        audio_path = event.data.get('audio_path', '')
+        print(f"[Event] TTS complete: {audio_path}")
+
+    def _on_model_changed_event(self, event):
+        """Handle MODEL_CHANGED event - update model combo if needed."""
+        model_id = event.data.get('model_id', '')
+        source = event.source
+        # Only update if change came from elsewhere (not UI)
+        if source != 'ui' and model_id:
+            GLib.idle_add(lambda: self._select_model_in_combo(model_id))
+
+    def _select_model_in_combo(self, model_id):
+        """Select a model in the combo box by model_id."""
+        if getattr(self, '_updating_model', False):
+            return
+        display_text = self._model_id_to_display.get(model_id, model_id)
+        model_store = self.combo_model.get_model()
+        iter = model_store.get_iter_first()
+        idx = 0
+        while iter:
+            if model_store.get_value(iter, 0) == display_text:
+                self.combo_model.set_active(idx)
+                return
+            iter = model_store.iter_next(iter)
+            idx += 1
+
+    def _on_models_fetched_event(self, event):
+        """Handle MODELS_FETCHED event - refresh model list."""
+        provider = event.data.get('provider', '')
+        models = event.data.get('models', [])
+        print(f"[Event] Models fetched for {provider}: {len(models)} models")
+
+    def _on_tool_executed_event(self, event):
+        """Handle TOOL_EXECUTED event - log tool execution."""
+        tool_name = event.data.get('tool_name', '')
+        print(f"[Event] Tool executed: {tool_name}")
+
+    def _on_tool_result_event(self, event):
+        """Handle TOOL_RESULT event - log tool result."""
+        tool_name = event.data.get('tool_name', '')
+        success = event.data.get('success', False)
+        status = "success" if success else "failed"
+        print(f"[Event] Tool result: {tool_name} - {status}")
+
+    # -----------------------------------------------------------------------
+    # Toolbar helpers
+    # -----------------------------------------------------------------------
+
+    def _update_tool_indicators(self):
+        """Update the toolbar tool indicators based on current settings."""
+        if hasattr(self, '_toolbar'):
+            self._toolbar.update_tool_indicators(
+                image=bool(getattr(self, "image_tool_enabled", False)),
+                music=bool(getattr(self, "music_tool_enabled", False)),
+                web_search=bool(getattr(self, "web_search_enabled", False)),
+                read_aloud=bool(getattr(self, "read_aloud_tool_enabled", False)),
+                search=bool(getattr(self, "search_tool_enabled", False)),
+            )
+
+    # -----------------------------------------------------------------------
+    # System prompt management
+    # -----------------------------------------------------------------------
 
     def _refresh_system_prompt_combo(self):
         """
@@ -1045,87 +1153,6 @@ class OpenAIGTKClient(Gtk.Window):
         """Delegate to controller."""
         return self.controller.messages_for_model(model_name)
 
-    def _clean_messages_for_perplexity(self, messages):
-        """
-        Clean messages to ensure proper alternation for Perplexity API.
-        
-        Perplexity requires that after the optional system message(s), user and
-        assistant messages must strictly alternate, starting with a user message.
-        """
-        if not messages:
-            return messages
-
-        cleaned = []
-        
-        # First, extract system messages and other messages
-        system_messages = []
-        other_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            if role == "system":
-                # Keep system message with clean structure
-                system_messages.append({
-                    "role": "system",
-                    "content": content,
-                })
-            elif content:  # Skip empty non-system messages
-                other_messages.append({
-                    "role": role,
-                    "content": content,
-                })
-        
-        # Add system messages first
-        cleaned.extend(system_messages)
-        
-        # Process non-system messages to ensure strict alternation
-        # Perplexity requires: user, assistant, user, assistant, ... ending with user
-        alternating = []
-        expected_role = "user"  # Must start with user after system
-        
-        for msg in other_messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            if role == expected_role:
-                # Correct role - add it
-                alternating.append({"role": role, "content": content})
-                expected_role = "assistant" if role == "user" else "user"
-            elif role == "user" and expected_role == "user":
-                # Another user message when we expected user - merge with previous if exists
-                if alternating and alternating[-1]["role"] == "user":
-                    alternating[-1]["content"] += "\n\n" + content
-                else:
-                    alternating.append({"role": role, "content": content})
-                    expected_role = "assistant"
-            elif role == "assistant" and expected_role == "assistant":
-                # Another assistant message when we expected assistant - merge
-                if alternating and alternating[-1]["role"] == "assistant":
-                    alternating[-1]["content"] += "\n\n" + content
-                else:
-                    alternating.append({"role": role, "content": content})
-                    expected_role = "user"
-            elif role == "user" and expected_role == "assistant":
-                # Got user when expecting assistant - skip the missing assistant and add user
-                # This handles cases where assistant response was empty/missing
-                alternating.append({"role": role, "content": content})
-                expected_role = "assistant"
-            elif role == "assistant" and expected_role == "user":
-                # Got assistant when expecting user - skip this assistant message
-                # The first message after system must be user
-                continue
-        
-        # Ensure we have at least one user message and it ends with user
-        if not alternating:
-            return messages  # Return original if something went wrong
-        
-        # If the last message is assistant, that's fine for Perplexity
-        # (they want alternation, ending with user is for the request)
-        
-        cleaned.extend(alternating)
-        return cleaned
-
     def get_provider_name_for_model(self, model_name):
         if not model_name:
             return 'openai'
@@ -1147,140 +1174,67 @@ class OpenAIGTKClient(Gtk.Window):
         # Unknown model - default to openai
         return 'openai'
 
-    def _is_image_model_for_provider(self, model_name, provider_name):
-        """
-        Return True if the given model for the specified provider should be
-        treated as an image-generation model.
-        """
-        return self.tool_manager.is_image_model_for_provider(model_name, provider_name, self.custom_models)
-
-    def _supports_image_tools(self, model_name):
-        """
-        Return True if the given model should be offered the image-generation
-        tool. Delegates to ToolManager.
-        """
-        return self.tool_manager.supports_image_tools(model_name, self.model_provider_map, self.custom_models)
-
-    def _supports_music_tools(self, model_name):
-        """
-        Return True if the given model should be offered the music-control tool.
-        Delegates to ToolManager.
-        """
-        return self.tool_manager.supports_music_tools(model_name, self.model_provider_map, self.custom_models)
-
-    def _supports_read_aloud_tools(self, model_name):
-        """
-        Return True if the given model should be offered the read-aloud tool.
-        Delegates to ToolManager.
-        """
-        return self.tool_manager.supports_read_aloud_tools(model_name, self.model_provider_map, self.custom_models)
-
-    def _supports_search_tools(self, model_name):
-        """
-        Return True if the given model should be offered the search/memory tool.
-        Delegates to ToolManager.
-        """
-        return self.tool_manager.supports_search_tools(model_name, self.model_provider_map, self.custom_models)
-
-    def _normalize_image_tags(self, text):
-        """
-        Normalize any <img ...> tags emitted by models into the self-closing
-        <img src="..."/> form that the UI expects, stripping any extra
-        attributes like alt= so they are not shown as raw markup. If the same
-        image src appears multiple times, keep only the first occurrence to
-        avoid displaying duplicate images.
-        """
-        if not text:
-            return text
-        import re
-        pattern = re.compile(r'<img\s+src="([^"]+)"[^>]*>', re.IGNORECASE)
-
-        result_parts = []
-        last_end = 0
-        seen_src = set()
-
-        for match in pattern.finditer(text):
-            # Add any text before this tag unchanged.
-            result_parts.append(text[last_end:match.start()])
-            src = match.group(1)
-
-            if src in seen_src:
-                # Skip duplicate image tags for the same src.
-                replacement = ""
-            else:
-                seen_src.add(src)
-                replacement = f'<img src="{src}"/>'
-
-            result_parts.append(replacement)
-            last_end = match.end()
-
-        # Add any remaining text after the last tag.
-        result_parts.append(text[last_end:])
-        return "".join(result_parts)
+    def _build_tool_handlers(self, model: str, last_msg: dict) -> dict:
+        """Build tool handler kwargs for a model."""
+        handlers = {}
+        ts = self.controller.tool_service
+        
+        if ts.supports_image_tools(model, self.model_provider_map, self.custom_models):
+            handlers["image_tool_handler"] = lambda prompt_arg, image_path=None: \
+                self.generate_image_via_preferred_model(prompt_arg, last_msg, image_path)
+        
+        if ts.supports_music_tools(model, self.model_provider_map, self.custom_models):
+            handlers["music_tool_handler"] = lambda action, keyword=None, volume=None: \
+                self.control_music_via_beets(action, keyword=keyword, volume=volume)
+        
+        if ts.supports_read_aloud_tools(model, self.model_provider_map, self.custom_models):
+            handlers["read_aloud_tool_handler"] = lambda text: self._handle_read_aloud_tool(text)
+        
+        if ts.supports_search_tools(model, self.model_provider_map, self.custom_models):
+            handlers["search_tool_handler"] = lambda keyword, source=None: \
+                self._handle_search_memory_tool(keyword, source)
+        
+        return handlers
 
     def generate_image_for_model(self, model, prompt, last_msg, chat_id, provider_name, has_attached_images):
         """
-        Central helper to generate an image for any supported provider/model
-        combination, reusing the underlying provider-specific generate_image
-        implementations and attachment semantics.
+        Central helper to generate an image for any supported provider/model.
+        Delegates to ImageGenerationService.
         """
-        provider = None
-        if provider_name == "custom":
-            provider = self.custom_providers.get(model)
-            if not provider:
-                cfg = (self.custom_models or {}).get(model, {})
-                if not cfg:
-                    raise ValueError(f"Custom model '{model}' is not configured")
-                provider = get_ai_provider("custom")
-                from utils import resolve_api_key
-                provider.initialize(
-                    api_key=resolve_api_key(cfg.get("api_key", "")).strip(),
-                    endpoint=cfg.get("endpoint"),
-                    model_name=cfg.get("model_name") or model,
-                    api_type=cfg.get("api_type") or "images",
-                    voice=cfg.get("voice"),
-                )
-                self.custom_providers[model] = provider
-        else:
-            provider = self.providers.get(provider_name)
-            if not provider:
-                api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
-                provider = self.initialize_provider(provider_name, api_key)
-                if not provider:
-                    raise ValueError(f"{provider_name.title()} provider is not initialized")
-
-        # Check if model supports image editing via card
+        # Prepare image data for editing
+        image_data = None
+        mime_type = None
+        
         card = get_card(model, self.custom_models)
         supports_image_edit = card.capabilities.image_edit if card else False
-
-        # OpenAI image models.
-        if provider_name == 'openai':
-            image_data = None
-            if supports_image_edit and has_attached_images:
-                image_data = last_msg["images"][0]["data"]
-            return provider.generate_image(prompt, chat_id, model, image_data)
-
-        if provider_name == 'custom':
-            return provider.generate_image(prompt, chat_id, model)
-
-        # Gemini image models support both text→image and image→image.
-        if provider_name == 'gemini':
-            if supports_image_edit and has_attached_images:
-                img = last_msg["images"][0]
-                return provider.generate_image(
-                    prompt,
-                    chat_id,
-                    model,
-                    image_data=img["data"],
-                    mime_type=img.get("mime_type")
-                )
-            return provider.generate_image(prompt, chat_id, model)
-
-        # Grok image models are currently text → image only.
-        if provider_name == 'grok':
-            return provider.generate_image(prompt, chat_id, model)
-
-        raise ValueError(f"Image generation not supported for provider: {provider_name}")
+        
+        if supports_image_edit and has_attached_images and last_msg.get("images"):
+            img = last_msg["images"][0]
+            # Load image data from path if not already loaded
+            if img.get("data"):
+                image_data = img.get("data")
+            elif img.get("path"):
+                try:
+                    with open(img["path"], "rb") as f:
+                        image_data = base64.b64encode(f.read()).decode("utf-8")
+                except Exception as e:
+                    print(f"[Image Edit] Error loading image from path: {e}")
+            mime_type = img.get("mime_type")
+        
+        # Get provider via controller
+        provider = self.controller.get_provider_for_model(model)
+        if not provider:
+            raise ValueError(f"{provider_name.title()} provider is not initialized")
+        
+        return self.controller.image_service.generate_image(
+            prompt=prompt,
+            model=model,
+            provider=provider,
+            provider_name=provider_name,
+            chat_id=chat_id,
+            image_data=image_data,
+            mime_type=mime_type,
+        )
 
     def generate_image_via_preferred_model(self, prompt, last_msg, image_path=None):
         """
@@ -1302,7 +1256,7 @@ class OpenAIGTKClient(Gtk.Window):
         # For standard image models, verify they're recognized. For custom models,
         # trust the user's selection - they may have configured a responses API model
         # that can generate images.
-        is_standard_image_model = self._is_image_model_for_provider(preferred_model, provider_name)
+        is_standard_image_model = self.controller.tool_service.is_image_model(preferred_model, provider_name, self.custom_models)
         is_custom_model = provider_name == "custom" and preferred_model in (self.custom_models or {})
         
         if not is_standard_image_model and not is_custom_model:
@@ -1729,49 +1683,17 @@ class OpenAIGTKClient(Gtk.Window):
     
     def _search_history_files(self, keyword: str, pattern, limit: int) -> list:
         """Search conversation history JSON files for keyword matches."""
-        import glob
-        from config import HISTORY_DIR
+        # Use controller's search_history method which delegates to service/repository
+        search_results = self.controller.search_history(keyword, limit)
         
         results = []
-        current_chat_file = None
-        if self.current_chat_id:
-            current_chat_file = os.path.join(HISTORY_DIR, f"{self.current_chat_id}.json")
-        
-        # Find all JSON files in history directory
-        json_files = glob.glob(os.path.join(HISTORY_DIR, "*.json"))
-        
-        for json_file in json_files:
-            # Skip current conversation
-            if current_chat_file and os.path.normpath(json_file) == os.path.normpath(current_chat_file):
-                continue
-            
-            if len(results) >= limit:
-                break
-            
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                messages = data.get("messages", [])
-                matching_messages = []
-                
-                for msg in messages:
-                    content = msg.get("content", "")
-                    role = msg.get("role", "")
-                    if role == "system":
-                        continue
-                    if pattern.search(content):
-                        matching_messages.append(f"[{role}]: {content[:500]}{'...' if len(content) > 500 else ''}")
-                
-                if matching_messages:
-                    chat_name = os.path.basename(json_file).replace(".json", "")
-                    results.append({
-                        "source": f"Chat: {chat_name}",
-                        "content": "\n".join(matching_messages[:3])  # Limit messages per chat
-                    })
-                    
-            except (json.JSONDecodeError, IOError) as e:
-                continue
+        for sr in search_results:
+            # Format matches for display
+            matches_text = "\n".join(sr.get('matches', [])[:3])
+            results.append({
+                "source": f"Chat: {sr.get('chat_title', sr.get('chat_id', 'Unknown'))}",
+                "content": matches_text
+            })
         
         return results
     
@@ -1877,7 +1799,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Pass ai_provider, providers dict, and api_keys to the settings dialog
         dialog = SettingsDialog(
             self,
-            ai_provider=ai_provider,
+            ai_provider=self.controller.get_provider('openai'),
             providers=self.providers,
             api_keys=current_api_keys,
             **{k.lower(): getattr(self, k.lower()) for k in SETTINGS_CONFIG.keys()}
@@ -1887,6 +1809,8 @@ class OpenAIGTKClient(Gtk.Window):
             new_settings = dialog.get_settings()
             apply_settings(self, new_settings)
             save_object_settings(self)
+            # Reload settings manager cache so controller sees updated values
+            self.controller.settings_manager.reload()
 
             # Update message renderer settings and refresh existing message colors
             self._update_message_renderer_settings()
@@ -1901,11 +1825,14 @@ class OpenAIGTKClient(Gtk.Window):
             if self.conversation_history and self.conversation_history[0].get("role") == "system":
                 self.conversation_history[0]["content"] = self.system_message
 
-            # Keep the ToolManager in sync with any updated tool options.
-            self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
-            self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
-            self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
-            self.tool_manager.search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
+            # Keep tools in sync via service
+            self.controller.tool_service.enable_tool('image', bool(getattr(self, "image_tool_enabled", True)))
+            self.controller.tool_service.enable_tool('music', bool(getattr(self, "music_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
+            
+            # Update toolbar indicators
+            self._update_tool_indicators()
 
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()
@@ -1997,7 +1924,8 @@ class OpenAIGTKClient(Gtk.Window):
         tool_use_supported = bool(card and card.supports_tools() and card.is_chat_model())
         dialog = ToolsDialog(self, **{k.lower(): getattr(self, k.lower())
                                for k in SETTINGS_CONFIG.keys()},
-                               tool_use_supported=tool_use_supported)
+                               tool_use_supported=tool_use_supported,
+                               current_model=current_model)
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             tool_settings = dialog.get_tool_settings()
@@ -2007,13 +1935,17 @@ class OpenAIGTKClient(Gtk.Window):
             # Enforce mutual exclusivity: if read_aloud_tool is enabled, disable auto-read
             if getattr(self, "read_aloud_tool_enabled", False) and getattr(self, "read_aloud_enabled", False):
                 self.read_aloud_enabled = False
-            # Update the ToolManager with the new settings.
-            self.tool_manager.image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
-            self.tool_manager.music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
-            self.tool_manager.read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
-            self.tool_manager.search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
+            # Update tools via service
+            self.controller.tool_service.enable_tool('image', bool(getattr(self, "image_tool_enabled", True)))
+            self.controller.tool_service.enable_tool('music', bool(getattr(self, "music_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
+            self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
             # Persist all settings, including the updated tool flags.
             save_object_settings(self)
+            # Reload settings manager cache so controller sees updated values
+            self.controller.settings_manager.reload()
+            # Update toolbar indicators
+            self._update_tool_indicators()
         dialog.destroy()
 
 
@@ -2029,7 +1961,7 @@ class OpenAIGTKClient(Gtk.Window):
         )
 
     def show_error_dialog(self, message: str):
-        """Display a simple modal error dialog."""
+        """Display a simple modal error dialog with selectable text."""
         dialog = Gtk.MessageDialog(
             transient_for=self,
             flags=0,
@@ -2037,7 +1969,13 @@ class OpenAIGTKClient(Gtk.Window):
             buttons=Gtk.ButtonsType.OK,
             text="Error",
         )
-        dialog.format_secondary_text(str(message))
+        # Use a selectable label instead of format_secondary_text
+        label = Gtk.Label(label=str(message))
+        label.set_selectable(True)
+        label.set_line_wrap(True)
+        label.set_max_width_chars(60)
+        label.show()
+        dialog.get_message_area().pack_start(label, False, False, 0)
         dialog.run()
         dialog.destroy()
 
@@ -2058,7 +1996,7 @@ class OpenAIGTKClient(Gtk.Window):
         return response == Gtk.ResponseType.YES
 
     def display_error(self, message: str):
-        """Backward-compatible alias used by legacy call sites."""
+        """Display an error dialog. Alias for show_error_dialog."""
         self.show_error_dialog(message)
 
     def on_stream_content_received(self, content: str):
@@ -2169,7 +2107,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.append_message('user', question, msg_index)
             self.conversation_history.append(create_user_message(question))
             self.entry_question.set_text("")
-            self.show_thinking_animation()
+            self.emit_thinking_started(target_model)
             threading.Thread(
                 target=self.call_ai_api,
                 args=(target_model,),
@@ -2221,7 +2159,10 @@ class OpenAIGTKClient(Gtk.Window):
                     "mime_type": "image/png",
                     "is_edit_source": True,
                 })
+                # Include path in message so model can pass it to generate_image tool
+                edit_instruction = f"[Edit the image at: {self.pending_edit_image}]"
                 display_text = f"[Editing image]\n{question}" if question else "[Editing image]"
+                question = f"{edit_instruction}\n{question}" if question else edit_instruction
             except Exception as e:
                 print(f"Error loading edit image: {e}")
             finally:
@@ -2336,6 +2277,9 @@ class OpenAIGTKClient(Gtk.Window):
             images=images if images else None,
             files=files if files else None,
         )
+        # Store display_content if it differs from the API content
+        if display_text != question:
+            user_msg["display_content"] = display_text
             
         self.conversation_history.append(user_msg)
         
@@ -2349,7 +2293,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.entry_question.set_text("")
         
         # Show thinking animation before API call
-        self.show_thinking_animation()
+        self.emit_thinking_started(target_model)
         
         # Call provider API in a separate thread
         threading.Thread(
@@ -2359,438 +2303,61 @@ class OpenAIGTKClient(Gtk.Window):
         ).start()
 
     def call_ai_api(self, model):
-        try:
-            # Check if cancelled at start
-            if hasattr(self, 'request_cancelled') and self.request_cancelled:
-                return
-            
-            # Ensure we have a valid model
-            if not model:
-                model = "gpt-3.5-turbo"  # Default fallback
-                print(f"No model selected, falling back to {model}")
-            provider_name = self.get_provider_name_for_model(model)
-            provider = None
-            
-            # Check if cancelled after initial setup
-            if hasattr(self, 'request_cancelled') and self.request_cancelled:
-                return
-
-            if provider_name == "custom":
-                # Custom providers are keyed per model ID
-                provider = self.custom_providers.get(model)
-                if not provider:
-                    config = (self.custom_models or {}).get(model, {})
-                    if not config:
-                        raise ValueError(f"Custom model '{model}' is not configured")
-                    provider = get_ai_provider("custom")
-                    from utils import resolve_api_key
-                    provider.initialize(
-                        api_key=resolve_api_key(config.get("api_key", "")).strip(),
-                        endpoint=config.get("endpoint"),
-                        model_name=config.get("model_name") or model,
-                        api_type=config.get("api_type") or "chat.completions",
-                        voice=config.get("voice"),
-                    )
-                    self.custom_providers[model] = provider
-            else:
-                provider = self.providers.get(provider_name)
-                if not provider:
-                    api_key = os.environ.get(f"{provider_name.upper()}_API_KEY", self.api_keys.get(provider_name, "")).strip()
-                    provider = self.initialize_provider(provider_name, api_key)
-                    if not provider:
-                        raise ValueError(f"{provider_name.title()} provider is not initialized")
-            
-            model_temperature = self._get_temperature_for_model(model)
-            
-            # This will hold any provider-specific metadata for the assistant message
-            assistant_provider_meta = None
-
-            last_msg = self.conversation_history[-1]
-            prompt = last_msg.get("content", "")
-            has_attached_images = "images" in last_msg and last_msg["images"]
-            has_attached_files = "files" in last_msg and last_msg["files"]
-
-            # Check if files are attached to a non-OpenAI provider
-            if has_attached_files and provider_name != 'openai':
-                # Show a warning that document analysis requires OpenAI
-                warning_msg = (
-                    f"Document attachments are currently only supported with OpenAI models. "
-                    f"The attached document(s) will be ignored when using {provider_name.title()} models."
-                )
-                print(f"[ChatGTK] Warning: {warning_msg}")
-                # We continue with the request but without the files
-
-            # Route image models through a shared helper so that both manual model
-            # selection and tool-based invocations use the same behavior.
-            if self._is_image_model_for_provider(model, provider_name):
-                answer = self.generate_image_for_model(
-                    model=model,
-                    prompt=prompt,
-                    last_msg=last_msg,
-                    chat_id=self.current_chat_id or "temp",
-                    provider_name=provider_name,
-                    has_attached_images=has_attached_images,
-                )
-            elif provider_name == 'openai':
-                # Check if this is a realtime model via card
-                card = get_card(model, self.custom_models)
-                is_realtime = card.api_family == "realtime" if card else False
-                if is_realtime:
-                    # Realtime models are handled elsewhere (WebSocket provider).
-                    return
-                
-                messages_to_send = self._messages_for_model(model)
-
-                # Provide handlers so OpenAI models can call tools (image/music/read_aloud)
-                # autonomously when they decide it is helpful.
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-                    print(f"[ChatGTK] Search tool handler created for model {model}")
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-                print(f"[ChatGTK] Tool handlers in kwargs: {[k for k in kwargs if 'handler' in k]}")
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'custom':
-                messages_to_send = self._messages_for_model(model)
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'gemini':
-                # Chat completion (possibly with image input or tool-based image generation)
-                messages_to_send = self._messages_for_model(model)
-                response_meta = {}
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "response_meta": response_meta,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
-                answer = provider.generate_chat_completion(**kwargs)
-
-                assistant_provider_meta = response_meta or None
-            elif provider_name == 'grok':
-                # Standard chat completion for Grok, optionally with tools.
-                messages_to_send = self._messages_for_model(model)
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'claude':
-                # Standard chat completion for Claude, optionally with tools,
-                # using the OpenAI SDK compatibility layer:
-                # `https://platform.claude.com/docs/en/api/openai-sdk`
-                messages_to_send = self._messages_for_model(model)
-
-                last_user_msg = last_msg
-
-                image_tool_handler = None
-                music_tool_handler = None
-                read_aloud_tool_handler = None
-                search_tool_handler = None
-
-                if self._supports_image_tools(model):
-                    def image_tool_handler(prompt_arg, image_path=None):
-                        return self.generate_image_via_preferred_model(prompt_arg, last_user_msg, image_path)
-
-                if self._supports_music_tools(model):
-                    def music_tool_handler(action, keyword=None, volume=None):
-                        return self.control_music_via_beets(action, keyword=keyword, volume=volume)
-
-                if self._supports_read_aloud_tools(model):
-                    def read_aloud_tool_handler(text):
-                        return self._handle_read_aloud_tool(text)
-
-                if self._supports_search_tools(model):
-                    def search_tool_handler(keyword, source=None):
-                        return self._handle_search_memory_tool(keyword, source)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "response_meta": assistant_provider_meta,
-                    "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
-                }
-                if image_tool_handler is not None:
-                    kwargs["image_tool_handler"] = image_tool_handler
-                if music_tool_handler is not None:
-                    kwargs["music_tool_handler"] = music_tool_handler
-                if read_aloud_tool_handler is not None:
-                    kwargs["read_aloud_tool_handler"] = read_aloud_tool_handler
-                if search_tool_handler is not None:
-                    kwargs["search_tool_handler"] = search_tool_handler
-
-                answer = provider.generate_chat_completion(**kwargs)
-            elif provider_name == 'perplexity':
-                # Chat completion for Perplexity Sonar models.
-                # Perplexity models have built-in web search and don't support
-                # function tools in the same way as other providers.
-                # See https://docs.perplexity.ai/guides/chat-completions-guide
-                messages_to_send = self._messages_for_model(model)
-
-                # This will collect provider-specific metadata such as web
-                # search results so we can persist them with the message.
-                response_meta = {}
-
-                # Perplexity requires strict alternation between user and assistant
-                # messages after the system message. Clean the messages to ensure
-                # proper format.
-                messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
-
-                kwargs = {
-                    "messages": messages_to_send,
-                    "model": model,
-                    "temperature": model_temperature,
-                    "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
-                    "chat_id": self.current_chat_id,
-                    "response_meta": response_meta,
-                }
-
-                answer = provider.generate_chat_completion(**kwargs)
-                assistant_provider_meta = response_meta or None
-
-                # If Perplexity returned web search results, append a human-readable
-                # "Sources" section to the answer so users can see and click them.
-                perplexity_meta = (response_meta or {}).get("perplexity", {})
-                search_results = perplexity_meta.get("search_results") if isinstance(perplexity_meta, dict) else None
-                if search_results:
-                    lines = []
-                    for idx, res in enumerate(search_results, start=1):
-                        title = res.get("title") or "Source"
-                        url = res.get("url") or ""
-                        date = res.get("date") or ""
-
-                        line = f"{idx}. {title}"
-                        if date:
-                            line += f" ({date})"
-                        if url:
-                            line += f" — {url}"
-                        lines.append(line)
-
-                    if lines:
-                        suffix = "Sources:\n" + "\n".join(lines)
-                        # Keep a blank line between the model answer and the sources block.
-                        answer = (answer.rstrip() + "\n\n" + suffix).rstrip()
-            else:
-                raise ValueError(f"Unsupported provider: {provider_name}")
-
-            # Check if cancelled before processing result
-            if hasattr(self, 'request_cancelled') and self.request_cancelled:
-                return
-            
-            # Normalize any raw <img ...> tags so the UI can render them
-            # consistently without showing stray HTML.
-            answer = self._normalize_image_tags(answer)
-
-            assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
-            message_index = len(self.conversation_history)
-            self.conversation_history.append(assistant_message)
-
-            # Update UI in main thread
-            formatted_answer = format_response(answer)
-            GLib.idle_add(self.hide_thinking_animation)
-            GLib.idle_add(lambda idx=message_index, msg=formatted_answer: self.append_message('ai', msg, idx))
-            GLib.idle_add(self.save_current_chat)
-            
-            # Read aloud the response if enabled (runs in background thread)
-            # Skip for audio models since they already play audio directly
-            card = get_card(model, self.custom_models)
-            is_audio_model = card.capabilities.audio_out if card else False
-            if not is_audio_model:
-                self.read_aloud_text(formatted_answer, chat_id=self.current_chat_id)
-            
-        except Exception as error:
-            # Only show error if not cancelled
-            if not (hasattr(self, 'request_cancelled') and self.request_cancelled):
-                print(f"\nAPI Call Error: {error}")
-                GLib.idle_add(self.hide_thinking_animation)
-                error_message = f"** Error: {str(error)} **"
-                message_index = len(self.conversation_history)
-                self.conversation_history.append(create_assistant_message(error_message))
-                GLib.idle_add(lambda idx=message_index, msg=error_message: self.append_message('ai', msg, idx))
-            
-        finally:
-            GLib.idle_add(self.hide_thinking_animation)
+        """Call AI API - delegates to controller.send_message()."""
+        # Build tool handlers (these reference UI methods)
+        last_msg = self.conversation_history[-1]
+        tool_handlers = self._build_tool_handlers(model, last_msg)
+        
+        # Delegate to controller
+        self.controller.send_message(
+            model=model,
+            tool_handlers=tool_handlers,
+            cancel_check=lambda: getattr(self, 'request_cancelled', False),
+        )
 
     def audio_transcription(self, widget):
         """Handle audio transcription."""
         print("Audio transcription...")
         stt_model = getattr(self, "speech_to_text_model", "") or "whisper-1"
+        stt_provider = None
         stt_base_url = None
         stt_api_key = None
-        try:
-            card = get_card(stt_model, self.custom_models)
-            if card:
-                stt_base_url = card.base_url or None
-                # Try to resolve a key for custom models
-                if card.provider == "custom":
-                    cfg = (self.custom_models or {}).get(stt_model, {})
-                    if cfg:
-                        from utils import resolve_api_key
-                        stt_api_key = resolve_api_key(cfg.get("api_key", ""))
-                elif card.key_name:
-                    stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
-        except Exception as e:
-            print(f"[Audio STT] Error reading card for {stt_model}: {e}")
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                os.environ['OPENAI_API_KEY'] = api_key
-                openai_provider = self.initialize_provider('openai', api_key)
-        if not openai_provider:
-            self.show_error_dialog("Audio transcription requires an OpenAI API key")
+        
+        # Check if this is a custom STT model
+        cfg = (self.custom_models or {}).get(stt_model, {})
+        is_custom_stt = (cfg.get("api_type") or "").lower() == "stt"
+        
+        if is_custom_stt:
+            # Use CustomProvider for custom STT models
+            from ai_providers import CustomProvider
+            from utils import resolve_api_key
+            stt_provider = CustomProvider()
+            stt_provider.initialize(
+                api_key=resolve_api_key(cfg.get("api_key", "")),
+                endpoint=cfg.get("endpoint", ""),
+                model_id=stt_model,
+                api_type="stt",
+            )
+        else:
+            try:
+                card = get_card(stt_model, self.custom_models)
+                if card:
+                    stt_base_url = card.base_url or None
+                    # Try to resolve a key for custom models
+                    if card.provider == "custom":
+                        if cfg:
+                            from utils import resolve_api_key
+                            stt_api_key = resolve_api_key(cfg.get("api_key", ""))
+                    elif card.key_name:
+                        stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
+            except Exception as e:
+                print(f"[Audio STT] Error reading card for {stt_model}: {e}")
+            
+            # Get OpenAI provider via controller
+            stt_provider = self.controller.get_provider('openai')
+        
+        if not stt_provider:
+            self.show_error_dialog("Audio transcription requires an API key")
             return
         
         if not self.recording:
@@ -2804,53 +2371,39 @@ class OpenAIGTKClient(Gtk.Window):
                 
                 def record_thread():
                     try:
-                        # Create a temporary file
-                        temp_dir = Path(tempfile.gettempdir())
-                        temp_file = temp_dir / "voice_input.wav"
+                        # Record audio using AudioService
+                        audio_service = self.controller.audio_service
+                        recording, sample_rate = audio_service.record_audio(
+                            self.microphone, self.recording_event
+                        )
                         
-                        # Record audio using the function from audio.py
-                        recording, sample_rate = record_audio(self.microphone, self.recording_event)
-                        
-                        # Only proceed if recording was successful
                         if recording is not None and sample_rate is not None:
                             try:
-                                # Ensure recording is the right shape
-                                if len(recording.shape) == 1:
-                                    recording = recording.reshape(-1, 1)
+                                # Save recording
+                                temp_file = audio_service.save_recording(recording, sample_rate)
                                 
-                                # Save to temporary file
-                                sf.write(temp_file, recording, sample_rate)
-                                
-                                # Transcribe with selected model (fallback to whisper-1)
+                                # Transcribe with selected model (fallback to whisper-1 for non-custom)
                                 transcript = None
                                 models_to_try = [stt_model]
-                                if "whisper-1" not in models_to_try:
+                                if not is_custom_stt and "whisper-1" not in models_to_try:
                                     models_to_try.append("whisper-1")
 
                                 for model in models_to_try:
-                                    try:
-                                        with open(temp_file, "rb") as audio_file:
-                                            transcript = openai_provider.transcribe_audio(
-                                                audio_file,
-                                                model=model,
-                                                prompt="Please transcribe this audio file. Return only the transcribed text.",
-                                                base_url=stt_base_url,
-                                                api_key=stt_api_key,
-                                            )
+                                    transcript = audio_service.transcribe(
+                                        temp_file, stt_provider,
+                                        model=model,
+                                        base_url=stt_base_url,
+                                        api_key=stt_api_key,
+                                    )
+                                    if transcript:
                                         print(f"[Audio STT] Transcribed with model: {model}")
                                         break
-                                    except Exception as e:
-                                        print(f"[Audio STT] Model {model} failed: {e}")
-                                        transcript = None
-                                        continue
+                                    print(f"[Audio STT] Model {model} failed")
 
                                 if transcript:
                                     GLib.idle_add(self.entry_question.set_text, transcript)
                                 else:
                                     print("[Audio STT] No transcript produced; keeping input unchanged.")
-                            
-                            except Exception as e:
-                                print(f"[Audio STT] Error saving audio: {e}")
                             
                             finally:
                                 # Clean up temp file
@@ -2886,30 +2439,44 @@ class OpenAIGTKClient(Gtk.Window):
     def _audio_transcription_to_textview(self, textview):
         """Handle audio transcription and insert result into a textview at cursor position."""
         stt_model = getattr(self, "speech_to_text_model", "") or "whisper-1"
+        stt_provider = None
         stt_base_url = None
         stt_api_key = None
-        try:
-            card = get_card(stt_model, self.custom_models)
-            if card:
-                stt_base_url = card.base_url or None
-                if card.provider == "custom":
-                    cfg = (self.custom_models or {}).get(stt_model, {})
-                    if cfg:
-                        from utils import resolve_api_key
-                        stt_api_key = resolve_api_key(cfg.get("api_key", ""))
-                elif card.key_name:
-                    stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
-        except Exception as e:
-            print(f"[Audio STT] Error reading card for {stt_model}: {e}")
+        
+        # Check if this is a custom STT model
+        cfg = (self.custom_models or {}).get(stt_model, {})
+        is_custom_stt = (cfg.get("api_type") or "").lower() == "stt"
+        
+        if is_custom_stt:
+            # Use CustomProvider for custom STT models
+            from ai_providers import CustomProvider
+            from utils import resolve_api_key
+            stt_provider = CustomProvider()
+            stt_provider.initialize(
+                api_key=resolve_api_key(cfg.get("api_key", "")),
+                endpoint=cfg.get("endpoint", ""),
+                model_id=stt_model,
+                api_type="stt",
+            )
+        else:
+            try:
+                card = get_card(stt_model, self.custom_models)
+                if card:
+                    stt_base_url = card.base_url or None
+                    if card.provider == "custom":
+                        if cfg:
+                            from utils import resolve_api_key
+                            stt_api_key = resolve_api_key(cfg.get("api_key", ""))
+                    elif card.key_name:
+                        stt_api_key = self.api_keys.get(card.key_name) or stt_api_key
+            except Exception as e:
+                print(f"[Audio STT] Error reading card for {stt_model}: {e}")
 
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                os.environ['OPENAI_API_KEY'] = api_key
-                openai_provider = self.initialize_provider('openai', api_key)
-        if not openai_provider:
-            self.show_error_dialog("Audio transcription requires an OpenAI API key")
+            # Get OpenAI provider via controller
+            stt_provider = self.controller.get_provider('openai')
+        
+        if not stt_provider:
+            self.show_error_dialog("Audio transcription requires an API key")
             return
 
         # Get the dialog to update recording state
@@ -2926,38 +2493,32 @@ class OpenAIGTKClient(Gtk.Window):
 
                 def record_thread():
                     try:
-                        temp_dir = Path(tempfile.gettempdir())
-                        temp_file = temp_dir / "voice_input.wav"
-
-                        recording, sample_rate = record_audio(self.microphone, self.recording_event)
+                        # Record audio using AudioService
+                        audio_service = self.controller.audio_service
+                        recording, sample_rate = audio_service.record_audio(
+                            self.microphone, self.recording_event
+                        )
 
                         if recording is not None and sample_rate is not None:
                             try:
-                                if len(recording.shape) == 1:
-                                    recording = recording.reshape(-1, 1)
-                                sf.write(temp_file, recording, sample_rate)
+                                temp_file = audio_service.save_recording(recording, sample_rate)
 
                                 transcript = None
                                 models_to_try = [stt_model]
-                                if "whisper-1" not in models_to_try:
+                                if not is_custom_stt and "whisper-1" not in models_to_try:
                                     models_to_try.append("whisper-1")
 
                                 for model in models_to_try:
-                                    try:
-                                        with open(temp_file, "rb") as audio_file:
-                                            transcript = openai_provider.transcribe_audio(
-                                                audio_file,
-                                                model=model,
-                                                prompt="Please transcribe this audio file. Return only the transcribed text.",
-                                                base_url=stt_base_url,
-                                                api_key=stt_api_key,
-                                            )
+                                    transcript = audio_service.transcribe(
+                                        temp_file, stt_provider,
+                                        model=model,
+                                        base_url=stt_base_url,
+                                        api_key=stt_api_key,
+                                    )
+                                    if transcript:
                                         print(f"[Audio STT] Transcribed with model: {model}")
                                         break
-                                    except Exception as e:
-                                        print(f"[Audio STT] Model {model} failed: {e}")
-                                        transcript = None
-                                        continue
+                                    print(f"[Audio STT] Model {model} failed")
 
                                 if transcript:
                                     def insert_transcript():
@@ -2966,8 +2527,6 @@ class OpenAIGTKClient(Gtk.Window):
                                     GLib.idle_add(insert_transcript)
                                 else:
                                     print("[Audio STT] No transcript produced.")
-                            except Exception as e:
-                                print(f"[Audio STT] Error saving audio: {e}")
                             finally:
                                 temp_file.unlink(missing_ok=True)
                         else:
@@ -3129,7 +2688,8 @@ class OpenAIGTKClient(Gtk.Window):
                         temperature=model_temperature,
                         mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
                         realtime_prompt=self._get_realtime_prompt(),
-                        api_key=api_key
+                        api_key=api_key,
+                        vad_threshold=float(getattr(self, "realtime_vad_threshold", 0.1))
                     )
                     
                 except Exception as e:
@@ -3152,7 +2712,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_delete_chat(self, widget, history_row):
         """Delete the selected chat history."""
-        filename = history_row.filename
+        filename = history_row.chat_id
         
         dialog = Gtk.MessageDialog(
             transient_for=self,
@@ -3177,34 +2737,29 @@ class OpenAIGTKClient(Gtk.Window):
                 self.conversation_history = [create_system_message(self.system_message)]
                 self.current_chat_id = None
 
-            # Delete the chat history and associated files
-            delete_chat_history(filename)
+            # Delete the chat history via controller
+            self.controller.delete_chat(filename)
             
             # Refresh the history list
             self.refresh_history_list()
 
 
-    def on_sidebar_toggle(self, button):
+    def on_sidebar_toggle(self, button=None):
         """Toggle sidebar visibility."""
         if self.sidebar_visible:
             self.sidebar.hide()
-            arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.RIGHT, shadow_type=Gtk.ShadowType.NONE)
         else:
             self.sidebar.show()
             # Restore the paned position to the saved sidebar width
             self.paned.set_position(self.current_sidebar_width)
             # Reload the current conversation to force reflow with new width
-            # Use idle_add to ensure this happens after the paned has allocated space
             GLib.idle_add(self._reload_current_conversation)
-            arrow = Gtk.Arrow(arrow_type=Gtk.ArrowType.LEFT, shadow_type=Gtk.ShadowType.NONE)
-        
-        # Update button arrow
-        old_arrow = button.get_child()
-        button.remove(old_arrow)
-        button.add(arrow)
-        button.show_all()
         
         self.sidebar_visible = not self.sidebar_visible
+        
+        # Update toolbar button if using component
+        if hasattr(self, '_toolbar'):
+            self._toolbar.set_sidebar_visible(self.sidebar_visible)
     
     def _reload_current_conversation(self):
         """Reload the current conversation to force widgets to recalculate with new width."""
@@ -3273,191 +2828,12 @@ class OpenAIGTKClient(Gtk.Window):
 
     def refresh_history_list(self):
         """Refresh the list of chat histories in the sidebar."""
-        # Ensure filter entry mirrors current filter text without re-triggering needless updates
-        if hasattr(self, "history_filter_entry"):
-            current_text = self.history_filter_entry.get_text()
-            if current_text != self.history_filter_text:
-                self.history_filter_entry.set_text(self.history_filter_text)
-        if hasattr(self, "history_filter_toggle"):
-            if self.history_filter_toggle.get_active() != self.history_filter_titles_only:
-                self.history_filter_toggle.set_active(self.history_filter_titles_only)
-        if hasattr(self, "history_filter_whole_words_toggle"):
-            if self.history_filter_whole_words_toggle.get_active() != self.history_filter_whole_words:
-                self.history_filter_whole_words_toggle.set_active(self.history_filter_whole_words)
-
-        # Preserve current selection if present
-        selected_filename = self.current_chat_id
-        if selected_filename is None:
-            current_row = self.history_list.get_selected_row()
-            if current_row and hasattr(current_row, "filename"):
-                selected_filename = current_row.filename
-
-        # Clear existing items
-        for child in self.history_list.get_children():
-            self.history_list.remove(child)
+        if hasattr(self, '_history_sidebar'):
+            self._history_sidebar.refresh()
         
-        # Get histories from utils
-        histories = list_chat_histories()
-
-        filter_text = (self.history_filter_text or "").strip()
-        if filter_text:
-            filtered = []
-            for history in histories:
-                if self._history_matches_filter(history, filter_text):
-                    filtered.append(history)
-            histories = filtered
-
-        for history in histories:
-            row = Gtk.ListBoxRow()
-            
-            # Create vertical box for title and timestamp
-            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-            vbox.set_margin_start(10)
-            vbox.set_margin_end(10)
-            
-            # Get chat title (will use custom title if it exists)
-            title = get_chat_title(history['filename'])
-            
-            title_label = Gtk.Label(label=title, xalign=0)
-            title_label.get_style_context().add_class('title')
-            title_label.set_line_wrap(False)
-            title_label.set_ellipsize(Pango.EllipsizeMode.END)
-            
-            # Timestamp label
-            timestamp = self.get_chat_timestamp(history['filename'])
-            time_label = Gtk.Label(label=timestamp, xalign=0)
-            time_label.get_style_context().add_class('timestamp')
-            
-            vbox.pack_start(title_label, True, True, 0)
-            vbox.pack_start(time_label, True, True, 0)
-            
-            row.add(vbox)
-            row.filename = history['filename']
-            
-            self.history_list.add(row)
-        
-        self.history_list.show_all()
-
-        # Restore selection if possible
-        selected_row = None
-        if selected_filename:
-            for row in self.history_list.get_children():
-                if getattr(row, "filename", None) == selected_filename:
-                    selected_row = row
-                    break
-
-        if selected_row:
-            self.history_list.select_row(selected_row)
-        else:
-            self.history_list.unselect_all()
-
-    def on_history_filter_changed(self, entry):
-        """Debounce and apply history filter as the user types."""
-        self.history_filter_text = entry.get_text()
-        # Only debounce live filtering when in titles-only mode; full-content search waits for Enter
-        if self.history_filter_titles_only:
-            if self.history_filter_timeout_id:
-                GLib.source_remove(self.history_filter_timeout_id)
-            self.history_filter_timeout_id = GLib.timeout_add(150, self._apply_history_filter)
-
-    def on_history_filter_icon_pressed(self, entry, icon_pos, event):
-        """Clear filter when the clear icon is pressed."""
-        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
-            entry.set_text("")
-            self.history_filter_text = ""
-            self.refresh_history_list()
-
-    def on_history_filter_keypress(self, entry, event):
-        """Keyboard shortcuts for the history filter."""
-        if event.keyval == Gdk.KEY_Escape:
-            entry.set_text("")
-            self.history_filter_text = ""
-            self.refresh_history_list()
-            return True
-        if event.keyval == Gdk.KEY_Return:
-            # Apply filter immediately when Enter is pressed (used for content search)
-            self._apply_history_filter()
-            self.history_list.grab_focus()
-            return True
-        return False
-
-    def on_history_filter_mode_toggled(self, toggle_button):
-        """Switch between titles-only and full-content filtering."""
-        self.history_filter_titles_only = toggle_button.get_active()
-        # Apply immediately when switching to titles-only; wait for Enter when switching to full search
-        if self.history_filter_titles_only:
-            self._apply_history_filter()
-
-    def on_history_filter_whole_words_toggled(self, toggle_button):
-        """Toggle whole-word matching for history filter."""
-        self.history_filter_whole_words = toggle_button.get_active()
-        # Re-apply current filter to update matches
-        self._apply_history_filter()
-
-    def _apply_history_filter(self):
-        """Apply the pending history filter."""
-        self.refresh_history_list()
-        self.history_filter_timeout_id = None
-        return False
-
-    def _history_matches_filter(self, history, filter_text):
-        """Check if a history entry matches the current filter."""
-        # Titles/filenames check always applies
-        title = get_chat_title(history['filename'])
-        filename = history['filename']
-        if self._text_matches_filter(f"{title} {filename}", filter_text):
-            return True
-
-        # If in titles-only mode, stop here
-        if self.history_filter_titles_only:
-            return False
-
-        # Full-content search: scan messages for substring match
-        try:
-            messages = load_chat_history(history['filename'], messages_only=True)
-            for msg in messages:
-                content = msg.get("content", "")
-                if isinstance(content, str) and self._text_matches_filter(content, filter_text):
-                    return True
-        except Exception as e:
-            print(f"Error filtering history {filename}: {e}")
-        return False
-
-    def _text_matches_filter(self, text, filter_text):
-        """Match text against filter with optional whole-word and case-insensitive rules."""
-        if not filter_text:
-            return True
-        if self.history_filter_whole_words:
-            try:
-                pattern = r"\b" + re.escape(filter_text) + r"\b"
-                return re.search(pattern, text, flags=re.IGNORECASE) is not None
-            except re.error:
-                return False
-        return filter_text.lower() in text.lower()
-
-    def _get_button_row_height(self):
-        """Return the themed height of a button row for alignment."""
-        try:
-            if hasattr(self, "btn_send"):
-                min_h, nat_h = self.btn_send.get_preferred_height()
-                if nat_h or min_h:
-                    return nat_h or min_h
-        except Exception as e:
-            print(f"Error getting button height: {e}")
-        return 0
-
-    def _update_sidebar_row_heights(self):
-        """Set sidebar row heights to match button height for alignment."""
-        height = self._get_button_row_height()
-        if height <= 0:
-            return
-        try:
-            if hasattr(self, "history_filter_box"):
-                self.history_filter_box.set_size_request(-1, height)
-            if hasattr(self, "history_options_box"):
-                self.history_options_box.set_size_request(-1, height)
-        except Exception as e:
-            print(f"Error updating sidebar row heights: {e}")
+    def _on_sidebar_context_menu(self, row, event):
+        """Handle sidebar context menu request."""
+        self.create_history_context_menu(row)
 
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""
@@ -3482,43 +2858,35 @@ class OpenAIGTKClient(Gtk.Window):
         if save_current and self.current_chat_id is None and len(self.conversation_history) > 1:
             self.save_current_chat()
         
-        # Load the selected chat history
-        history = load_chat_history(filename, messages_only=True)  # Only get messages
-        if history:
-            # Update conversation history and chat ID
+        # Load via controller
+        chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
+        if self.controller.load_chat(chat_id):
+            # Sync from controller
+            history = self.controller.conversation_history
             self.conversation_history = history
-            self.current_chat_id = filename
+            self.current_chat_id = self.controller.current_chat_id
             
-            # Save the last active chat to settings (remove .json extension for storage)
-            chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
+            # Save the last active chat to settings
             self.last_active_chat = chat_id
             save_object_settings(self)
             
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:
                 saved_model = history[0]["model"]
-                model_store = self.combo_model.get_model()
-                
-                # Find the matching row by comparing resolved model_ids (handles custom display names)
-                match_index = None
-                for i in range(len(model_store)):
-                    display_text = model_store[i][0]
-                    model_id = self._display_to_model_id.get(display_text, display_text) if hasattr(self, "_display_to_model_id") else display_text
-                    if model_id == saved_model:
-                        match_index = i
-                        break
-                
-                if match_index is None:
-                    # Conversation references a model not currently in the list (e.g., custom); add it so selection stays in sync
-                    display_text = get_model_display_name(saved_model, self.custom_models) or saved_model
-                    if not hasattr(self, "_display_to_model_id"):
-                        self._display_to_model_id = {}
-                    self._display_to_model_id[display_text] = saved_model
-                    match_index = len(model_store)
-                    self.combo_model.append_text(display_text)
-                
-                if match_index is not None:
-                    self.combo_model.set_active(match_index)
+                # Prefer using the ModelSelector API so its internal mappings stay in sync.
+                display_text = (
+                    getattr(self, "_model_id_to_display", {}).get(saved_model)
+                    or get_model_display_name(saved_model, self.custom_models)
+                    or saved_model
+                )
+
+                # Ensure the selector knows about this model (handles missing/custom models).
+                if hasattr(self, "_model_selector"):
+                    if saved_model not in self._model_selector._model_id_to_display:
+                        self._model_selector._model_id_to_display[saved_model] = display_text
+                        self._model_selector._display_to_model_id[display_text] = saved_model
+                        self.combo_model.append_text(display_text)
+                    self._model_selector.select_model(saved_model)
             
             # Sync system prompt selector with the loaded chat's system message
             if history and history[0].get("role") == "system":
@@ -3550,8 +2918,10 @@ class OpenAIGTKClient(Gtk.Window):
             for idx, message in enumerate(history):
                 if message['role'] != 'system':  # Skip system message
                     message_index = idx
+                    # Use display_content if available, otherwise fall back to content
+                    content = message.get('display_content') or message['content']
                     if message['role'] == 'user':
-                        formatted_content = format_response(message['content'])
+                        formatted_content = format_response(content)
                         self.append_message('user', formatted_content, message_index)
                     elif message['role'] == 'assistant':
                         formatted_content = format_response(message['content'])
@@ -3583,223 +2953,36 @@ class OpenAIGTKClient(Gtk.Window):
         self.load_chat_by_filename(row.filename)
 
     def save_current_chat(self):
-        """Save the current chat history."""
+        """Save the current chat history via controller."""
         if len(self.conversation_history) > 1:  # More than just the system message
-            # Check if the chat already has a model name
-            if len(self.conversation_history) > 0 and "model" in self.conversation_history[0]:
-                current_model = self.conversation_history[0]["model"]
-            else:
-                current_model = self._get_model_id_from_combo()
+            # Track model in system message
+            current_model = self._get_model_id_from_combo()
+            if current_model:
+                # Don't overwrite with image/tts models
+                is_excluded = "dall-e" in current_model.lower() or "tts" in current_model.lower() or "audio" in current_model.lower()
+                has_existing_model = "model" in self.conversation_history[0]
+                if not is_excluded or not has_existing_model:
+                    self.conversation_history[0]["model"] = current_model
 
-            # Only store the model name if it's not dall-e-3 and does not contain "tts" or "audio"
-            # Exception: if no model is saved yet, this is the primary model - save it regardless
-            has_existing_model = len(self.conversation_history) > 0 and "model" in self.conversation_history[0]
-            is_excluded = "dall-e" in current_model.lower() or "tts" in current_model.lower() or "audio" in current_model.lower()
-            if not has_existing_model or not is_excluded:
-                self.conversation_history[0]["model"] = current_model
-
-            # TODO: This may be reduntant
-            if self.current_chat_id is None:
-                # New chat - generate name and save
-                chat_name = generate_chat_name(self.conversation_history[1]['content'])
-                self.current_chat_id = chat_name
-            else:
-                # Existing chat - use current ID
-                chat_name = self.current_chat_id
+            # Sync conversation to controller and save
+            self.controller.conversation_history = self.conversation_history
+            chat_id = self.controller.save_current_chat()
             
-            try:
-                # Get any existing metadata before saving
-                metadata = get_chat_metadata(chat_name)
-                save_chat_history(chat_name, self.conversation_history, metadata)
-            except Exception as e:
-                print(f"Error preserving metadata: {e}")
-                # Fall back to original save behavior
-                save_chat_history(chat_name, self.conversation_history)
-            
-            # Update the last active chat to the current one
-            self.last_active_chat = chat_name.replace('.json', '') if chat_name.endswith('.json') else chat_name
-            save_object_settings(self)
-            
-            self.refresh_history_list()
+            if chat_id:
+                self.current_chat_id = chat_id
+                self.last_active_chat = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
+                save_object_settings(self)
 
     def show_thinking_animation(self):
-        """Show an animated thinking indicator with loader and cancel button."""
-        # Remove any existing thinking animation first
-        if hasattr(self, 'thinking_container') and self.thinking_container:
-            self.thinking_container.destroy()
-            self.thinking_container = None
-        
-        # Create main container with consistent styling (matching append_ai_message)
-        self.thinking_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        
-        # Apply styling similar to message containers
-        css_container = f"""
-            box {{
-                background-color: @theme_base_color;
-                padding: 12px;
-                border-radius: 12px;
-            }}
-        """
-        css_provider = Gtk.CssProvider()
-        css_provider.load_from_data(css_container.encode())
-        self.thinking_container.get_style_context().add_provider(
-            css_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        
-        # Create loader widget (animated pulsing dot)
-        loader_box = Gtk.Box()
-        loader_box.set_size_request(16, 16)
-        loader_box.set_valign(Gtk.Align.CENTER)
-        
-        # Create the loader dot
-        self.loader_dot = Gtk.Box()
-        self.loader_dot.set_size_request(16, 16)
-        hex_color = rgb_to_hex(self.ai_color)
-        
-        # Initial loader CSS - will be animated (using hex color)
-        css_loader = f"""
-            box {{
-                border-radius: 50%;
-                background-color: {hex_color};
-                min-width: 16px;
-                min-height: 16px;
-            }}
-        """
-        loader_css_provider = Gtk.CssProvider()
-        loader_css_provider.load_from_data(css_loader.encode())
-        self.loader_dot.get_style_context().add_provider(
-            loader_css_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        
-        loader_box.pack_start(self.loader_dot, False, False, 0)
-        self.thinking_container.pack_start(loader_box, False, False, 0)
-        
-        # Create thinking text label
-        self.thinking_label = Gtk.Label()
-        self.thinking_label.set_markup(f"<span color='{hex_color}'>{self.ai_name} is thinking</span>")
-        self.thinking_label.set_xalign(0)
-        self.thinking_container.pack_start(self.thinking_label, True, True, 0)
-        
-        # Create cancel button using theme colors
-        cancel_button = Gtk.Button()
-        cancel_button.set_relief(Gtk.ReliefStyle.NONE)
-        cancel_button.set_tooltip_text("Cancel request")
-        
-        # Style cancel button with theme colors
-        cancel_css = """
-            button {
-                border-radius: 4px;
-                padding: 4px 8px;
-                min-width: 0;
-                min-height: 0;
-                color: @theme_fg_color;
-            }
-            button:hover {
-                background-color: alpha(@theme_fg_color, 0.1);
-            }
-            button:active {
-                background-color: alpha(@theme_fg_color, 0.2);
-            }
-        """
-        cancel_css_provider = Gtk.CssProvider()
-        cancel_css_provider.load_from_data(cancel_css.encode())
-        cancel_button.get_style_context().add_provider(
-            cancel_css_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        
-        # Add cancel icon (× symbol)
-        cancel_label = Gtk.Label()
-        cancel_label.set_markup("<span size='large' weight='bold'>×</span>")
-        cancel_button.add(cancel_label)
-        
-        # Connect cancel button
-        self.request_cancelled = False
-        def on_cancel_clicked(button):
-            self.request_cancelled = True
-            self.hide_thinking_animation()
-            cancel_text = "** Request cancelled by user **"
-            message_index = len(self.conversation_history)
-            self.conversation_history.append(create_assistant_message(cancel_text))
-            GLib.idle_add(lambda idx=message_index: self.append_message('ai', cancel_text, idx))
-        
-        cancel_button.connect("clicked", on_cancel_clicked)
-        self.thinking_container.pack_start(cancel_button, False, False, 0)
-        
-        self.conversation_box.pack_start(self.thinking_container, False, False, 0)
-        self.conversation_box.show_all()
-        
-        def scroll_to_bottom():
-            # Find the ScrolledWindow by traversing up the widget hierarchy
-            widget = self.conversation_box
-            while widget and not isinstance(widget, Gtk.ScrolledWindow):
-                widget = widget.get_parent()
-            
-            if widget:  # We found the ScrolledWindow
-                adj = widget.get_vadjustment()
-                adj.set_value(adj.get_upper() - adj.get_page_size())
-            return False  # Don't repeat
-        
-        # Schedule scroll after the thinking label is shown
-        GLib.idle_add(scroll_to_bottom)
-        
-        # Animation state
-        self.thinking_dots = 0
-        self.loader_animation_state = 0  # 0, 1, 2 for the three animation states
-        self.loader_opacity = [1.0, 0.4, 1.0]  # Opacity values for pulsing effect
-        
-        def update_animation():
-            if not hasattr(self, 'thinking_container') or not self.thinking_container:
-                return False
-            
-            # Update loader animation (pulsing opacity effect)
-            # Cycle through opacity states to create a pulsing effect
-            opacity = self.loader_opacity[self.loader_animation_state]
-            # Use GTK's opacity property directly (more reliable than CSS rgba)
-            if hasattr(self, 'loader_dot') and self.loader_dot:
-                self.loader_dot.set_opacity(opacity)
-            
-            self.loader_animation_state = (self.loader_animation_state + 1) % 3
-            
-            # Update dots in text
-            if hasattr(self, 'thinking_label') and self.thinking_label:
-                self.thinking_dots = (self.thinking_dots + 1) % 4
-                dots = "." * self.thinking_dots
-                self.thinking_label.set_markup(
-                    f"<span color='{hex_color}'>{self.ai_name} is thinking{dots}</span>"
-                )
-            
-            return True  # Continue animation
-        
-        # Update every ~667ms (2s / 3 states) for smooth animation
-        self.thinking_timer = GLib.timeout_add(667, update_animation)
+        """Show thinking animation - delegated to ChatView component."""
+        if hasattr(self, '_chat_view'):
+            self._chat_view.set_ai_style(self.ai_name, self.ai_color)
+            self._chat_view.show_thinking()
 
     def hide_thinking_animation(self):
-        """Remove the thinking animation."""
-        # Reset cancellation flag
-        if hasattr(self, 'request_cancelled'):
-            self.request_cancelled = False
-        
-        # Remove timer if it exists
-        if hasattr(self, 'thinking_timer') and self.thinking_timer is not None:
-            try:
-                GLib.source_remove(self.thinking_timer)
-            except:
-                pass
-        self.thinking_timer = None
-        
-        # Remove the container (which includes label, loader, and cancel button)
-        if hasattr(self, 'thinking_container') and self.thinking_container:
-            self.thinking_container.destroy()
-            self.thinking_container = None
-        
-        # Clean up individual components (for safety)
-        if hasattr(self, 'thinking_label') and self.thinking_label:
-            self.thinking_label = None
-        if hasattr(self, 'loader_dot') and self.loader_dot:
-            self.loader_dot = None
+        """Hide thinking animation - delegated to ChatView component."""
+        if hasattr(self, '_chat_view'):
+            self._chat_view.hide_thinking()
 
     def create_message_context_menu(self, widget, message_index, event=None):
         """Create a context menu for an individual message."""
@@ -3898,15 +3081,12 @@ class OpenAIGTKClient(Gtk.Window):
         if response == Gtk.ResponseType.OK:
             new_name = entry.get_text().strip()
             if new_name:
-                # Update the visible title
-                history_row.get_children()[0].get_children()[0].set_text(new_name)
-                
-                # Load and update the chat history
-                history = load_chat_history(history_row.filename)
-                if history:
-                    # Update the first message which is used as the title
-                    history[1]['content'] = new_name  # Update first user message
-                    save_chat_history(history_row.filename, history)
+                # Set the custom title via utils function
+                from utils import set_chat_title
+                chat_id = history_row.chat_id
+                set_chat_title(chat_id, new_name)
+                # Refresh sidebar to show new title
+                self.refresh_history_list()
         
         dialog.destroy()
 
@@ -3940,7 +3120,8 @@ class OpenAIGTKClient(Gtk.Window):
             dialog.add_filter(pdf_filter)
             
             # Set default filename from the chat history
-            default_name = f"chat_{history_row.filename.replace('.json', '.pdf')}"
+            chat_id = history_row.chat_id
+            default_name = f"chat_{chat_id}.pdf"
             dialog.set_current_name(default_name)
             
             # Show the dialog
@@ -3952,18 +3133,19 @@ class OpenAIGTKClient(Gtk.Window):
                 if not filename.endswith('.pdf'):
                     filename += '.pdf'
                     
-                # Load the chat history
-                history = load_chat_history(history_row.filename, messages_only=True)
+                # Load the chat history via chat service
+                conv = self.controller.chat_service.load_chat(chat_id)
+                history = conv.to_list() if conv and hasattr(conv, 'to_list') else conv
                 if history:
                     # Use the sidebar chat title and present it with capitalized words
-                    chat_title = get_chat_title(history_row.filename)
+                    chat_title = get_chat_title(chat_id)
+                    # Remove timestamp suffix (e.g., _20250211_203903) and convert underscores to spaces
+                    clean_title = re.sub(r'_\d{8}_\d{6}$', '', chat_title)
+                    clean_title = clean_title.replace('_', ' ')
                     formatted_title = " ".join(
                         word[:1].upper() + word[1:] if word else ""
-                        for word in chat_title.split()
+                        for word in clean_title.split()
                     )
-                    
-                    # Get the chat ID from the filename
-                    chat_id = history_row.filename
                     
                     try:
                         result = export_chat_to_pdf(history, filename, formatted_title, chat_id)
@@ -4287,28 +3469,23 @@ class OpenAIGTKClient(Gtk.Window):
         
         def on_edit_toggled(widget):
             if widget.get_active():
-                # Check if current model supports image editing
-                model = self._get_model_id_from_combo()
                 from model_cards import get_card
-                card = get_card(model, getattr(self, 'custom_models', {}))
-                supports_edit = card and card.capabilities.image_edit if card else False
                 
-                if not supports_edit:
+                # Check if either the chat model OR the image model supports editing
+                chat_model = self._get_model_id_from_combo()
+                chat_card = get_card(chat_model, getattr(self, 'custom_models', {}))
+                chat_supports_edit = chat_card and chat_card.capabilities.image_edit if chat_card else False
+                
+                image_model = self.controller.get_setting('IMAGE_MODEL', 'dall-e-3')
+                image_card = get_card(image_model, getattr(self, 'custom_models', {})) if image_model else None
+                image_supports_edit = image_card and image_card.capabilities.image_edit if image_card else False
+                
+                if not chat_supports_edit and not image_supports_edit:
                     widget.set_active(False)
-                    dialog = Gtk.MessageDialog(
-                        transient_for=self,
-                        modal=True,
-                        message_type=Gtk.MessageType.WARNING,
-                        buttons=Gtk.ButtonsType.OK,
-                        text="Model does not support image editing",
-                    )
-                    dialog.format_secondary_text(
-                        f"The current model '{model}' does not support image editing.\n\n"
-                        "Either switch to a model that supports editing (e.g., gpt-image-1), "
-                        "or enable 'Image Edit' for this model in Settings → Model Whitelist."
-                    )
-                    dialog.run()
-                    dialog.destroy()
+                    msg = (f"Neither the chat model '{chat_model}' nor the image model '{image_model}' supports image editing.\n\n"
+                           "Switch to a model that supports editing (e.g., gpt-image-1), "
+                           "or enable 'Image Edit' in Settings → Model Whitelist.")
+                    self.show_error_dialog(msg)
                     return
                 
                 # Deactivate any other edit buttons
@@ -4347,386 +3524,106 @@ class OpenAIGTKClient(Gtk.Window):
     # -----------------------------------------------------------------------
 
     def _get_tts_cache_path(self, text: str, chat_id: str) -> Path:
-        """
-        Get the cache file path for TTS audio based on current settings.
-        
-        This method computes a consistent cache path that can be used by both
-        the play button and automatic read-aloud to share cached audio files.
-        
-        The cache key includes:
-        - The text (cleaned of audio file tags)
-        - The TTS provider
-        - The TTS voice
-        - The TTS HD mode (for OpenAI)
-        - The prompt template hash (for Gemini and audio-preview models)
-        
-        Returns the Path to the cache file, or None if no chat_id is provided.
-        """
-        import hashlib
-        
-        if not chat_id:
-            return None
-        
-        # Clean the text of any audio file tags
-        clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
-        if not clean_text:
-            return None
-        
-        # Get current TTS settings
+        """Get cache path - delegated to AudioService."""
         provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
         voice = getattr(self, 'tts_voice', None) or 'alloy'
-        hd_mode = self.tts_hd if provider == 'openai' else False
-        template = getattr(self, 'tts_prompt_template', '') or ''
-        
-        # Build cache key components
-        if provider == 'openai':
-            mode = "ttshd" if hd_mode else "tts"
-            cache_key = f"{clean_text}"
-            prefix = f"openai_{mode}_{voice}"
-        elif provider == 'gemini':
-            # Include template in cache key for Gemini since it affects output
-            if template and '{text}' in template:
-                prompt_text = template.replace('{text}', clean_text)
-            else:
-                prompt_text = clean_text
-            cache_key = f"{prompt_text}_{voice}"
-            prefix = f"gemini_{voice}"
-        else:
-            # audio-preview models - include template and model in cache
-            if template and '{text}' in template:
-                prompt_text = template.replace('{text}', clean_text)
-            else:
-                prompt_text = f'Please say the following verbatim: "{clean_text}"'
-            cache_key = f"{prompt_text}_{voice}_{provider}"
-            prefix = f"{provider}_{voice}"
-        
-        # Generate hash
-        text_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
-        
-        # Get audio directory
-        audio_dir = get_chat_dir(chat_id) / 'audio'
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        
-        return audio_dir / f"{prefix}_{text_hash}.wav"
+        model = "tts-1-hd" if provider == 'openai' and self.tts_hd else "tts-1"
+        return self.controller.audio_service._get_cache_path(
+            self.controller.audio_service._clean_tts_text(text),
+            chat_id, f"{provider}_{model}", voice
+        )
 
     def _synthesize_and_play_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
-        """
-        Synthesize text using OpenAI TTS and play it.
-        
-        Uses the unified tts_voice setting and caches audio files per chat.
-        Returns True if playback completed successfully, False otherwise.
-        """
-        # Get the OpenAI provider for TTS
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                openai_provider = self.initialize_provider('openai', api_key)
-        
-        if not openai_provider:
+        """Synthesize text using OpenAI TTS and play it."""
+        provider = self.controller.get_provider('openai')
+        if not provider:
             print("TTS: OpenAI provider not available")
             return False
         
-        try:
-            # Clean the text of any audio file tags
-            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
-            if not clean_text:
-                return True  # Nothing to say
-            
-            # Get the unified TTS voice setting
-            voice = getattr(self, 'tts_voice', None) or 'alloy'
-            
-            # Use shared cache path helper
-            audio_file = self._get_tts_cache_path(text, chat_id)
-            if audio_file:
-                # Check for cached file
-                if audio_file.exists():
-                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-                    self.current_read_aloud_process.wait()
-                    return True
-            else:
-                # No chat_id, use a temp file
-                import tempfile
-                import hashlib
-                text_hash = hashlib.md5(clean_text.encode()).hexdigest()[:8]
-                audio_file = Path(tempfile.gettempdir()) / f"tts_openai_{text_hash}.wav"
-            
-            # Generate TTS audio
-            with openai_provider.audio.speech.with_streaming_response.create(
-                model="tts-1-hd" if self.tts_hd else "tts-1",
-                voice=voice,
-                input=clean_text
-            ) as response:
-                with open(audio_file, 'wb') as f:
-                    for chunk in response.iter_bytes():
-                        if stop_event and stop_event.is_set():
-                            # User requested stop
-                            audio_file.unlink(missing_ok=True)
-                            return False
-                        f.write(chunk)
-            
-            if stop_event and stop_event.is_set():
-                audio_file.unlink(missing_ok=True)
-                return False
-            
-            # Play the generated audio
-            self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-            self.current_read_aloud_process.wait()
-            return True
-            
-        except Exception as e:
-            print(f"Read Aloud TTS error: {e}")
-            return False
+        result = self.controller.audio_service.synthesize_and_play(
+            text=text,
+            provider_type='openai',
+            provider=provider,
+            stop_event=stop_event,
+            chat_id=chat_id,
+            voice=getattr(self, 'tts_voice', 'alloy'),
+            model='tts-1-hd' if self.tts_hd else 'tts-1',
+        )
+        return result
 
     def _synthesize_and_play_audio_preview(self, text: str, *, chat_id: str, model_id: str, stop_event: threading.Event = None) -> bool:
-        """
-        Synthesize text using gpt-4o-audio-preview or gpt-4o-mini-audio-preview.
-        
-        Builds a prompt using the configured template and sends it to the audio model.
-        Returns True if playback completed successfully, False otherwise.
-        """
-        # Get the OpenAI provider
-        openai_provider = self.providers.get('openai')
-        if not openai_provider:
-            api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-            if api_key:
-                openai_provider = self.initialize_provider('openai', api_key)
-        
-        if not openai_provider:
+        """Synthesize text using audio-preview models."""
+        provider = self.controller.get_provider('openai')
+        if not provider:
             print("TTS: OpenAI provider not available for audio-preview")
             return False
         
-        try:
-            # Clean the text of any audio file tags
-            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
-            if not clean_text:
-                return True  # Nothing to say
-            
-            # Build the prompt using the unified TTS prompt template
-            template = getattr(self, 'tts_prompt_template', '') or 'Please say the following verbatim: "{text}"'
-            prompt = template.replace('{text}', clean_text)
-            
-            # Get the unified TTS voice setting
-            voice = getattr(self, 'tts_voice', None) or 'alloy'
-            
-            # Use shared cache path helper
-            audio_file = self._get_tts_cache_path(text, chat_id)
-            if audio_file:
-                # Check for cached file
-                if audio_file.exists():
-                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-                    self.current_read_aloud_process.wait()
-                    return True
-            else:
-                # No chat_id, use a temp file
-                import tempfile
-                import hashlib
-                text_hash = hashlib.md5(f"{prompt}_{voice}_{model_id}".encode()).hexdigest()[:8]
-                audio_file = Path(tempfile.gettempdir()) / f"tts_audio_preview_{text_hash}.wav"
-            
-            # Call the audio-preview model
-            response = openai_provider.client.chat.completions.create(
-                model=model_id,
-                modalities=["text", "audio"],
-                audio={"voice": voice, "format": "wav"},
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            
-            if stop_event and stop_event.is_set():
-                return False
-            
-            # Extract and play the audio
-            if hasattr(response.choices[0].message, 'audio') and response.choices[0].message.audio:
-                audio_data = response.choices[0].message.audio.data
-                audio_bytes = base64.b64decode(audio_data)
-                
-                with open(audio_file, 'wb') as f:
-                    f.write(audio_bytes)
-                
-                if stop_event and stop_event.is_set():
-                    audio_file.unlink(missing_ok=True)
-                    return False
-                
-                # Play the audio
-                self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-                self.current_read_aloud_process.wait()
-                return True
-            else:
-                print("TTS: No audio in response from audio-preview model")
-                return False
-                
-        except Exception as e:
-            print(f"TTS audio-preview error: {e}")
-            return False
+        return self.controller.audio_service.synthesize_and_play(
+            text=text,
+            provider_type='audio_preview',
+            provider=provider,
+            stop_event=stop_event,
+            chat_id=chat_id,
+            model_id=model_id,
+            voice=getattr(self, 'tts_voice', 'alloy'),
+            prompt_template=getattr(self, 'tts_prompt_template', '') or 'Please say the following verbatim: "{text}"',
+        )
 
     def _synthesize_and_play_gemini_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
-        """
-        Synthesize text using Gemini TTS with controllable speech.
-        
-        Builds a prompt using the configured template for controllable speech styles.
-        Uses the unified tts_voice setting and caches audio files per chat.
-        Returns True if playback completed successfully, False otherwise.
-        """
-        # Get the Gemini provider for TTS
-        gemini_provider = self.providers.get('gemini')
-        if not gemini_provider:
-            api_key = os.environ.get('GEMINI_API_KEY', self.api_keys.get('gemini', '')).strip()
-            if api_key:
-                gemini_provider = self.initialize_provider('gemini', api_key)
-        
-        if not gemini_provider:
+        """Synthesize text using Gemini TTS."""
+        provider = self.controller.get_provider('gemini')
+        if not provider:
             print("TTS: Gemini provider not available")
             return False
         
-        try:
-            # Clean the text of any audio file tags
-            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
-            if not clean_text:
-                return True  # Nothing to say
-            
-            # Build the prompt using the unified TTS prompt template for controllable speech
-            # Gemini TTS supports prompt-based style control (e.g., "Say cheerfully:", "Read slowly:")
-            template = getattr(self, 'tts_prompt_template', '') or ''
-            if template and '{text}' in template:
-                prompt_text = template.replace('{text}', clean_text)
-            else:
-                # No template or invalid template, just use the text directly
-                prompt_text = clean_text
-            
-            # Get the unified TTS voice setting (should be a Gemini voice when provider is gemini)
-            voice = getattr(self, 'tts_voice', None) or 'Kore'
-            
-            # Use shared cache path helper
-            audio_file = self._get_tts_cache_path(text, chat_id)
-            if audio_file:
-                # Check for cached file
-                if audio_file.exists():
-                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-                    self.current_read_aloud_process.wait()
-                    return True
-            else:
-                # No chat_id, use a temp file
-                import tempfile
-                import hashlib
-                cache_key = f"{prompt_text}_{voice}"
-                text_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
-                audio_file = Path(tempfile.gettempdir()) / f"tts_gemini_{text_hash}.wav"
-            
-            if stop_event and stop_event.is_set():
-                return False
-            
-            # Generate TTS audio using Gemini
-            audio_bytes = gemini_provider.generate_speech(prompt_text, voice)
-            
-            if stop_event and stop_event.is_set():
-                return False
-            
-            # Save the audio file
-            with open(audio_file, 'wb') as f:
-                f.write(audio_bytes)
-            
-            if stop_event and stop_event.is_set():
-                audio_file.unlink(missing_ok=True)
-                return False
-            
-            # Play the generated audio
-            self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-            self.current_read_aloud_process.wait()
-            return True
-            
-        except Exception as e:
-            print(f"TTS Gemini error: {e}")
-            return False
+        return self.controller.audio_service.synthesize_and_play(
+            text=text,
+            provider_type='gemini',
+            provider=provider,
+            stop_event=stop_event,
+            chat_id=chat_id,
+            voice=getattr(self, 'tts_voice', 'Kore'),
+            prompt_template=getattr(self, 'tts_prompt_template', ''),
+        )
 
     def _synthesize_and_play_custom_tts(self, text: str, *, chat_id: str, model_id: str, stop_event: threading.Event = None) -> bool:
-        """
-        Synthesize text using a custom TTS model defined in custom_models.json.
-        
-        Uses the CustomProvider to call the model's TTS endpoint with the voice
-        configured in the model definition.
-        Returns True if playback completed successfully, False otherwise.
-        """
+        """Synthesize text using custom TTS provider."""
         from ai_providers import CustomProvider
+        from utils import resolve_api_key
         
-        # Get the custom model configuration
         custom_models = getattr(self, 'custom_models', {}) or {}
         cfg = custom_models.get(model_id)
         if not cfg:
             print(f"TTS: Custom model '{model_id}' not found")
             return False
         
-        try:
-            # Clean the text of any audio file tags
-            clean_text = re.sub(r'<audio_file>.*?</audio_file>', '', text).strip()
-            if not clean_text:
-                return True  # Nothing to say
-            
-            # Determine which voice to use: user selection -> model voice -> first in list -> default
-            selected_voice = getattr(self, 'tts_voice', None) or ''
-            cfg_voice = (cfg.get('voice') or '').strip()
-            cfg_voices = []
-            if isinstance(cfg.get('voices'), list):
-                cfg_voices = [v.strip() for v in cfg.get('voices') if isinstance(v, str) and v.strip()]
-            voice = selected_voice.strip() or cfg_voice or (cfg_voices[0] if cfg_voices else "default")
-            
-            # Create and initialize the custom provider
-            from utils import resolve_api_key
-            provider = CustomProvider()
-            provider.initialize(
-                api_key=resolve_api_key(cfg.get('api_key', '')),
-                endpoint=cfg.get('endpoint', ''),
-                model_name=cfg.get('model_name') or cfg.get('model_id') or model_id,
-                api_type='tts',
-                voice=voice
-            )
-            
-            # Generate cache file path
-            import hashlib
-            import tempfile
-            cache_key = f"{clean_text}_{model_id}_{voice}"
-            text_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
-            
-            if chat_id:
-                audio_dir = get_chat_dir(chat_id) / 'audio'
-                audio_dir.mkdir(parents=True, exist_ok=True)
-                safe_model = "".join(c if c.isalnum() else "_" for c in model_id)
-                audio_file = audio_dir / f"custom_{safe_model}_{voice}_{text_hash}.wav"
-                
-                # Check for cached file
-                if audio_file.exists():
-                    self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-                    self.current_read_aloud_process.wait()
-                    return True
-            else:
-                audio_file = Path(tempfile.gettempdir()) / f"tts_custom_{text_hash}.wav"
-            
-            if stop_event and stop_event.is_set():
-                return False
-            
-            # Generate TTS audio using the custom provider
-            audio_bytes = provider.generate_speech(clean_text, voice)
-            
-            if stop_event and stop_event.is_set():
-                return False
-            
-            # Save the audio file
-            with open(audio_file, 'wb') as f:
-                f.write(audio_bytes)
-            
-            if stop_event and stop_event.is_set():
-                audio_file.unlink(missing_ok=True)
-                return False
-            
-            # Play the generated audio
-            self.current_read_aloud_process = subprocess.Popen(['paplay', str(audio_file)])
-            self.current_read_aloud_process.wait()
-            return True
-            
-        except Exception as e:
-            print(f"TTS Custom model error: {e}")
-            return False
+        # Determine voice
+        selected_voice = getattr(self, 'tts_voice', None) or ''
+        cfg_voice = (cfg.get('voice') or '').strip()
+        cfg_voices = cfg.get('voices', [])
+        if isinstance(cfg_voices, list):
+            cfg_voices = [v.strip() for v in cfg_voices if isinstance(v, str) and v.strip()]
+        voice = selected_voice.strip() or cfg_voice or (cfg_voices[0] if cfg_voices else "default")
+        
+        # Create provider
+        provider = CustomProvider()
+        provider.initialize(
+            api_key=resolve_api_key(cfg.get('api_key', '')),
+            endpoint=cfg.get('endpoint', ''),
+            model_id=cfg.get('model_name') or cfg.get('model_id') or model_id,
+            api_type='tts',
+            voice=voice
+        )
+        
+        return self.controller.audio_service.synthesize_and_play(
+            text=text,
+            provider_type='custom',
+            provider=provider,
+            stop_event=stop_event,
+            chat_id=chat_id,
+            voice=voice,
+            model_id=model_id,
+        )
 
     def read_aloud_text(self, text: str, *, chat_id: str = None):
         """

@@ -82,17 +82,17 @@ class CustomProvider(AIProvider):
     def __init__(self):
         self.api_key = None
         self.endpoint = None
-        self.model_name = None
+        self.model_id = None
         self.api_type = "chat.completions"
         self.voice = None
         self.session = requests.Session()
 
-    def initialize(self, api_key: str, endpoint: str = None, model_name: str = None, api_type: str = None, voice: str = None):
+    def initialize(self, api_key: str, endpoint: str = None, model_id: str = None, api_type: str = None, voice: str = None):
         self.api_key = api_key
         if endpoint:
             self.endpoint = endpoint.rstrip("/")
-        if model_name:
-            self.model_name = model_name
+        if model_id:
+            self.model_id = model_id
         if api_type:
             self.api_type = api_type
         if voice:
@@ -119,6 +119,20 @@ class CustomProvider(AIProvider):
             cleaned = new_cleaned
         return cleaned
 
+    def _strip_invalid_img_tags(self, text: str) -> str:
+        """Remove <img> tags with absolute paths to non-existent files (model hallucinations)."""
+        if not text or "<img" not in text:
+            return text
+        import os
+        def check_img(match):
+            path = match.group(1)
+            # Only check absolute paths - leave relative paths, URLs, and examples alone
+            if path.startswith("/") and not os.path.exists(path):
+                print(f"[WARNING] Removing hallucinated img tag (file does not exist): {path}")
+                return ""
+            return match.group(0)
+        return re.sub(r'<img\s+src="([^"]+)"\s*/?\s*>', check_img, text)
+
     def _headers(self):
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -143,7 +157,7 @@ class CustomProvider(AIProvider):
         # https://api.example.com/v1/chat/completions
         # We want to extract: https://api.example.com/v1
         # Remove /chat/completions, /responses, /images/generations, etc.
-        base = re.sub(r'/(chat/completions|responses|images/generations|audio/speech)(/.*)?$', '', base)
+        base = re.sub(r'/(chat/completions|responses|images/generations|audio/speech|audio/transcriptions)(/.*)?$', '', base)
         return base
 
     def _extract_text(self, data: dict, chat_id: str = None) -> str:
@@ -200,7 +214,9 @@ class CustomProvider(AIProvider):
                         # Handle message output (contains text and potentially images)
                         if item_type == "message":
                             content = item.get("content", [])
-                            if isinstance(content, list):
+                            if isinstance(content, str):
+                                text_content += content
+                            elif isinstance(content, list):
                                 for content_item in content:
                                     if isinstance(content_item, dict):
                                         if "text" in content_item:
@@ -235,12 +251,13 @@ class CustomProvider(AIProvider):
                     else:
                         text_content = "\n\n".join(image_tags)
                 text_content = self._strip_think_content(text_content)
+                text_content = self._strip_invalid_img_tags(text_content)
                 if text_content:
                     return text_content
         
         # Try Responses output_text (legacy/simple format)
         if "output_text" in data:
-            return self._strip_think_content(data.get("output_text") or "")
+            return self._strip_invalid_img_tags(self._strip_think_content(data.get("output_text") or ""))
         
         return ""
 
@@ -248,7 +265,7 @@ class CustomProvider(AIProvider):
     # APIProvider interface
     # -----------------------------
     def get_available_models(self, disable_filter: bool = False):
-        return [self.model_name] if self.model_name else []
+        return [self.model_id] if self.model_id else []
 
     def generate_chat_completion(
         self,
@@ -270,7 +287,7 @@ class CustomProvider(AIProvider):
         if card and card.quirks.get("no_temperature") and temperature is None:
             temperature = None
         if api_type == "responses":
-            print(f"[CustomProvider] Using Responses API for model: {model or self.model_name}")
+            print(f"[CustomProvider] Using Responses API for model: {model or self.model_id}")
             return self._call_responses(
                 messages,
                 temperature,
@@ -283,7 +300,7 @@ class CustomProvider(AIProvider):
             )
         
         if api_type == "tts":
-            print(f"[CustomProvider] Using TTS API for model: {model or self.model_name}")
+            print(f"[CustomProvider] Using TTS API for model: {model or self.model_id}")
             self._debug("API Type", api_type)
             self._debug("Endpoint", self.endpoint)
             # Extract text from the last user message
@@ -314,7 +331,7 @@ class CustomProvider(AIProvider):
                 audio_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'audio'
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or "tts"))
+                safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_id or "tts"))
                 audio_path = audio_dir / f"{safe_model}_{timestamp}.mp3"
                 audio_path.write_bytes(audio_bytes)
                 
@@ -336,7 +353,7 @@ class CustomProvider(AIProvider):
                 return f"TTS Error: {e}"
         
         # Default to chat.completions
-        print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_name}")
+        print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_id}")
         url = self._url("/chat/completions")
         
         # Determine which tools are enabled
@@ -348,7 +365,7 @@ class CustomProvider(AIProvider):
         tools = build_tools_for_provider(enabled_tools, "custom")
         
         # Check reasoning effort from model card
-        model_name = model or self.model_name
+        model_name = model or self.model_id
         card = get_card(model_name)
         reasoning_effort = None
         if card and card.quirks.get("reasoning_effort_enabled"):
@@ -531,7 +548,7 @@ class CustomProvider(AIProvider):
             images_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or "custom"))
+            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_id or "custom"))
             image_path = images_dir / f"{safe_model}_{timestamp}.png"
             
             image_path.write_bytes(final_image_bytes)
@@ -573,7 +590,9 @@ class CustomProvider(AIProvider):
                         # Handle message output (contains text and potentially images)
                         if item_type == "message":
                             content = item.get("content", [])
-                            if isinstance(content, list):
+                            if isinstance(content, str):
+                                text_content += content
+                            elif isinstance(content, list):
                                 for content_item in content:
                                     if isinstance(content_item, dict):
                                         # Extract text
@@ -622,6 +641,7 @@ class CustomProvider(AIProvider):
                 text_content = "\n\n".join(image_tags)
         
         text_content = self._strip_think_content(text_content)
+        text_content = self._strip_invalid_img_tags(text_content)
         return text_content, function_calls
 
     def _build_responses_tools(self, enabled_tools: set, model: str = None) -> list:
@@ -638,7 +658,7 @@ class CustomProvider(AIProvider):
         
         # Add native image_generation tool if model supports it AND function tool not enabled
         if "generate_image" not in enabled_tools:
-            model_id = model or self.model_name
+            model_id = model or self.model_id
             card = get_card(model_id)
             if card and (card.capabilities.image_gen or card.capabilities.image_edit):
                 tools.append({"type": "image_generation"})
@@ -801,11 +821,11 @@ class CustomProvider(AIProvider):
         )
         
         # Build tools array
-        tools = self._build_responses_tools(enabled_tools, self.model_name)
+        tools = self._build_responses_tools(enabled_tools, self.model_id)
         
         # Build base params
         params = {
-            "model": self.model_name,
+            "model": self.model_id,
             "input": input_items,
         }
         
@@ -822,7 +842,7 @@ class CustomProvider(AIProvider):
             params["tools"] = tools
         
         # Add reasoning effort if enabled in model card
-        card = get_card(self.model_name)
+        card = get_card(self.model_id)
         if card and card.quirks.get("reasoning_effort_enabled"):
             effort_level = card.quirks.get("reasoning_effort_level", "low")
             params["reasoning"] = {"effort": effort_level}
@@ -894,7 +914,8 @@ class CustomProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                if tool_result and not should_hide_tool_result(tool_result):
+                # Always add stripped result to snippets for UI display
+                if tool_result:
                     tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
@@ -906,11 +927,11 @@ class CustomProvider(AIProvider):
                     "arguments": fc["arguments"],
                 })
                 
-                # Then add the function result
+                # Then add the function result (hidden results send empty to model)
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": "Image generated successfully." if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -937,7 +958,7 @@ class CustomProvider(AIProvider):
             ]
             
             params = {
-                "model": self.model_name or model,
+                "model": self.model_id or model,
                 "input": input_items,
             }
             
@@ -986,7 +1007,7 @@ class CustomProvider(AIProvider):
         
         # Handle /images/generations endpoint (standard image API)
         url = self._url("/images/generations")
-        payload = {"model": self.model_name or model, "prompt": prompt}
+        payload = {"model": self.model_id or model, "prompt": prompt}
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
         resp.raise_for_status()
         data = resp.json()
@@ -1020,7 +1041,7 @@ class CustomProvider(AIProvider):
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             # Sanitize model name for filename
-            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_name or model))
+            safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_id or model))
             image_path = images_dir / f"{safe_model}_{timestamp}.png"
             
             image_path.write_bytes(final_image_bytes)
@@ -1029,13 +1050,45 @@ class CustomProvider(AIProvider):
         except Exception as e:
             return f"Error saving generated image: {e}"
 
-    def transcribe_audio(self, audio_file):
-        raise NotImplementedError("Transcription not implemented for custom provider")
+    def transcribe_audio(self, audio_file, model: str = None, prompt: str = None, **kwargs):
+        """Transcribe audio using the /audio/transcriptions endpoint."""
+        base = self._get_base_endpoint()
+        url = base + "/audio/transcriptions" if base else "/audio/transcriptions"
+        
+        # Read audio bytes
+        if hasattr(audio_file, "read"):
+            audio_bytes = audio_file.read()
+            filename = getattr(audio_file, "name", "audio.wav")
+        else:
+            audio_path = Path(audio_file)
+            audio_bytes = audio_path.read_bytes()
+            filename = audio_path.name
+        
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        
+        files = {"file": (filename, audio_bytes)}
+        data = {"model": model or self.model_id}
+        if prompt:
+            data["prompt"] = prompt
+        
+        self._debug("STT URL", url)
+        self._debug("STT Model", data["model"])
+        
+        resp = self.session.post(url, headers=headers, files=files, data=data, timeout=60)
+        self._debug("STT Response Status", resp.status_code)
+        resp.raise_for_status()
+        
+        result = resp.json()
+        text = result.get("text", "")
+        self._debug("STT Response Text", text[:200] if text else "(empty)")
+        return text
 
     def generate_speech(self, text, voice):
         base = self._get_base_endpoint()
         url = base + "/audio/speech" if base else "/audio/speech"
-        payload = {"model": self.model_name, "input": text}
+        payload = {"model": self.model_id, "input": text}
         if voice:
             payload["voice"] = voice
         self._debug("TTS URL", url)
@@ -1067,10 +1120,40 @@ class CustomProvider(AIProvider):
             elif api_type == "tts":
                 # Attempt a minimal TTS call; do not save output.
                 _ = self.generate_speech("ping", voice=None)
+            elif api_type == "stt":
+                # STT requires audio - just verify endpoint is reachable
+                base = self._get_base_endpoint()
+                url = base + "/audio/transcriptions" if base else "/audio/transcriptions"
+                # Send minimal request to check auth/endpoint
+                headers = {}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                # Create minimal silent WAV (44 bytes header + minimal data)
+                wav_header = bytes([
+                    0x52, 0x49, 0x46, 0x46,  # "RIFF"
+                    0x24, 0x00, 0x00, 0x00,  # file size - 8
+                    0x57, 0x41, 0x56, 0x45,  # "WAVE"
+                    0x66, 0x6D, 0x74, 0x20,  # "fmt "
+                    0x10, 0x00, 0x00, 0x00,  # chunk size
+                    0x01, 0x00,              # PCM
+                    0x01, 0x00,              # mono
+                    0x44, 0xAC, 0x00, 0x00,  # 44100 Hz
+                    0x88, 0x58, 0x01, 0x00,  # byte rate
+                    0x02, 0x00,              # block align
+                    0x10, 0x00,              # bits per sample
+                    0x64, 0x61, 0x74, 0x61,  # "data"
+                    0x00, 0x00, 0x00, 0x00,  # data size
+                ])
+                files = {"file": ("test.wav", wav_header)}
+                data = {"model": self.model_id}
+                resp = self.session.post(url, headers=headers, files=files, data=data, timeout=30)
+                # Accept 200 or 400 (bad audio but endpoint works) as success
+                if resp.status_code not in (200, 400):
+                    resp.raise_for_status()
             else:
                 _ = self.generate_chat_completion(
                     [{"role": "user", "content": "ping"}],
-                    model=self.model_name,
+                    model=self.model_id,
                     temperature=1.0,
                     max_tokens=16,
                 )
@@ -1563,7 +1646,8 @@ class OpenAIProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                if tool_result and not should_hide_tool_result(tool_result):
+                # Always add stripped result to snippets for UI display
+                if tool_result:
                     tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
@@ -1575,11 +1659,11 @@ class OpenAIProvider(AIProvider):
                     "arguments": fc["arguments"],
                 })
                 
-                # Then add the function result
+                # Then add the function result (hidden results send empty to model)
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": "Image generated successfully." if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -1608,15 +1692,10 @@ class OpenAIProvider(AIProvider):
                 "gpt-image-1",
                 "gpt-image-1-mini",
                 # Realtime (current)
-                "gpt-4o-mini-realtime-preview-2024-12-17",
-                "gpt-4o-realtime-preview-2024-12-17",
                 "gpt-realtime",
                 "gpt-realtime-mini",
                 "gpt-realtime-2025-08-28",
                 "gpt-realtime-mini-2025-10-06",
-                # Legacy preview IDs kept for compatibility
-                "gpt-4o-mini-realtime-preview",
-                "gpt-4o-realtime-preview",
                 "chatgpt-4o-latest",
                 "gpt-4-turbo",
                 "gpt-4.1",
@@ -2984,9 +3063,10 @@ class PerplexityProvider(AIProvider):
 
 
 class GeminiProvider(AIProvider):
-    """AI provider implementation for Google's Gemini API."""
+    """AI provider implementation for Google's Gemini API using OpenAI compatibility."""
     
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
     
     def __init__(self):
         self.api_key = None
@@ -3100,13 +3180,14 @@ class GeminiProvider(AIProvider):
             # Default filtering behavior for Gemini
             allowed_models = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-image",
                             "gemini-3-pro-preview", "gemini-pro", "gemini-pro-vision",
-                            "gemini-pro-latest", "gemini-flash-latest", "gemini-3-pro-image-preview"}
+                            "gemini-2.0-flash", "gemini-2.0-pro", "gemini-3-pro-image-preview",
+                            "gemini-pro-latest", "gemini-flash-latest"}
             filtered_models = [model_id for model_id in models if model_id in allowed_models]
             if filtered_models:
                 return sorted(filtered_models)
         except Exception as exc:
             print(f"Error fetching Gemini models: {exc}")
-        return sorted(["gemini-flash-latest", "gemini-pro-latest"])
+        return sorted(["gemini-2.5-flash", "gemini-2.0-flash"])
     
     def generate_chat_completion(
         self,
@@ -3126,29 +3207,108 @@ class GeminiProvider(AIProvider):
         card = get_card(model)
         if temperature is None and card and getattr(card, "temperature", None) is not None:
             temperature = card.temperature
-        contents, system_instruction = self._convert_messages(messages)
-        payload = {
-            "contents": contents
-        }
 
-        # Reuse any previously returned thought signatures, if present.
-        # We scan the incoming messages for provider-specific Gemini metadata.
-        thought_sigs = None
+        # Check if web search is requested and supported
+        use_web_search = web_search_enabled and card and card.capabilities.web_search
+        
+        # Check if function tools are enabled
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+        )
+
+        # Gemini native API doesn't support combining google_search with function calling
+        # Use native API only for web search WITHOUT function tools
+        if use_web_search and not enabled_tools:
+            return self._generate_with_native_api(
+                messages, model, temperature, max_tokens, chat_id, response_meta,
+                web_search_enabled=True,
+            )
+
+        # Use OpenAI compatibility API for function calling
+        openai_messages = []
         for msg in messages or []:
-            meta = msg.get("provider_meta") if isinstance(msg, dict) else None
-            if not isinstance(meta, dict):
-                continue
-            gem_meta = meta.get("gemini")
-            if isinstance(gem_meta, dict) and "thought_signatures" in gem_meta:
-                thought_sigs = gem_meta["thought_signatures"]
-        if thought_sigs is not None:
-            # Attach exactly as stored; Gemini will interpret or ignore as appropriate.
-            payload["thought_signatures"] = thought_sigs
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                openai_messages.append({"role": "system", "content": content})
+            elif role == "user":
+                openai_messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                openai_messages.append({"role": "assistant", "content": content})
+
+        tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else None
+
+        payload = {
+            "model": model,
+            "messages": openai_messages,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens and max_tokens > 0:
+            payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        try:
+            print(f"[GeminiProvider] Using OpenAI compatibility API for model: {model}")
+            print(f"[GeminiProvider] Tools: {[t['function']['name'] for t in tools] if tools else 'None'}")
+            resp = requests.post(
+                f"{self.OPENAI_BASE_URL}/chat/completions",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
+                json=payload,
+                timeout=60
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            choice = data.get("choices", [{}])[0]
+            message = choice.get("message", {})
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
+
+            if not tool_calls:
+                return content
+
+            tool_context = ToolContext(
+                image_handler=image_tool_handler,
+                music_handler=music_tool_handler,
+                read_aloud_handler=read_aloud_tool_handler,
+                search_handler=search_tool_handler,
+            )
+            tool_segments = []
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                name = fn.get("name")
+                args_str = fn.get("arguments", "{}")
+                args = parse_tool_arguments(args_str)
+                print(f"[GeminiProvider] Tool call: {name} with args: {args}")
+
+                tool_output = run_tool_call(name, args, tool_context)
+                if tool_output:
+                    display_output = strip_hide_prefix(tool_output)
+                    tool_segments.append(display_output)
+
+            if not tool_segments:
+                return content
+            if content:
+                return content + "\n\n" + "\n\n".join(tool_segments)
+            return "\n\n".join(tool_segments)
+
+        except Exception as exc:
+            raise RuntimeError(f"Gemini completion failed: {exc}") from exc
+
+    def _generate_with_native_api(
+        self, messages, model, temperature, max_tokens, chat_id, response_meta,
+        web_search_enabled=False,
+    ):
+        """Use native Gemini API for web search (not supported in OpenAI compatibility mode)."""
+        contents, system_instruction = self._convert_messages(messages)
+        payload = {"contents": contents}
 
         if system_instruction:
-            payload["system_instruction"] = {
-                "parts": [{"text": system_instruction}]
-            }
+            payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
+
         generation_config = {}
         if temperature is not None:
             generation_config["temperature"] = temperature
@@ -3157,101 +3317,27 @@ class GeminiProvider(AIProvider):
         if generation_config:
             payload["generation_config"] = generation_config
 
-        # Optionally enable Google grounding with Search for supported models,
-        # following the Gemini API docs:
-        # https://ai.google.dev/gemini-api/docs/google-search
-        def _supports_google_search_tool(model_name: str) -> bool:
-            if not model_name:
-                return False
-            # Check model card for web_search capability
-            card = get_card(model_name)
-            if card:
-                return card.capabilities.web_search
-            # Unknown model - default to no web search
-            return False
+        if web_search_enabled:
+            payload["tools"] = [{"google_search": {}}]
 
-        if web_search_enabled and _supports_google_search_tool(model):
-            payload.setdefault("tools", []).append({"google_search": {}})
-
-        # When tool handlers are provided, expose corresponding function
-        # declarations to Gemini using its functionDeclarations schema,
-        # mirroring the documented pattern in the Gemini function calling guide:
-        # https://ai.google.dev/gemini-api/docs/function-calling?example=meeting
-        enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
-        )
-        function_declarations = build_tools_for_provider(enabled_tools, "gemini")
-        if function_declarations:
-            payload.setdefault("tools", []).append(
-                {"functionDeclarations": function_declarations}
-            )
-        
         try:
-            print(f"[GeminiProvider] Using generateContent API for model: {model}")
+            print(f"[GeminiProvider] Using native API for model: {model} (web_search={web_search_enabled})")
             resp = requests.post(
                 f"{self.BASE_URL}/models/{model}:generateContent",
                 headers=self._headers(),
                 json=payload,
-                timeout=60
+                timeout=120
             )
             resp.raise_for_status()
             data = resp.json()
-
-            # Capture any thought signatures as opaque provider metadata for the caller.
-            if response_meta is not None:
-                thought_sigs = self._find_thought_signatures(data)
-                if thought_sigs is not None:
-                    gemini_meta = response_meta.setdefault("gemini", {})
-                    gemini_meta["thought_signatures"] = thought_sigs
-
-            # If no tool handlers are supplied, fall back to the existing
-            # simple text-extraction behavior.
-            if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
-                return self._extract_text(data)
-
-            # With tool handlers, inspect the response for any functionCall
-            # parts, invoke the appropriate handler, and append the results
-            # (and a short caption) to the text we return so the UI can render
-            # images and/or show music control feedback.
-            base_text = self._extract_text(data)
-            tool_segments = []
-
-            tool_context = ToolContext(
-                image_handler=image_tool_handler,
-                music_handler=music_tool_handler,
-                read_aloud_handler=read_aloud_tool_handler,
-                search_handler=search_tool_handler,
-            )
-            for candidate in data.get("candidates", []) or []:
-                parts = candidate.get("content", {}).get("parts", []) or []
-                for part in parts:
-                    fn = part.get("functionCall")
-                    if not fn:
-                        continue
-                    name = fn.get("name")
-                    args = fn.get("args") or {}
-
-                    tool_output = run_tool_call(name, args, tool_context)
-
-                    if tool_output:
-                        # Build a caption based on the tool name.
-                        if name == "generate_image":
-                            caption = f"Generated image for prompt: {args.get('prompt', '')}".strip()
-                        elif name == "control_music":
-                            caption = f"Music control result for action: {args.get('action', '')}".strip()
-                        elif name == "read_aloud":
-                            caption = f"Read aloud: {args.get('text', '')[:50]}...".strip() if len(args.get('text', '')) > 50 else f"Read aloud: {args.get('text', '')}".strip()
-                        else:
-                            caption = ""
-                        segment = f"{caption}\n{tool_output}" if caption else tool_output
-                        tool_segments.append(segment)
-
-            if not tool_segments:
-                return base_text
-
-            if base_text:
-                return base_text + "\n\n" + "\n\n".join(tool_segments)
-            return "\n\n".join(tool_segments)
+            return self._extract_text(data)
+        except requests.exceptions.HTTPError as exc:
+            error_body = ""
+            try:
+                error_body = exc.response.text[:500]
+            except:
+                pass
+            raise RuntimeError(f"Gemini completion failed: {exc} - {error_body}") from exc
         except Exception as exc:
             raise RuntimeError(f"Gemini completion failed: {exc}") from exc
     
@@ -3488,12 +3574,17 @@ class OpenAIWebSocketProvider:
         self.channels = 1
         self.dtype = np.int16
         self.min_audio_ms = 75
-        self.response_started = False  # Track if we already asked for a response for this session
+        self.response_started = False  # Track if a response is in flight for this turn
         self.last_send_error = None
-        
+        self.buffer_started = False  # Track per-turn buffering (no explicit start message)
+        self.awaiting_response = False  # Pause mic while waiting for response.done
+        self.has_pending_audio = False  # Track whether we've sent audio this turn
+        self.awaiting_final_transcript = False
+
         self.output_stream = None
         self.message_lock = asyncio.Lock()  # Add lock for message handling
         self._lock = threading.Lock()
+        self.drain_requested = False  # Track shutdown drain phase
 
     def _schedule_callback(self, callback, *args):
         """Schedule a callback on the main thread."""
@@ -3592,7 +3683,7 @@ class OpenAIWebSocketProvider:
                 raise ValueError("OPENAI_API_KEY environment variable not set")
             
             # Get model from URL parameters
-            model = getattr(self, 'model', 'gpt-4o-realtime-preview-2024-12-17')  # Default fallback
+            model = getattr(self, 'model', 'gpt-realtime')  # Default fallback
 
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -3617,6 +3708,7 @@ class OpenAIWebSocketProvider:
             
             # Send initial configuration with session parameters
             instructions = (self.realtime_prompt or "Your name is {name}, speak quickly and professionally").strip()
+            vad_threshold = getattr(self, 'vad_threshold', 0.1)
             config_message = {
                 "type": "session.update",
                 "session": {
@@ -3626,13 +3718,15 @@ class OpenAIWebSocketProvider:
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
                     "input_audio_transcription": {
-                        "model": "whisper-1"
+                        "model": "gpt-4o-transcribe",
+                        "language": "en"
                     },
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.1,
+                        "threshold": vad_threshold,
                         "prefix_padding_ms": 10,
-                        "silence_duration_ms": 400
+                        "silence_duration_ms": 400,
+                        "create_response": True
                     },
                 }
             }
@@ -3645,18 +3739,6 @@ class OpenAIWebSocketProvider:
                     data = json.loads(response)
                     if data.get("type") == "session.updated":
                         self.last_event_id = data.get("event_id")  # Store the event ID
-                        # Ask the model to start a response stream for incoming audio
-                        if not self.response_started:
-                            await self.ws.send(json.dumps({
-                                "type": "response.create",
-                                "response": {
-                                    "modalities": ["audio", "text"],
-                                    "voice": voice or "alloy",
-                                    "output_audio_format": "pcm16",
-                                    **({"temperature": self.temperature} if self.temperature is not None else {})
-                                }
-                            }))
-                            self.response_started = True
                         break
             
     def _initialize_output_stream(self):
@@ -3733,9 +3815,14 @@ class OpenAIWebSocketProvider:
                 print(f"Resampling from {self.input_sample_rate}Hz to {self.output_sample_rate}Hz")
                 self._log("start_audio_stream: entering receive loop")
                 
-                while self.is_recording:
+                while self.is_recording or self.drain_requested:
                     try:
-                        message = await self.ws.recv()
+                        try:
+                            message = await asyncio.wait_for(self.ws.recv(), timeout=0.5)
+                        except asyncio.TimeoutError:
+                            if not (self.is_recording or self.drain_requested):
+                                break
+                            continue
                         if isinstance(message, str):
                             response = json.loads(message)
                             
@@ -3746,8 +3833,13 @@ class OpenAIWebSocketProvider:
                             # Track when the model is speaking so we can suppress mic capture
                             if response.get("type") in ("response.created", "response.output_item.added", "response.audio.delta"):
                                 self.is_ai_speaking = True
+                                self.awaiting_response = True
+                                if response.get("type") in ("response.created",):
+                                    print("AI response starting")
                             elif response.get("type") in ("response.output_item.done", "response.done"):
                                 self.is_ai_speaking = False
+                                self.awaiting_response = False
+                                print("AI response stopping")
                             
                             # Handle user speech transcript
                             if response.get("type") == "conversation.item.input_audio_transcription.completed":
@@ -3764,8 +3856,23 @@ class OpenAIWebSocketProvider:
                                             transcript = content.get("transcript", "")
                                             if transcript and self.on_assistant_transcript:
                                                 self._schedule_callback(self.on_assistant_transcript, transcript)
+                                # End drain phase once final response processed
+                                self.drain_requested = False
+                                self.response_started = False
+                                self.buffer_started = False
+                                self.awaiting_response = False
+                                self.has_pending_audio = False
+                                self.awaiting_final_transcript = False
                             
-                            if "text" in response:
+                            # Handle server VAD speech detection events
+                            elif response.get("type") == "input_audio_buffer.speech_started":
+                                self._log("Server VAD: speech started")
+                            elif response.get("type") == "input_audio_buffer.speech_stopped":
+                                self._log("Server VAD: speech stopped")
+                                # Server VAD will auto-commit, just track state
+                                self.awaiting_response = True
+                                
+                            if "text" in response and not self.awaiting_response:
                                 self._schedule_callback(callback, response["text"])
                             elif response.get("type") == "response.audio.delta":
                                 try:
@@ -3786,9 +3893,18 @@ class OpenAIWebSocketProvider:
                                     import traceback
                                     traceback.print_exc()
                             elif response.get("type") == "error":
+                                err_code = response.get("error", {}).get("code")
+                                # Ignore empty buffer errors (common during shutdown)
+                                if err_code == "input_audio_buffer_commit_empty":
+                                    self._log("Ignoring empty buffer commit error")
+                                    continue
                                 print(f"Error from server: {response}")
-                                if response.get("error", {}).get("code") != "end_of_speech":
-                                    break
+                                # Reset buffer state on invalid audio errors
+                                self.buffer_started = False
+                                self.has_pending_audio = False
+                                if err_code == "invalid_value":
+                                    continue
+                                break
                             elif "audio" in response:  # Audio data in base64
                                 try:
                                     # Decode base64 audio data
@@ -3814,7 +3930,7 @@ class OpenAIWebSocketProvider:
                         
                     except websockets.exceptions.ConnectionClosed as e:
                         print(f"WebSocket closed with code {e.code}: {e.reason}")
-                        if not self.is_recording:  # Only break if we're stopping
+                        if not (self.is_recording or self.drain_requested):  # Only break if we're stopping
                             break
                         # Try to reconnect
                         try:
@@ -3847,12 +3963,15 @@ class OpenAIWebSocketProvider:
         if status:
             if self.debug:
                 print(f"Audio input status: {status}")
-            
+
         if not self.is_recording:
             self._log("audio_callback: not recording; skipping")
             return
         if not self.ws:
             self._log("audio_callback: no websocket; skipping")
+            return
+        if self.awaiting_response:
+            # Don't send new audio while waiting for the current response turn to finish
             return
         if not self._ws_is_open():
             self._log(f"audio_callback: websocket not open; attempting reconnect ({self._ws_state_debug()})")
@@ -3865,13 +3984,14 @@ class OpenAIWebSocketProvider:
             except Exception as e:
                 self._log(f"audio_callback: reconnect failed {e!r}")
                 return
-        if self.is_ai_speaking and getattr(self, "mute_mic_during_playback", False):
+        if (self.is_ai_speaking or self.awaiting_response) and getattr(self, "mute_mic_during_playback", False):
             return
         
         try:
             # Normalize and scale the audio data
             audio_data = indata.copy()
             audio_data = audio_data.flatten()
+            # Logging only; rely on server VAD
             try:
                 peak = float(np.max(np.abs(audio_data))) if audio_data.size else 0.0
             except Exception:
@@ -3926,29 +4046,22 @@ class OpenAIWebSocketProvider:
             return
         try:
             self._log(f"_send_audio_chunk bytes={len(audio_bytes)} commit={commit_now}")
-            append = {
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(audio_bytes).decode("utf-8"),
-            }
-            await self.ws.send(json.dumps(append))
+            if audio_bytes:
+                self.buffer_started = True
+                self.has_pending_audio = True
+                append = {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(audio_bytes).decode("utf-8"),
+                }
+                await self.ws.send(json.dumps(append))
             if commit_now:
+                if not self.has_pending_audio:
+                    return
                 commit = {"type": "input_audio_buffer.commit"}
                 await self.ws.send(json.dumps(commit))
                 self._log("send_audio_chunk: sent commit")
-                # Trigger a response if we haven't already for this session
-                if not self.response_started:
-                    self._log("send_audio_chunk: creating response stream after commit")
-                    await self.ws.send(json.dumps({
-                        "type": "response.create",
-                        "response": {
-                            "modalities": ["audio", "text"],
-                            "voice": self.voice or "alloy",
-                            "instructions": self.system_message,
-                            "output_audio_format": "pcm16",
-                            **({"temperature": self.temperature} if self.temperature is not None else {})
-                        },
-                    }))
-                    self.response_started = True
+                self.buffer_started = False
+                self.has_pending_audio = False
         except Exception as e:
             print(f"Error sending audio chunk: {e}")
             self.last_send_error = e
@@ -3960,7 +4073,7 @@ class OpenAIWebSocketProvider:
         except Exception as e:
             print(f"Error sending audio data: {e}")
 
-    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None):
+    def start_streaming(self, callback, microphone=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None, vad_threshold=None):
         """Start streaming audio in a background task"""
         self._log("Starting streaming")
         # Store the configuration
@@ -3974,6 +4087,8 @@ class OpenAIWebSocketProvider:
             self.realtime_prompt = realtime_prompt
         if mute_mic_during_playback is not None:
             self.mute_mic_during_playback = bool(mute_mic_during_playback)
+        if vad_threshold is not None:
+            self.vad_threshold = float(vad_threshold)
         
         self.start_loop()
         
@@ -3996,14 +4111,37 @@ class OpenAIWebSocketProvider:
         """Stop audio streaming"""
         self._log("Stopping audio stream...")
         self.is_recording = False
+        self.drain_requested = True
+        
+        # Only try to commit if we have local buffered audio (at least 100ms worth)
+        # Server requires minimum 100ms = 2400 bytes at 24kHz 16-bit mono
+        min_buffer_bytes = int(self.output_sample_rate * 0.1 * 2)  # 100ms
+        has_sufficient_audio = len(self.audio_buffer) >= min_buffer_bytes
         
         if self.loop and self.ws and self._ws_is_open():
             try:
-                # Commit once, then close/await close
-                asyncio.run_coroutine_threadsafe(
-                    self._send_audio_chunk(b"", commit_now=True),
-                    self.loop
-                ).result(timeout=2.0)
+                if has_sufficient_audio:
+                    # Send remaining buffer then commit
+                    chunk_bytes = bytes(self.audio_buffer)
+                    self.audio_buffer = bytearray()
+                    asyncio.run_coroutine_threadsafe(
+                        self._send_audio_chunk(chunk_bytes, commit_now=True),
+                        self.loop
+                    ).result(timeout=1.0)
+            except Exception as e:
+                # Ignore empty buffer errors on shutdown
+                if "buffer_commit_empty" not in str(e) and "buffer too small" not in str(e):
+                    print(f"Error during final commit: {e}")
+            
+            # Wait for drain/final transcript to finish or timeout
+            import time
+            start = time.time()
+            self.awaiting_final_transcript = True
+            while (self.drain_requested or self.awaiting_final_transcript) and (time.time() - start) < 3.0:
+                time.sleep(0.05)
+            
+            # Close the websocket
+            try:
                 asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop).result(timeout=2.0)
                 asyncio.run_coroutine_threadsafe(self.ws.wait_closed(), self.loop).result(timeout=2.0)
             except Exception as e:
@@ -4048,8 +4186,6 @@ class OpenAIWebSocketProvider:
                                 "type": "response.create",
                                 "response": {
                                     "modalities": ["audio", "text"],
-                                    "voice": self.voice or "alloy",
-                                    "instructions": self.system_message,
                                     "output_audio_format": "pcm16"
                                 }
                             }
@@ -4092,7 +4228,7 @@ class OpenAIWebSocketProvider:
     def connect(self, model=None, system_message=None, temperature=None, voice=None, api_key=None, realtime_prompt=None, mute_mic_during_playback=None):
         """Initialize WebSocket connection without starting audio stream"""
         # Store the configuration
-        self.model = model or 'gpt-4o-realtime-preview-2024-12-17'
+        self.model = model or 'gpt-realtime'
         self.system_message = system_message or "You are a helpful assistant."
         self.temperature = temperature
         self.voice = voice or "alloy"
