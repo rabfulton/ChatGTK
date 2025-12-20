@@ -85,39 +85,162 @@ CHAT_PDF_TEMPLATE = r"""
 \end{document}
 """
 
-# Special characters mapping
+# Special characters mapping (Unicode to LaTeX)
 SPECIAL_CHARS = {
+    # Currency and common symbols
     '$': r'\$',
-    'Ω': r'\Omega',
-    'π': r'\pi',
-    'μ': r'\mu',
-    'θ': r'\theta',
+    '°': r'^{\circ}',
+    '′': r"'",
+    '″': r"''",
+    '…': r'\ldots',
+    
+    # Greek lowercase
     'α': r'\alpha',
     'β': r'\beta',
     'γ': r'\gamma',
     'δ': r'\delta',
     'ε': r'\epsilon',
+    'ζ': r'\zeta',
+    'η': r'\eta',
+    'θ': r'\theta',
+    'ι': r'\iota',
+    'κ': r'\kappa',
     'λ': r'\lambda',
+    'μ': r'\mu',
+    'ν': r'\nu',
+    'ξ': r'\xi',
+    'π': r'\pi',
+    'ρ': r'\rho',
     'σ': r'\sigma',
     'τ': r'\tau',
+    'υ': r'\upsilon',
     'φ': r'\phi',
+    'χ': r'\chi',
+    'ψ': r'\psi',
     'ω': r'\omega',
+    
+    # Greek uppercase
+    'Γ': r'\Gamma',
+    'Δ': r'\Delta',
+    'Θ': r'\Theta',
+    'Λ': r'\Lambda',
+    'Ξ': r'\Xi',
+    'Π': r'\Pi',
+    'Σ': r'\Sigma',
+    'Υ': r'\Upsilon',
+    'Φ': r'\Phi',
+    'Ψ': r'\Psi',
+    'Ω': r'\Omega',
+    
+    # Mathematical operators
     '±': r'\pm',
-    '∑': r'\sum',
-    '∫': r'\int',
-    '∞': r'\infty',
+    '∓': r'\mp',
+    '×': r'\times',
+    '÷': r'\div',
+    '·': r'\cdot',
+    '∗': r'\ast',
+    '⊕': r'\oplus',
+    '⊗': r'\otimes',
+    '∘': r'\circ',
+    
+    # Relations
     '≈': r'\approx',
     '≠': r'\neq',
     '≤': r'\leq',
     '≥': r'\geq',
-    '×': r'\times',
-    '÷': r'\div',
+    '≪': r'\ll',
+    '≫': r'\gg',
+    '∼': r'\sim',
+    '≃': r'\simeq',
+    '≅': r'\cong',
+    '≡': r'\equiv',
+    '∝': r'\propto',
+    '⊂': r'\subset',
+    '⊃': r'\supset',
+    '⊆': r'\subseteq',
+    '⊇': r'\supseteq',
+    '∈': r'\in',
+    '∉': r'\notin',
+    '∋': r'\ni',
+    
+    # Arrows
     '→': r'\rightarrow',
     '←': r'\leftarrow',
     '↔': r'\leftrightarrow',
+    '⇒': r'\Rightarrow',
+    '⇐': r'\Leftarrow',
+    '⇔': r'\Leftrightarrow',
+    '↑': r'\uparrow',
+    '↓': r'\downarrow',
+    '↦': r'\mapsto',
+    
+    # Big operators
+    '∑': r'\sum',
+    '∏': r'\prod',
+    '∫': r'\int',
+    '∬': r'\iint',
+    '∭': r'\iiint',
+    '∮': r'\oint',
+    '⋃': r'\bigcup',
+    '⋂': r'\bigcap',
+    
+    # Calculus and analysis
     '∂': r'\partial',
     '∇': r'\nabla',
-    '°': r'^{\circ}',
+    '∞': r'\infty',
+    '√': r'\sqrt',
+    
+    # Logic and sets
+    '∧': r'\land',
+    '∨': r'\lor',
+    '¬': r'\neg',
+    '∀': r'\forall',
+    '∃': r'\exists',
+    '∅': r'\emptyset',
+    '∩': r'\cap',
+    '∪': r'\cup',
+    
+    # Miscellaneous math
+    '†': r'\dagger',
+    '‡': r'\ddagger',
+    '⊥': r'\perp',
+    '∥': r'\parallel',
+    '∠': r'\angle',
+    '△': r'\triangle',
+    '□': r'\square',
+    '◇': r'\diamond',
+    '★': r'\star',
+    '♠': r'\spadesuit',
+    '♥': r'\heartsuit',
+    '♦': r'\diamondsuit',
+    '♣': r'\clubsuit',
+    
+    # Subscript/superscript digits (convert to normal)
+    '₀': r'_0', '₁': r'_1', '₂': r'_2', '₃': r'_3', '₄': r'_4',
+    '₅': r'_5', '₆': r'_6', '₇': r'_7', '₈': r'_8', '₉': r'_9',
+    '⁰': r'^0', '¹': r'^1', '²': r'^2', '³': r'^3', '⁴': r'^4',
+    '⁵': r'^5', '⁶': r'^6', '⁷': r'^7', '⁸': r'^8', '⁹': r'^9',
+    
+    # Mathematical script letters (common ones)
+    '𝒮': r'\mathcal{S}',
+    'ℰ': r'\mathcal{E}',
+    'ℒ': r'\mathcal{L}',
+    'ℋ': r'\mathcal{H}',
+    'ℱ': r'\mathcal{F}',
+    'ℛ': r'\mathcal{R}',
+    'ℬ': r'\mathcal{B}',
+    'ℳ': r'\mathcal{M}',
+    'ℕ': r'\mathbb{N}',
+    'ℤ': r'\mathbb{Z}',
+    'ℚ': r'\mathbb{Q}',
+    'ℝ': r'\mathbb{R}',
+    'ℂ': r'\mathbb{C}',
+    
+    # Astronomical/misc symbols - use text mode
+    '☾': r'\text{Moon}',
+    '☽': r'\text{Moon}',
+    '☀': r'\text{Sun}',
+    '★': r'\star',
 }
 
 def generate_formula_hash(formula, is_display_math, text_color):
