@@ -2968,8 +2968,8 @@ class OpenAIGTKClient(Gtk.Window):
                     adj.set_value(0)  # Scroll to the top
                 return False  # Don't repeat
             
-            # Schedule scroll after the conversation is rebuilt
-            GLib.idle_add(scroll_to_top)
+            # Schedule scroll after the conversation is rebuilt (with delay for rendering)
+            GLib.timeout_add(100, scroll_to_top)
             
             # Update history list selection to highlight the loaded chat
             for row in self.history_list.get_children():

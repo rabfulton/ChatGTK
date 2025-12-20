@@ -87,18 +87,24 @@ def format_tables(text):
     return '\n'.join(formatted_lines)
 
 def format_bullet_points(text):
-    """Replace markdown bullet points with bullet symbols."""
-    # Replace lines starting with '-' or '*' with a bullet symbol
-    # Make sure we don't match inside code blocks
+    """Replace markdown bullet points with bullet symbols, stripping indentation.
+    
+    Leading whitespace is stripped and will be handled by the renderer's
+    left_margin tag for proper hanging indent on wrapped lines.
+    """
     lines = text.split('\n')
     formatted_lines = []
 
     for line in lines:
-        # Only format lines that start with - or * followed by a space
-        if re.match(r'^\s*[-*]\s+', line):
-            # Replace only the first occurrence of - or * with a bullet
-            formatted_line = re.sub(r'^\s*[-*]\s+', '• ', line)
-            formatted_lines.append(formatted_line)
+        # Match leading whitespace separately to track nesting level
+        match = re.match(r'^(\s*)([-*])\s+(.*)$', line)
+        if match:
+            indent, bullet, content = match.groups()
+            # Store nesting level as a marker that renderer can detect
+            # Use non-breaking spaces as level markers (will be stripped by renderer)
+            level = len(indent) // 2  # 2 spaces per level
+            level_marker = '\u200B' * level  # Zero-width spaces as level marker
+            formatted_lines.append(f'{level_marker}• {content}')
         else:
             formatted_lines.append(line)
 

@@ -691,21 +691,98 @@ class MessageRenderer:
         return markup
 
     def _apply_bullet_hanging_indent(self, buffer: Gtk.TextBuffer):
-        """Apply hanging indent to bullet list lines."""
+        """Apply hanging indent to bullet and numbered list lines, including continuations."""
         text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
-        if "•" not in text:
+        
+        # Check if there are any list items
+        if "•" not in text and not re.search(r'^\s*\d+\.', text, re.MULTILINE):
             return
 
-        indent_tag = buffer.get_tag_table().lookup("bullet_hang")
-        if indent_tag is None:
-            indent_tag = buffer.create_tag("bullet_hang", left_margin=24, indent=-24)
-
+        tag_table = buffer.get_tag_table()
+        
+        # Measure actual character width using Pango
+        pango_ctx = self.conversation_box.get_pango_context()
+        font_desc = Pango.FontDescription.from_string(f"{self.settings.font_family} {self.settings.font_size}")
+        metrics = pango_ctx.get_metrics(font_desc, None)
+        char_width = metrics.get_approximate_char_width() / Pango.SCALE
+        
         offset = 0
+        # Stack of (source_leading_spaces, prefix_width) for continuation tracking
+        list_stack = []
+        
         for line in text.splitlines(True):
-            if re.match(r"^\s*•\s+", line):
-                line_start = buffer.get_iter_at_offset(offset)
-                line_end = buffer.get_iter_at_offset(offset + len(line.rstrip("\n")))
-                buffer.apply_tag(indent_tag, line_start, line_end)
+            line_start = buffer.get_iter_at_offset(offset)
+            line_end = buffer.get_iter_at_offset(offset + len(line.rstrip("\n")))
+            stripped = line.lstrip()
+            leading_spaces = len(line) - len(stripped)
+            
+            # Detect bullet or numbered line, capturing the prefix
+            # Bullets may have zero-width space markers for nesting level
+            bullet_match = re.match(r'^(\u200B*)(•\s+)', stripped)
+            number_match = re.match(r'^(\d+\.\s+)', stripped)
+            
+            if bullet_match or number_match:
+                if bullet_match:
+                    level_markers = bullet_match.group(1)
+                    nesting_level = len(level_markers)
+                    prefix_text = bullet_match.group(2)
+                else:
+                    nesting_level = leading_spaces // 3  # numbered lists use 3 spaces per level
+                    prefix_text = number_match.group(1)
+                
+                # Pop stack to find parent (strictly lower level)
+                while list_stack and nesting_level <= list_stack[-1][0]:
+                    list_stack.pop()
+                
+                prefix_width = int(len(prefix_text) * char_width)
+                indent_per_level = int(char_width * 2)  # visual indent per nesting level
+                
+                # For top-level numbered lists, no margin/indent at all
+                if number_match and nesting_level == 0 and not list_stack:
+                    # Don't apply any tag - let it render naturally
+                    list_stack.append((nesting_level, prefix_width))  # Still track for nested items
+                    offset += len(line)
+                    continue
+                
+                # For top-level bullets, just hanging indent
+                if nesting_level == 0 and not list_stack:
+                    left_margin = prefix_width
+                    indent_val = -prefix_width
+                else:
+                    # Calculate margin based on nesting level
+                    parent_margin = list_stack[-1][1] if list_stack else 0
+                    left_margin = parent_margin + prefix_width + indent_per_level
+                    indent_val = -prefix_width
+                
+                list_stack.append((nesting_level, left_margin))
+                
+                tag_name = f"list_item_{left_margin}_{indent_val}"
+                tag = tag_table.lookup(tag_name)
+                if tag is None:
+                    tag = buffer.create_tag(tag_name, left_margin=left_margin, indent=indent_val)
+                buffer.apply_tag(tag, line_start, line_end)
+                
+            elif list_stack and stripped:
+                # Find which level this continuation belongs to
+                while list_stack and leading_spaces <= list_stack[-1][0]:
+                    list_stack.pop()
+                
+                if list_stack:
+                    # Continuation uses same prefix_width as its parent bullet
+                    prefix_width = list_stack[-1][1]
+                    tag_name = f"list_cont_{prefix_width}"
+                    tag = tag_table.lookup(tag_name)
+                    if tag is None:
+                        tag = buffer.create_tag(tag_name, left_margin=prefix_width)
+                    buffer.apply_tag(tag, line_start, line_end)
+                
+            elif not stripped:
+                # Empty line - keep stack
+                pass
+            else:
+                # Non-indented line - clear stack
+                list_stack.clear()
+                
             offset += len(line)
 
     def create_table_widget(self, table_text: str) -> Optional[Gtk.Widget]:
