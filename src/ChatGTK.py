@@ -2073,31 +2073,60 @@ class OpenAIGTKClient(Gtk.Window):
             target_model = selected_model
             provider_name = self.get_provider_name_for_model(target_model)
 
-        if provider_name == 'gemini':
+        if provider_name == 'custom':
+            # Custom models: resolve API key (supports $ENV_VAR syntax)
+            from utils import resolve_api_key
+            custom_config = (self.custom_models or {}).get(target_model, {})
+            display_name = custom_config.get('display_name', target_model)
+            api_key = resolve_api_key(custom_config.get('api_key', '')).strip()
+            if not api_key:
+                self.show_error_dialog(f"Please enter an API key for custom model: {display_name}")
+                return False
+        elif provider_name == 'gemini':
             env_var = 'GEMINI_API_KEY'
             provider_label = "Gemini"
+            api_key = os.environ.get(env_var, self.api_keys.get(provider_name, '')).strip()
+            if not api_key:
+                self.show_error_dialog(f"Please enter your {provider_label} API key")
+                return False
+            os.environ[env_var] = api_key
         elif provider_name == 'grok':
             env_var = 'GROK_API_KEY'
             provider_label = "Grok"
+            api_key = os.environ.get(env_var, self.api_keys.get(provider_name, '')).strip()
+            if not api_key:
+                self.show_error_dialog(f"Please enter your {provider_label} API key")
+                return False
+            os.environ[env_var] = api_key
         elif provider_name == 'claude':
             env_var = 'CLAUDE_API_KEY'
             provider_label = "Claude"
+            api_key = os.environ.get(env_var, self.api_keys.get(provider_name, '')).strip()
+            if not api_key:
+                self.show_error_dialog(f"Please enter your {provider_label} API key")
+                return False
+            os.environ[env_var] = api_key
         elif provider_name == 'perplexity':
             env_var = 'PERPLEXITY_API_KEY'
             provider_label = "Perplexity"
+            api_key = os.environ.get(env_var, self.api_keys.get(provider_name, '')).strip()
+            if not api_key:
+                self.show_error_dialog(f"Please enter your {provider_label} API key")
+                return False
+            os.environ[env_var] = api_key
         else:
             env_var = 'OPENAI_API_KEY'
             provider_label = "OpenAI"
+            api_key = os.environ.get(env_var, self.api_keys.get(provider_name, '')).strip()
+            if not api_key:
+                self.show_error_dialog(f"Please enter your {provider_label} API key")
+                return False
+            os.environ[env_var] = api_key
 
-        api_key = os.environ.get(env_var, self.api_keys.get(provider_name, '')).strip()
-        if not api_key:
-            self.show_error_dialog(f"Please enter your {provider_label} API key")
-            return False
-
-        os.environ[env_var] = api_key
         provider = self.initialize_provider(provider_name, api_key)
         if not provider:
-            self.show_error_dialog(f"Unable to initialize the {provider_label} provider")
+            label = display_name if provider_name == 'custom' else provider_label
+            self.show_error_dialog(f"Unable to initialize the {label} provider")
             return False
         
         model_temperature = self._get_temperature_for_model(target_model)
