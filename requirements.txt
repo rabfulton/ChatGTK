@@ -4,3 +4,9 @@ sounddevice==0.4.6
 soundfile==0.12.1
 PyGObject>=3.42.0
 beets>=1.6.0
+
+# Optional: Memory feature - required for semantic memory
+# qdrant-client>=1.7.0
+
+# Optional: Local embeddings (only needed if not using hosted embeddings)
+# sentence-transformers>=2.2.0

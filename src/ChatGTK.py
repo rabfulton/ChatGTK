@@ -1843,8 +1843,12 @@ class OpenAIGTKClient(Gtk.Window):
             # Update custom models from dialog (already persisted on disk)
             if hasattr(dialog, "get_custom_models"):
                 self.custom_models = dialog.get_custom_models()
+                self.controller.custom_models = self.custom_models  # Sync to controller
                 # Drop any cached custom providers to avoid stale configs
                 self.custom_providers = {}
+
+            # Re-initialize memory service AFTER custom_models is updated
+            self.controller.update_tool_manager()
 
             self.fetch_models_async()
         dialog.destroy()
@@ -2313,6 +2317,9 @@ class OpenAIGTKClient(Gtk.Window):
             user_msg["display_content"] = display_text
             
         self.conversation_history.append(user_msg)
+        
+        # Add to memory if enabled
+        self.controller.add_to_memory(question, 'user')
         
         # Assign a chat ID if none exists
         if self.current_chat_id is None:

@@ -145,6 +145,106 @@ class ChatController:
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
         )
+        
+        # Initialize memory service (optional - only if dependencies available)
+        self._memory_service = None
+        self._init_memory_service()
+
+    # -----------------------------------------------------------------------
+    # Memory service management
+    # -----------------------------------------------------------------------
+
+    def _init_memory_service(self) -> None:
+        """Initialize the memory service if dependencies are available and enabled."""
+        from memory import MEMORY_AVAILABLE
+        
+        if not MEMORY_AVAILABLE:
+            return
+        
+        # Close existing service first to release the database lock
+        if self._memory_service is not None:
+            try:
+                self._memory_service.close()
+            except Exception:
+                pass
+            self._memory_service = None
+        
+        if not self._settings_manager.get('MEMORY_ENABLED', False):
+            return
+        
+        try:
+            from memory import MemoryService
+            from config import MEMORY_DB_PATH
+            
+            mode = self._settings_manager.get('MEMORY_EMBEDDING_MODE', 'openai')
+            model = self._settings_manager.get('MEMORY_EMBEDDING_MODEL', 'text-embedding-3-small')
+            
+            # Handle custom embedding providers
+            endpoint = None
+            api_key = None
+            if mode == "custom":
+                cfg = self.custom_models.get(model, {})
+                endpoint = cfg.get("endpoint", "")
+                api_key = cfg.get("api_key", "")
+            
+            self._memory_service = MemoryService(
+                db_path=MEMORY_DB_PATH,
+                embedding_mode=mode,
+                embedding_model=model,
+                api_key=api_key,
+                endpoint=endpoint,
+                event_bus=self._event_bus,
+                settings_manager=self._settings_manager,
+            )
+            print(f"[Memory] Service initialized with mode={mode}, model={model}")
+        except Exception as e:
+            print(f"[Memory] Failed to initialize memory service: {e}")
+            import traceback
+            traceback.print_exc()
+            self._memory_service = None
+
+    def add_to_memory(self, text: str, role: str) -> None:
+        """Add a message to memory if enabled."""
+        if not self._memory_service:
+            return
+        if not self._settings_manager.get('MEMORY_AUTO_IMPORT', True):
+            return
+        
+        store_mode = self._settings_manager.get('MEMORY_STORE_MODE', 'all')
+        if store_mode == 'user' and role != 'user':
+            return
+        if store_mode == 'assistant' and role != 'assistant':
+            return
+        
+        try:
+            self._memory_service.add_memory(
+                text=text,
+                role=role,
+                conversation_id=self.current_chat_id or 'unsaved',
+            )
+        except Exception as e:
+            print(f"[Memory] Failed to add memory: {e}")
+
+    def query_memory(self, query: str) -> str:
+        """Query memory for relevant context."""
+        if not self._memory_service:
+            return ""
+        
+        try:
+            return self._memory_service.get_context_for_llm(
+                query_text=query,
+                k=self._settings_manager.get('MEMORY_RETRIEVAL_TOP_K', 5),
+                min_score=self._settings_manager.get('MEMORY_MIN_SIMILARITY', 0.3),
+                exclude_conversation_id=self.current_chat_id,
+            )
+        except Exception as e:
+            print(f"[Memory] Failed to query memory: {e}")
+            return ""
+
+    @property
+    def memory_service(self):
+        """Access the memory service (may be None if unavailable)."""
+        return self._memory_service
 
     # -----------------------------------------------------------------------
     # System prompts management
@@ -428,7 +528,7 @@ class ChatController:
 
     def messages_for_model(self, model_name: str) -> List[Dict[str, Any]]:
         """
-        Return the conversation history with tool guidance appended for chat models.
+        Return the conversation history with tool guidance and memory context appended for chat models.
         """
         if not self.conversation_history:
             return []
@@ -455,12 +555,64 @@ class ChatController:
 
         limited_history = self.apply_conversation_buffer_limit(self.conversation_history)
 
-        if new_prompt == current_prompt:
+        # Query memory for relevant context
+        memory_context = self._get_memory_context_for_query()
+        
+        if new_prompt == current_prompt and not memory_context:
             return limited_history
 
         messages = [msg.copy() for msg in limited_history]
         messages[0]["content"] = new_prompt
+        
+        # Inject memory context as second message (after system prompt)
+        if memory_context:
+            memory_appendix = self._settings_manager.get('MEMORY_PROMPT_APPENDIX', '')
+            memory_message = {
+                "role": "system",
+                "content": f"{memory_appendix}\n\n{memory_context}" if memory_appendix else memory_context
+            }
+            messages.insert(1, memory_message)
+            print(f"[Memory] Injected context into conversation")
+        
         return messages
+
+    def _get_memory_context_for_query(self) -> str:
+        """Get memory context for the last user message."""
+        if not self._memory_service:
+            return ""
+        
+        if not self._settings_manager.get('MEMORY_ENABLED', False):
+            return ""
+        
+        # Get the last user message as query
+        last_user_msg = None
+        for msg in reversed(self.conversation_history):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    # Handle vision messages
+                    text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                    last_user_msg = " ".join(text_parts)
+                else:
+                    last_user_msg = content
+                break
+        
+        if not last_user_msg:
+            return ""
+        
+        try:
+            context = self._memory_service.get_context_for_llm(
+                query_text=last_user_msg,
+                k=self._settings_manager.get('MEMORY_RETRIEVAL_TOP_K', 5),
+                min_score=self._settings_manager.get('MEMORY_MIN_SIMILARITY', 0.3),
+                exclude_conversation_id=self.current_chat_id,
+            )
+            if context:
+                print(f"[Memory] Found relevant memories for query: {last_user_msg[:50]}...")
+            return context
+        except Exception as e:
+            print(f"[Memory] Error querying memory: {e}")
+            return ""
 
     # -----------------------------------------------------------------------
     # Service accessors
@@ -677,6 +829,9 @@ class ChatController:
             source='controller'
         ))
         
+        # Add to memory if enabled
+        self.add_to_memory(content, 'user')
+        
         return msg_index
 
     def add_assistant_message(self, content: str) -> int:
@@ -702,6 +857,9 @@ class ChatController:
             data={'content': content, 'index': msg_index, 'role': 'assistant'},
             source='controller'
         ))
+        
+        # Add to memory if enabled
+        self.add_to_memory(content, 'assistant')
         
         return msg_index
 
@@ -885,6 +1043,9 @@ class ChatController:
             assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
             message_index = len(self.conversation_history)
             self.conversation_history.append(assistant_message)
+            
+            # Add to memory if enabled
+            self.add_to_memory(answer, 'assistant')
             
             # Store model in system message (first message)
             if self.conversation_history:
@@ -1097,3 +1258,5 @@ class ChatController:
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
         )
+        # Re-initialize memory service if settings changed
+        self._init_memory_service()

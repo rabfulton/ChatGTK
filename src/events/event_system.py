@@ -50,6 +50,14 @@ class EventType(Enum):
     # UI state events
     THINKING_STARTED = auto()
     THINKING_STOPPED = auto()
+    
+    # Memory events
+    MEMORY_ADDED = auto()
+    MEMORY_QUERIED = auto()
+    MEMORY_DELETED = auto()
+    MEMORY_CLEARED = auto()
+    MEMORY_IMPORT_PROGRESS = auto()
+    MEMORY_IMPORT_COMPLETE = auto()
 
 
 @dataclass

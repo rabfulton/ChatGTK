@@ -40,6 +40,7 @@ class ToolService:
         music_handler: Optional[Callable] = None,
         read_aloud_handler: Optional[Callable] = None,
         search_handler: Optional[Callable] = None,
+        memory_handler: Optional[Callable] = None,
         event_bus: Optional[EventBus] = None,
     ):
         """
@@ -57,6 +58,8 @@ class ToolService:
             Handler for read aloud tool.
         search_handler : Optional[Callable]
             Handler for search/memory tool.
+        memory_handler : Optional[Callable]
+            Handler for semantic memory retrieval tool.
         event_bus : Optional[EventBus]
             Event bus for publishing events.
         """
@@ -66,6 +69,7 @@ class ToolService:
             'music': music_handler,
             'read_aloud': read_aloud_handler,
             'search': search_handler,
+            'memory': memory_handler,
         }
         self._event_bus = event_bus
     
@@ -106,6 +110,7 @@ class ToolService:
                 music_handler=self._handlers.get('music'),
                 read_aloud_handler=self._handlers.get('read_aloud'),
                 search_handler=self._handlers.get('search'),
+                memory_handler=self._handlers.get('memory'),
             )
             
             # Execute tool
