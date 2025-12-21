@@ -61,13 +61,13 @@ You will need at least one API key for the application to function. Alternativel
 ## Screenshots
 
 *Syntax highlighting*
-![Code Feature](screenshots/syntax_highlight.jpg)
+![Code Feature](screenshots/syntax_highlight.png)
 
 *Support for Equations*
-![Formulae Feature](screenshots/formula.jpg)
+![Formulae Feature](screenshots/formula.png)
 
 *Image Generation*
-![Image Generation](screenshots/images.jpg)
+![Image Generation](screenshots/images.png)
 
 ## Getting API keys
 
@@ -113,6 +113,10 @@ You will need at least one API key for the application to function. Alternativel
     ```bash
     export PERPLEXITY_API_KEY="your-perplexity-key"
     ```
+- **Custom Providers**
+  - You can integrate any custom provider that has an OpenAPI compatible endpoint.
+  - Keys can be set as environment variables or inside the applications settings.
+  - I have tested Openrouter, Mistral, Nvidia Cloud, Groq and Bytedance so far.
 
 ## Custom Models
 
