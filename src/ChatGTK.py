@@ -650,6 +650,8 @@ class OpenAIGTKClient(Gtk.Window):
             on_delete=self.on_delete_message,
             create_speech_button=self.create_speech_button,
             create_edit_button=self.create_edit_button,
+            create_save_button=self.create_save_button,
+            create_copy_button=self.create_copy_button,
         )
         self.message_renderer = MessageRenderer(
             settings=settings,
@@ -3537,6 +3539,38 @@ class OpenAIGTKClient(Gtk.Window):
         self._edit_buttons.append(btn_edit)
         
         return btn_edit
+
+    def create_save_button(self, image_path: str):
+        """Create a save button for generated images."""
+        btn_save = Gtk.Button()
+        button_size = self.font_size * 2
+        btn_save.set_size_request(button_size, button_size)
+        
+        icon_save = Gtk.Image.new_from_icon_name("document-save-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        btn_save.set_image(icon_save)
+        btn_save.set_tooltip_text("Save image to file")
+        btn_save.connect("clicked", lambda w: self.save_image_to_file(image_path))
+        
+        return btn_save
+
+    def create_copy_button(self, message_index: int):
+        """Create a copy button to copy message text to clipboard."""
+        btn_copy = Gtk.Button()
+        button_size = self.font_size * 2
+        btn_copy.set_size_request(button_size, button_size)
+        
+        icon_copy = Gtk.Image.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        btn_copy.set_image(icon_copy)
+        btn_copy.set_tooltip_text("Copy message to clipboard")
+        
+        def on_copy_clicked(widget):
+            if message_index < len(self.conversation_history):
+                text = self.conversation_history[message_index].get('content', '')
+                clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                clipboard.set_text(text, -1)
+        
+        btn_copy.connect("clicked", on_copy_clicked)
+        return btn_copy
 
     def _clear_pending_edit_image(self, except_path: str = None):
         """Clear pending edit image and deactivate all edit buttons except the specified one."""

@@ -40,6 +40,8 @@ class RenderCallbacks:
     on_delete: Callable[[Any, int], None]              # (widget, index)
     create_speech_button: Callable[[List[str]], Gtk.Widget]  # (text) -> button
     create_edit_button: Optional[Callable[[str, int], Gtk.Widget]] = None  # (image_path, msg_index) -> button
+    create_save_button: Optional[Callable[[str], Gtk.Widget]] = None  # (image_path) -> button
+    create_copy_button: Optional[Callable[[int], Gtk.Widget]] = None  # (msg_index) -> button
 
 
 class MessageRenderer:
@@ -272,14 +274,23 @@ class MessageRenderer:
         speech_btn = self.callbacks.create_speech_button(full_text_segments)
         header_box.pack_end(speech_btn, False, False, 0)
         
+        # Add copy button
+        if self.callbacks.create_copy_button:
+            copy_btn = self.callbacks.create_copy_button(message_index)
+            header_box.pack_end(copy_btn, False, False, 0)
+        
         # Add edit button if message contains a generated image (not LaTeX math)
-        if self.callbacks.create_edit_button:
+        if self.callbacks.create_edit_button or self.callbacks.create_save_button:
             img_matches = re.findall(r'<img src="([^"]+)"/>', message_text)
             for img_path in img_matches:
                 if not self._is_latex_math_image(img_path):
-                    edit_btn = self.callbacks.create_edit_button(img_path, message_index)
-                    header_box.pack_end(edit_btn, False, False, 0)
-                    break  # Only add one edit button per message
+                    if self.callbacks.create_edit_button:
+                        edit_btn = self.callbacks.create_edit_button(img_path, message_index)
+                        header_box.pack_end(edit_btn, False, False, 0)
+                    if self.callbacks.create_save_button:
+                        save_btn = self.callbacks.create_save_button(img_path)
+                        header_box.pack_end(save_btn, False, False, 0)
+                    break  # Only add buttons for first image per message
         
         # Pack containers
         response_container.pack_start(content_container, True, True, 0)
