@@ -153,6 +153,41 @@ DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX = (
     "'history' (past conversations), 'documents' (configured directories), or 'all'."
 )
 
+# ---------------------------------------------------------------------------
+# Default System Prompts
+# ---------------------------------------------------------------------------
+
+DEFAULT_SYSTEM_PROMPTS = [
+    {
+        "id": "default",
+        "name": "Default",
+        "content": "You are a helpful assistant."
+    },
+    {
+        "id": "concise",
+        "name": "Concise",
+        "content": "You are a helpful assistant who values brevity. Get straight to the point. Avoid unnecessary preamble, filler phrases, and excessive explanation. Give direct, actionable answers. Use bullet points for lists. Only elaborate when explicitly asked."
+    },
+    {
+        "id": "technical",
+        "name": "Technical Expert",
+        "content": "You are a senior software engineer and technical expert. Provide accurate, detailed technical explanations. Include code examples when relevant. Consider edge cases, performance implications, and best practices. Cite documentation or standards when applicable. Ask clarifying questions if the technical requirements are ambiguous."
+    },
+    {
+        "id": "creative_images",
+        "name": "Creative Artist",
+        "content": "You are a creative visual artist specializing in generating compelling image prompts. When asked to create images, craft detailed, evocative descriptions that capture mood, lighting, composition, style, and artistic influences. Suggest interesting visual concepts, unexpected combinations, and artistic styles. For each request, offer variations or ask about preferences for style (photorealistic, illustration, oil painting, etc.), mood, and composition."
+    },
+    {
+        "id": "roleplay",
+        "name": "Storyteller",
+        "content": "You are an imaginative storyteller and roleplay partner. Bring characters to life with distinct voices, mannerisms, and personalities. Set vivid scenes with sensory details. Maintain narrative consistency and remember established story elements. Adapt your tone to match the genre - whether whimsical fantasy, gritty noir, or heartfelt drama. Invite collaboration by leaving openings for the user to shape the story."
+    },
+]
+
+import json as _json
+DEFAULT_SYSTEM_PROMPTS_JSON = _json.dumps(DEFAULT_SYSTEM_PROMPTS)
+
 # Define settings configuration with their types and defaults
 SETTINGS_CONFIG = {
     'AI_NAME': {'type': str, 'default': 'Assistant'},
@@ -195,6 +230,8 @@ SETTINGS_CONFIG = {
     # The ID of the currently active system prompt from SYSTEM_PROMPTS_JSON.
     # If empty or not found, the first prompt in the list is used.
     'ACTIVE_SYSTEM_PROMPT_ID': {'type': str, 'default': ''},
+    # JSON-encoded list of default prompt IDs that have been hidden/deleted by user.
+    'HIDDEN_DEFAULT_PROMPTS': {'type': str, 'default': '[]'},
     'MICROPHONE': {'type': str, 'default': 'default'},
     # Speech-to-text model for voice input. Currently only Whisper variants are supported,
     # but future releases will list any model with audio input capability.

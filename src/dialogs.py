@@ -2580,11 +2580,23 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     def _parse_system_prompts_json(self):
         """
-        Parse the system_prompts_json attribute into a list of prompt dicts.
-        Falls back to a single 'default' prompt built from system_message if
-        the JSON is empty or invalid.
+        Parse system prompts, merging defaults with user-defined prompts.
+        Default prompts that have been hidden are excluded.
         """
-        prompts = []
+        from config import DEFAULT_SYSTEM_PROMPTS
+        
+        # Get hidden default prompt IDs
+        hidden_raw = getattr(self, "hidden_default_prompts", "[]") or "[]"
+        try:
+            self._hidden_default_ids = set(json.loads(hidden_raw))
+        except json.JSONDecodeError:
+            self._hidden_default_ids = set()
+        
+        # Start with non-hidden default prompts
+        default_ids = {p["id"] for p in DEFAULT_SYSTEM_PROMPTS}
+        prompts = [p.copy() for p in DEFAULT_SYSTEM_PROMPTS if p["id"] not in self._hidden_default_ids]
+        
+        # Add user-defined prompts
         raw = getattr(self, "system_prompts_json", "") or ""
         if raw.strip():
             try:
@@ -2592,16 +2604,11 @@ class SettingsDialog(Gtk.Dialog):
                 if isinstance(parsed, list):
                     for p in parsed:
                         if isinstance(p, dict) and "id" in p and "name" in p and "content" in p:
-                            prompts.append(p)
+                            if p["id"] not in default_ids:
+                                prompts.append(p)
             except json.JSONDecodeError:
                 pass
-        # Fallback: synthesize a single prompt from system_message
-        if not prompts:
-            prompts = [{
-                "id": "default",
-                "name": "Default",
-                "content": getattr(self, "system_message", "You are a helpful assistant.")
-            }]
+        
         return prompts
 
     def _build_system_prompts_page(self):
@@ -2867,6 +2874,13 @@ class SettingsDialog(Gtk.Dialog):
         dialog.destroy()
         
         if response == Gtk.ResponseType.YES:
+            # Check if this is a default prompt - if so, hide it instead of removing
+            from config import DEFAULT_SYSTEM_PROMPTS
+            default_ids = {p["id"] for p in DEFAULT_SYSTEM_PROMPTS}
+            if prompt["id"] in default_ids:
+                self._hidden_default_ids.add(prompt["id"])
+                self.hidden_default_prompts = json.dumps(list(self._hidden_default_ids))
+            
             self._system_prompts_list.remove(prompt)
             # Select the first remaining prompt
             self._active_prompt_id = self._system_prompts_list[0]["id"] if self._system_prompts_list else ""
@@ -4399,8 +4413,11 @@ class SettingsDialog(Gtk.Dialog):
         active_prompt = self._get_prompt_by_id(self._active_prompt_id)
         system_message = active_prompt["content"] if active_prompt else ""
         
-        # Serialize the full prompts list to JSON
-        system_prompts_json = json.dumps(self._system_prompts_list)
+        # Serialize only user-defined prompts (not defaults) to JSON
+        from config import DEFAULT_SYSTEM_PROMPTS
+        default_ids = {p["id"] for p in DEFAULT_SYSTEM_PROMPTS}
+        user_prompts = [p for p in self._system_prompts_list if p["id"] not in default_ids]
+        system_prompts_json = json.dumps(user_prompts)
 
         # Build whitelist strings from checkboxes, but only if the Model
         # Whitelist page was actually built/visited. Otherwise, preserve the

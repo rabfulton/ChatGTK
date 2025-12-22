@@ -341,11 +341,23 @@ class ChatController:
         """
         Initialize system prompts from settings.
         
-        Parses SYSTEM_PROMPTS_JSON and sets up self.system_prompts (list of dicts)
-        and self.active_system_prompt_id. Also updates self.system_message to
-        the active prompt's content for backward compatibility.
+        Merges default prompts (excluding hidden ones) with user-defined prompts.
+        Sets up self.system_prompts and self.active_system_prompt_id.
         """
-        prompts = []
+        from config import DEFAULT_SYSTEM_PROMPTS
+        
+        # Get hidden default prompt IDs
+        hidden_raw = getattr(self, "hidden_default_prompts", "[]") or "[]"
+        try:
+            hidden_ids = set(json.loads(hidden_raw))
+        except json.JSONDecodeError:
+            hidden_ids = set()
+        
+        # Start with non-hidden default prompts
+        prompts = [p.copy() for p in DEFAULT_SYSTEM_PROMPTS if p["id"] not in hidden_ids]
+        default_ids = {p["id"] for p in DEFAULT_SYSTEM_PROMPTS}
+        
+        # Add user-defined prompts (those not in defaults)
         raw = getattr(self, "system_prompts_json", "") or ""
         if raw.strip():
             try:
@@ -353,17 +365,10 @@ class ChatController:
                 if isinstance(parsed, list):
                     for p in parsed:
                         if isinstance(p, dict) and "id" in p and "name" in p and "content" in p:
-                            prompts.append(p)
+                            if p["id"] not in default_ids:
+                                prompts.append(p)
             except json.JSONDecodeError:
                 pass
-        
-        # Fallback: synthesize a single prompt from system_message
-        if not prompts:
-            prompts = [{
-                "id": "default",
-                "name": "Default",
-                "content": getattr(self, "system_message", "You are a helpful assistant.")
-            }]
         
         self.system_prompts: List[Dict[str, Any]] = prompts
         
@@ -378,6 +383,23 @@ class ChatController:
         active_prompt = self.get_system_prompt_by_id(active_id)
         if active_prompt:
             self.system_message = active_prompt["content"]
+
+    def hide_default_prompt(self, prompt_id: str) -> None:
+        """Hide a default prompt (mark as deleted)."""
+        from config import DEFAULT_SYSTEM_PROMPTS
+        default_ids = {p["id"] for p in DEFAULT_SYSTEM_PROMPTS}
+        if prompt_id not in default_ids:
+            return  # Not a default prompt
+        
+        hidden_raw = getattr(self, "hidden_default_prompts", "[]") or "[]"
+        try:
+            hidden_ids = set(json.loads(hidden_raw))
+        except json.JSONDecodeError:
+            hidden_ids = set()
+        
+        hidden_ids.add(prompt_id)
+        self.hidden_default_prompts = json.dumps(list(hidden_ids))
+        self._init_system_prompts_from_settings()
 
     def init_system_prompts(self) -> None:
         """Public method to initialize system prompts from settings."""
