@@ -309,13 +309,14 @@ class HistorySidebar(UIComponent):
         return self._filter_text.lower() in text.lower()
     
     def select_chat(self, chat_id: str) -> None:
-        """Select a chat by ID."""
+        """Select a chat by ID and scroll it into view."""
         self._current_chat_id = chat_id
         children = self.history_list.get_children()
         for row in children:
             row_id = getattr(row, 'chat_id', None)
             if row_id == chat_id:
                 self.history_list.select_row(row)
+                row.grab_focus()
                 return
         # No exact match - try without .json extension
         chat_id_clean = chat_id.replace('.json', '') if chat_id else ''
@@ -323,6 +324,7 @@ class HistorySidebar(UIComponent):
             row_id = getattr(row, 'chat_id', '')
             if row_id.replace('.json', '') == chat_id_clean:
                 self.history_list.select_row(row)
+                row.grab_focus()
                 return
         self.history_list.unselect_all()
     
