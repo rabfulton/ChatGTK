@@ -688,11 +688,6 @@ class OpenAIGTKClient(Gtk.Window):
         """Get the current chat ID from controller."""
         return self.controller.current_chat_id
 
-    @current_chat_id.setter
-    def current_chat_id(self, value):
-        """Set the current chat ID on controller."""
-        self.controller.current_chat_id = value
-
     @property
     def system_message(self):
         """Get the system message from controller."""
@@ -2461,7 +2456,7 @@ class OpenAIGTKClient(Gtk.Window):
             chat_id = self.controller.save_current_chat()
             
             if chat_id:
-                self.current_chat_id = chat_id
+                # Controller already updated current_chat_id, just sync last_active_chat
                 self.last_active_chat = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
                 save_object_settings(self)
 

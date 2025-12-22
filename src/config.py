@@ -78,7 +78,7 @@ MEMORY_DB_PATH = os.path.join(PARENT_DIR, "chat_memory")
 
 DEFAULT_SYSTEM_PROMPT_APPENDIX = (
     "When writing mathematical equations use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
-    "You always format your responses using markdown."
+    "You format your responses using markdown."
 )
 
 DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX = (
