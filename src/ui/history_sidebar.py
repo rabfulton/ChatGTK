@@ -310,15 +310,18 @@ class HistorySidebar(UIComponent):
     
     def select_chat(self, chat_id: str) -> None:
         """Select a chat by ID."""
-        # Skip if already selected
-        if self._current_chat_id == chat_id:
-            selected = self.history_list.get_selected_row()
-            if selected and getattr(selected, 'chat_id', None) == chat_id:
-                return
-        
         self._current_chat_id = chat_id
-        for row in self.history_list.get_children():
-            if getattr(row, 'chat_id', None) == chat_id:
+        children = self.history_list.get_children()
+        for row in children:
+            row_id = getattr(row, 'chat_id', None)
+            if row_id == chat_id:
+                self.history_list.select_row(row)
+                return
+        # No exact match - try without .json extension
+        chat_id_clean = chat_id.replace('.json', '') if chat_id else ''
+        for row in children:
+            row_id = getattr(row, 'chat_id', '')
+            if row_id.replace('.json', '') == chat_id_clean:
                 self.history_list.select_row(row)
                 return
         self.history_list.unselect_all()
@@ -393,14 +396,15 @@ class HistorySidebar(UIComponent):
         return False
     
     def _on_chat_event(self, event) -> None:
-        """Handle chat events - refresh list and select new chats."""
+        """Handle chat events - refresh list and select new/saved chats."""
         chat_id = event.data.get('chat_id', '')
-        is_new = event.type == EventType.CHAT_CREATED
+        # Select chat on create or save
+        should_select = event.type in (EventType.CHAT_CREATED, EventType.CHAT_SAVED) and chat_id
         def update():
             self.refresh()
-            if is_new and chat_id:
-                self._current_chat_id = chat_id
-                self.select_chat(chat_id)
+            if should_select and chat_id:
+                # Defer selection to ensure rows are realized
+                GLib.idle_add(self.select_chat, chat_id)
         self.schedule_ui_update(update)
     
     def _on_chat_loaded(self, event) -> None:

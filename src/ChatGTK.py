@@ -926,14 +926,12 @@ class OpenAIGTKClient(Gtk.Window):
         """Handle RECORDING_STARTED event - update voice button state."""
         def update():
             self.recording = True
-            self.btn_voice.set_label("Recording... Click to Stop")
         GLib.idle_add(update)
 
     def _on_recording_stopped_event(self, event):
         """Handle RECORDING_STOPPED event - reset voice button state."""
         def update():
             self.recording = False
-            self.btn_voice.set_label("Start Voice Input")
         GLib.idle_add(update)
 
     def _on_transcription_complete_event(self, event):
@@ -1815,6 +1813,56 @@ class OpenAIGTKClient(Gtk.Window):
             cancel_check=lambda: getattr(self, 'request_cancelled', False),
         )
 
+    def _show_recording_popover(self):
+        """Show recording popover near the voice button."""
+        if hasattr(self, '_recording_popover') and self._recording_popover:
+            self._recording_popover.popdown()
+        
+        self._recording_popover = Gtk.Popover()
+        self._recording_popover.set_relative_to(self.btn_voice)
+        self._recording_popover.set_position(Gtk.PositionType.TOP)
+        
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        
+        label = Gtk.Label(label="Recording Voice\nPress any key to stop")
+        label.set_justify(Gtk.Justification.CENTER)
+        box.pack_start(label, False, False, 0)
+        
+        self._recording_popover.add(box)
+        self._recording_popover.show_all()
+        
+        # Connect key press to stop recording
+        self._recording_key_handler = self.connect('key-press-event', self._on_recording_key_press)
+    
+    def _hide_recording_popover(self):
+        """Hide recording popover."""
+        if hasattr(self, '_recording_key_handler') and self._recording_key_handler:
+            self.disconnect(self._recording_key_handler)
+            self._recording_key_handler = None
+        if hasattr(self, '_recording_popover') and self._recording_popover:
+            self._recording_popover.popdown()
+            self._recording_popover = None
+    
+    def _on_recording_key_press(self, widget, event):
+        """Stop recording on any key press."""
+        if self.recording:
+            self._stop_recording()
+            return True
+        return False
+    
+    def _stop_recording(self):
+        """Stop the current recording."""
+        if hasattr(self, 'recording_event'):
+            self.recording_event.clear()
+        if hasattr(self, 'ws_provider'):
+            self.ws_provider.stop_streaming()
+            delattr(self, 'ws_provider')
+        self._hide_recording_popover()
+
     def audio_transcription(self, widget):
         """Handle audio transcription."""
         print("Audio transcription...")
@@ -1866,7 +1914,7 @@ class OpenAIGTKClient(Gtk.Window):
                 self.recording_event = threading.Event()
                 self.recording_event.set()  # Start recording
                 self.recording = True
-                self.btn_voice.set_label("Recording... Click to Stop")
+                self._show_recording_popover()
                 print("Recording started")
                 
                 def record_thread():
@@ -1915,8 +1963,8 @@ class OpenAIGTKClient(Gtk.Window):
                         print(f"[Audio STT] Error in recording thread: {e}")
                     
                     finally:
-                        # Reset button state
-                        GLib.idle_add(self.btn_voice.set_label, "Start Voice Input")
+                        # Reset state
+                        GLib.idle_add(self._hide_recording_popover)
                         self.recording = False
                 
                 # Start recording in separate thread
@@ -1926,14 +1974,14 @@ class OpenAIGTKClient(Gtk.Window):
                 err_text = f"Error initializing audio system: {str(e)}"
                 msg_index = self.controller.add_notification(err_text, 'error')
                 self.append_message('ai', err_text, msg_index)
-                self.btn_voice.set_label("Start Voice Input")
+                self._hide_recording_popover()
                 self.recording = False
         else:
             # Stop recording
             if hasattr(self, 'recording_event'):
                 self.recording_event.clear()  # Signal recording to stop
             self.recording = False
-            self.btn_voice.set_label("Start Voice Input")
+            self._hide_recording_popover()
 
     def _audio_transcription_to_textview(self, textview):
         """Handle audio transcription and insert result into a textview at cursor position."""
@@ -2178,7 +2226,7 @@ class OpenAIGTKClient(Gtk.Window):
 
                     # Start recording
                     self.recording = True
-                    self.btn_voice.set_label("Recording... Click to Stop")
+                    self._show_recording_popover()
                     
                     self.ws_provider.start_streaming(
                         callback=self.on_stream_content_received,
@@ -2196,7 +2244,7 @@ class OpenAIGTKClient(Gtk.Window):
                     err_text = f"Error starting real-time streaming: {str(e)}"
                     msg_index = self.controller.add_notification(err_text, 'error')
                     self.append_message('ai', err_text, msg_index)
-                    self.btn_voice.set_label("Start Voice Input")
+                    self._hide_recording_popover()
                     self.recording = False
             else:
                 # Stop recording
@@ -2205,7 +2253,7 @@ class OpenAIGTKClient(Gtk.Window):
                     self.ws_provider.stop_streaming()
                     delattr(self, 'ws_provider')  # Clean up the provider
                 self.recording = False
-                self.btn_voice.set_label("Start Voice Input")
+                self._hide_recording_popover()
                 return False  # Prevent signal propagation
 
     def on_delete_chat(self, widget, history_row):
