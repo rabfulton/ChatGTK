@@ -211,6 +211,8 @@ class OpenAIGTKClient(Gtk.Window):
 
         # System prompt selector
         self.combo_system_prompt = Gtk.ComboBoxText()
+        self.combo_system_prompt.set_margin_start(4)
+        self.combo_system_prompt.set_margin_end(4)
         self.combo_system_prompt.connect("changed", self.on_system_prompt_changed)
         self._refresh_system_prompt_combo()
         self._toolbar.widget.pack_start(self.combo_system_prompt, False, False, 0)
@@ -1019,23 +1021,30 @@ class OpenAIGTKClient(Gtk.Window):
         Refresh the system prompt combo box from self.system_prompts.
         
         Shows the combo only when there is more than one prompt.
+        Places the active prompt first so dropdown opens downward.
         """
         # Block signal to avoid triggering on_system_prompt_changed during refresh
         self.combo_system_prompt.handler_block_by_func(self.on_system_prompt_changed)
         try:
             self.combo_system_prompt.remove_all()
-            for prompt in getattr(self, "system_prompts", []):
-                self.combo_system_prompt.append(prompt["id"], prompt["name"])
-            
-            # Set active to the current active_system_prompt_id
+            prompts = getattr(self, "system_prompts", [])
             active_id = getattr(self, "active_system_prompt_id", "")
-            if active_id:
-                self.combo_system_prompt.set_active_id(active_id)
-            elif self.system_prompts:
+            
+            # Add active prompt first, then others
+            for prompt in prompts:
+                if prompt["id"] == active_id:
+                    self.combo_system_prompt.append(prompt["id"], prompt["name"])
+                    break
+            for prompt in prompts:
+                if prompt["id"] != active_id:
+                    self.combo_system_prompt.append(prompt["id"], prompt["name"])
+            
+            # Set active to the first item (which is the active prompt)
+            if prompts:
                 self.combo_system_prompt.set_active(0)
             
             # Only show if multiple prompts
-            if len(getattr(self, "system_prompts", [])) > 1:
+            if len(prompts) > 1:
                 self.combo_system_prompt.set_visible(True)
                 self.combo_system_prompt.set_no_show_all(False)
             else:
@@ -1063,6 +1072,9 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Persist the change
         save_object_settings(self)
+        
+        # Refresh combo to put new selection first
+        self._refresh_system_prompt_combo()
 
     def fetch_models_async(self):
         """Fetch available models asynchronously."""

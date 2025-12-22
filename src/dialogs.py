@@ -2715,14 +2715,21 @@ class SettingsDialog(Gtk.Dialog):
         self.stack.add_named(vbox, "System Prompts")
 
     def _populate_prompt_combo(self):
-        """Populate the prompt combo box from _system_prompts_list."""
+        """Populate the prompt combo box from _system_prompts_list.
+        Places the active prompt first so dropdown opens downward."""
         self._prompt_combo.remove_all()
+        
+        # Add active prompt first, then others
         for prompt in self._system_prompts_list:
-            self._prompt_combo.append(prompt["id"], prompt["name"])
-        # Set active
-        if self._active_prompt_id:
-            self._prompt_combo.set_active_id(self._active_prompt_id)
-        elif self._system_prompts_list:
+            if prompt["id"] == self._active_prompt_id:
+                self._prompt_combo.append(prompt["id"], prompt["name"])
+                break
+        for prompt in self._system_prompts_list:
+            if prompt["id"] != self._active_prompt_id:
+                self._prompt_combo.append(prompt["id"], prompt["name"])
+        
+        # Set active to the first item (which is the active prompt)
+        if self._system_prompts_list:
             self._prompt_combo.set_active(0)
 
     def _load_prompt_content(self):
@@ -4447,6 +4454,7 @@ class SettingsDialog(Gtk.Dialog):
             'system_message': system_message,
             'system_prompts_json': system_prompts_json,
             'active_system_prompt_id': self._active_prompt_id,
+            'hidden_default_prompts': getattr(self, 'hidden_default_prompts', '[]'),
             'microphone': self.combo_mic.get_active_text() or 'default',
             'speech_to_text_model': self.combo_stt_model.get_active_text() or (self.combo_stt_model.get_child().get_text() if self.combo_stt_model.get_child() else '') or 'whisper-1',
             'tts_voice_provider': self.combo_tts_provider.get_active_id() or 'openai',
