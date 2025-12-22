@@ -129,12 +129,8 @@ else:
         "need to install 'playerctl' for advanced playback control.\n\n"
     )
 
-_MUSIC_TOOL_PROMPT_ARTISTS = (
-    "Convert artist names to their correct international spelling (e.g., bjork → Björk)."
-)
-
 DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX = (
-    _MUSIC_TOOL_PROMPT_BASE + _MUSIC_TOOL_PROMPT_PLAYERCTL + _MUSIC_TOOL_PROMPT_ARTISTS
+    _MUSIC_TOOL_PROMPT_BASE + _MUSIC_TOOL_PROMPT_PLAYERCTL
 )
 
 DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX = (

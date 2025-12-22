@@ -738,13 +738,54 @@ class ChatController:
             
             query = keyword.strip()
             try:
-                items = list(lib.items(query))
+                import unicodedata
+                import re
+                
+                def strip_diacritics(s):
+                    return ''.join(c for c in unicodedata.normalize('NFD', s) 
+                                  if unicodedata.category(c) != 'Mn').lower()
+                
+                # Map standard fields to normalized versions
+                field_map = {
+                    'artist': 'artist_norm', 'albumartist': 'artist_norm',
+                    'title': 'title_norm', 'album': 'album_norm'
+                }
+                
+                # Parse and convert field:value pairs to normalized versions
+                def normalize_query(q):
+                    parts = []
+                    for part in re.split(r'\s+(or|and|,)\s+', q, flags=re.IGNORECASE):
+                        if part.lower() in ('or', 'and', ','):
+                            parts.append(',')
+                            continue
+                        match = re.match(r'(\w+):"?([^"]+)"?', part)
+                        if match:
+                            field, value = match.groups()
+                            norm_field = field_map.get(field.lower(), f'{field}_norm')
+                            parts.append(f'{norm_field}:{strip_diacritics(value)}')
+                        else:
+                            # Plain text - search all normalized fields
+                            norm_val = strip_diacritics(part)
+                            parts.append(f'artist_norm:{norm_val} , title_norm:{norm_val} , album_norm:{norm_val}')
+                    return ' '.join(parts)
+                
+                # Always try normalized search first (catches all diacritic variants)
+                norm_query = normalize_query(query)
+                items = list(lib.items(norm_query))
+                
+                # Fallback to exact query if normalized found nothing
+                if not items:
+                    items = list(lib.items(query))
+                
+                # Try fuzzy on normalized as last resort
+                if not items:
+                    fuzzy_query = re.sub(r':(\S+)', r':\1~', norm_query)
+                    items = list(lib.items(fuzzy_query))
             except Exception as e:
                 return f"Error querying beets library: {e}"
             
             if not items:
                 return f"No tracks found matching query: {query}"
-            
             max_tracks = 100
             limited_msg = ""
             if len(items) > max_tracks:

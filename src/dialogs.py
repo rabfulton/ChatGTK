@@ -4302,6 +4302,14 @@ class SettingsDialog(Gtk.Dialog):
                 # Create a new library
                 lib = Library(library_db_path, directory=music_dir)
 
+                # Helper to strip diacritics
+                import unicodedata
+                def strip_diacritics(s):
+                    if not s:
+                        return s
+                    return ''.join(c for c in unicodedata.normalize('NFD', s) 
+                                  if unicodedata.category(c) != 'Mn').lower()
+                
                 # Walk the music directory and add tracks
                 tracks_added = 0
                 for root, dirs, files in os.walk(music_dir):
@@ -4314,6 +4322,10 @@ class SettingsDialog(Gtk.Dialog):
                                 # Import the item into the library
                                 from beets.library import Item
                                 item = Item.from_path(filepath)
+                                # Add normalized fields for diacritic-insensitive search
+                                item['artist_norm'] = strip_diacritics(item.artist)
+                                item['title_norm'] = strip_diacritics(item.title)
+                                item['album_norm'] = strip_diacritics(item.album)
                                 lib.add(item)
                                 tracks_added += 1
                             except Exception as e:
