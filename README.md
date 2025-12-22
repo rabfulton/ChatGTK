@@ -11,6 +11,7 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - Customizable settings
 - Support for system prompt switching
 - Conversation history management
+- Projects support for organizing chats into separate folders
 - Image generation using both OpenAI's and Googles models.
 - Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
 - Text-to-Speech output using OpenAI's TTS and TTS-HD and audio-preview models

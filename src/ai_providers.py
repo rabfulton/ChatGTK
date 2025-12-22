@@ -31,6 +31,22 @@ from config import HISTORY_DIR
 from model_cards import get_card
 
 
+# Module-level function to get current history directory
+# This can be overridden by the controller to support projects
+_get_history_dir = lambda: HISTORY_DIR
+
+
+def set_history_dir_getter(getter):
+    """Set the function used to get the current history directory."""
+    global _get_history_dir
+    _get_history_dir = getter
+
+
+def get_current_history_dir():
+    """Get the current history directory (supports projects)."""
+    return _get_history_dir()
+
+
 def _get_image_data(img: dict) -> str:
     """Get base64 image data from an image dict, loading from path if needed."""
     if "data" in img:
@@ -337,7 +353,7 @@ class CustomProvider(AIProvider):
             try:
                 audio_bytes = self.generate_speech(text, voice=self.voice)
                 # Save audio to chat history
-                audio_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'audio'
+                audio_dir = Path(get_current_history_dir()) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'audio'
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_model = "".join(c if c.isalnum() else "_" for c in (self.model_id or "tts"))
@@ -556,7 +572,7 @@ class CustomProvider(AIProvider):
         
         # Save to local file
         try:
-            images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
+            images_dir = Path(get_current_history_dir()) / chat_id.replace('.json', '') / 'images'
             images_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1048,7 +1064,7 @@ class CustomProvider(AIProvider):
             
         # Save to local file in history directory
         try:
-            images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
+            images_dir = Path(get_current_history_dir()) / chat_id.replace('.json', '') / 'images'
             images_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1490,7 +1506,7 @@ class OpenAIProvider(AIProvider):
             return ""
         
         try:
-            images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
+            images_dir = Path(get_current_history_dir()) / chat_id.replace('.json', '') / 'images'
             images_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             image_path = images_dir / f"responses_{timestamp}.png"
@@ -1825,7 +1841,7 @@ class OpenAIProvider(AIProvider):
                 text_content = transcript
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                audio_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'audio'
+                audio_dir = Path(get_current_history_dir()) / chat_id.replace('.json', '') / 'audio'
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 
                 audio_file = audio_dir / f"response_{timestamp}.wav"
@@ -2116,7 +2132,7 @@ class OpenAIProvider(AIProvider):
             else:
                 raise ValueError("Image response missing both URL and base64 data")
         
-        images_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images'
+        images_dir = Path(get_current_history_dir()) / chat_id.replace('.json', '') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2681,7 +2697,7 @@ class GrokProvider(AIProvider):
         else:
             raise ValueError("Grok image response missing both URL and base64 data")
 
-        images_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
+        images_dir = Path(get_current_history_dir()) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3407,7 +3423,7 @@ class GeminiProvider(AIProvider):
             raise ValueError("Gemini response missing inline image data")
         
         image_bytes = base64.b64decode(inline_data)
-        images_dir = Path(HISTORY_DIR) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
+        images_dir = Path(get_current_history_dir()) / (chat_id.replace('.json', '') if chat_id else 'temp') / 'images'
         images_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         image_path = images_dir / f"{model.replace('-', '_')}_{timestamp}.png"

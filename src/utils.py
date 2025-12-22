@@ -9,6 +9,20 @@ from config import SETTINGS_FILE, HISTORY_DIR, SETTINGS_CONFIG, API_KEYS_FILE, C
 # These are defined in gtk_utils.py to keep this module toolkit-agnostic
 from gtk_utils import parse_color_to_rgba, insert_resized_image
 
+# History dir getter for project support (can be overridden)
+_history_dir_getter = None
+
+def get_current_history_dir():
+    """Get the current history directory (supports projects)."""
+    if _history_dir_getter:
+        return _history_dir_getter()
+    return HISTORY_DIR
+
+def set_history_dir_getter(getter):
+    """Set the function used to get the current history directory."""
+    global _history_dir_getter
+    _history_dir_getter = getter
+
 # Global repository instances (lazy-initialized)
 # Import is deferred to avoid circular dependencies
 _settings_repo = None
@@ -343,7 +357,7 @@ def get_model_display_name(model_id: str, custom_models: dict = None) -> str:
 
 def ensure_history_dir():
     """Ensure the history directory exists."""
-    Path(HISTORY_DIR).mkdir(parents=True, exist_ok=True)
+    Path(get_current_history_dir()).mkdir(parents=True, exist_ok=True)
 
 def clean_display_text(text):
     """Strip markdown and normalize whitespace for sidebars and titles."""
@@ -425,7 +439,7 @@ def get_chat_dir(chat_name):
     """
     if chat_name.endswith('.json'):
         chat_name = chat_name.replace('.json', '')
-    return Path(HISTORY_DIR) / chat_name
+    return Path(get_current_history_dir()) / chat_name
 
 
 def get_chat_metadata(chat_name):

@@ -22,6 +22,12 @@ import shutil
 from datetime import datetime
 from config import HISTORY_DIR
 
+# Import history dir getter for project support
+try:
+    from ai_providers import get_current_history_dir
+except ImportError:
+    get_current_history_dir = lambda: HISTORY_DIR
+
 # Constants for LaTeX templates
 LATEX_DISPLAY_TEMPLATE = r"""
 \documentclass{article}
@@ -271,7 +277,7 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
     if chat_id:
         # Remove .json extension if present
         chat_id = chat_id.replace('.json', '')
-        cache_dir = Path(HISTORY_DIR) / chat_id / 'formula_cache'
+        cache_dir = Path(get_current_history_dir()) / chat_id / 'formula_cache'
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / f"formula_{formula_hash}.png"
         
@@ -347,7 +353,7 @@ def tex_to_png(tex_string, is_display_math=False, text_color="white", chat_id=No
             
             # Save to cache if chat_id is provided
             if chat_id and png_data:
-                cache_dir = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'formula_cache'
+                cache_dir = Path(get_current_history_dir()) / chat_id.replace('.json', '') / 'formula_cache'
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 cache_file = cache_dir / f"formula_{formula_hash}.png"
                 cache_file.write_bytes(png_data)
@@ -1880,10 +1886,10 @@ def process_image_path(src, chat_id=None):
         
         if chat_id:
             # Construct the path in the chat-specific images directory
-            image_path = Path(HISTORY_DIR) / chat_id.replace('.json', '') / 'images' / image_filename
+            image_path = Path(get_current_history_dir()) / chat_id.replace('.json', '') / 'images' / image_filename
         else:
             # Fallback to temp directory if no chat_id provided
-            image_path = Path(HISTORY_DIR) / 'temp' / 'images' / image_filename
+            image_path = Path(get_current_history_dir()) / 'temp' / 'images' / image_filename
         
         # Only return path if file exists
         if image_path.exists():

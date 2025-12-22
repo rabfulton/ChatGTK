@@ -2525,6 +2525,11 @@ class OpenAIGTKClient(Gtk.Window):
         rename_item.connect("activate", self.on_rename_chat, history_row)
         menu.append(rename_item)
         
+        # Move to Project option
+        project_item = Gtk.MenuItem(label="Move to Project...")
+        project_item.connect("activate", self.on_move_to_project, history_row)
+        menu.append(project_item)
+        
         # Export to PDF option
         export_item = Gtk.MenuItem(label="Export to PDF")
         export_item.connect("activate", self.on_export_chat, history_row)
@@ -2537,6 +2542,16 @@ class OpenAIGTKClient(Gtk.Window):
         
         menu.show_all()
         menu.popup_at_pointer(None)
+
+    def on_move_to_project(self, widget, history_row):
+        """Handle move to project action."""
+        from dialogs import show_add_to_project_dialog
+        chat_id = history_row.chat_id
+        if show_add_to_project_dialog(self, self.controller, chat_id):
+            # Refresh sidebar after move
+            if hasattr(self, '_history_sidebar'):
+                self._history_sidebar.refresh_project_menu()
+                self._history_sidebar.refresh()
 
     def on_rename_chat(self, widget, history_row):
         """Handle rename chat action."""

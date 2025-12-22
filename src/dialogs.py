@@ -5554,3 +5554,251 @@ class APIKeyDialog(Gtk.Dialog):
             'claude': self.entries['claude'].get_text().strip(),
             'perplexity': self.entries['perplexity'].get_text().strip(),
         }
+
+
+# ---------------------------------------------------------------------------
+# Project Management Dialogs
+# ---------------------------------------------------------------------------
+
+def show_add_to_project_dialog(parent, controller, chat_id: str) -> bool:
+    """
+    Show dialog to move a chat to a project.
+    
+    Parameters
+    ----------
+    parent : Gtk.Window
+        Parent window.
+    controller : ChatController
+        The application controller.
+    chat_id : str
+        The chat ID to move to a project.
+        
+    Returns
+    -------
+    bool
+        True if chat was moved to a project.
+    """
+    dialog = Gtk.Dialog(
+        title="Move to Project",
+        transient_for=parent,
+        flags=0
+    )
+    dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Move", Gtk.ResponseType.OK)
+    dialog.set_default_size(350, 200)
+    
+    box = dialog.get_content_area()
+    box.set_spacing(12)
+    box.set_margin_start(16)
+    box.set_margin_end(16)
+    box.set_margin_top(16)
+    box.set_margin_bottom(16)
+    
+    # Destination dropdown
+    projects_label = Gtk.Label(label="Move to:")
+    projects_label.set_xalign(0)
+    box.pack_start(projects_label, False, False, 0)
+    
+    projects_combo = Gtk.ComboBoxText()
+    projects_repo = controller._projects_repo
+    
+    # Add "All Chats" (default history) as first option
+    projects_combo.append("", "All Chats")
+    
+    # Add existing projects
+    for project in projects_repo.list_all():
+        projects_combo.append(project.id, project.name)
+    
+    projects_combo.set_active(0)
+    box.pack_start(projects_combo, False, False, 0)
+    
+    # Separator
+    box.pack_start(Gtk.Separator(), False, False, 8)
+    
+    # New project section
+    new_label = Gtk.Label(label="Or create new project:")
+    new_label.set_xalign(0)
+    box.pack_start(new_label, False, False, 0)
+    
+    new_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    new_entry = Gtk.Entry()
+    new_entry.set_placeholder_text("New project name")
+    new_box.pack_start(new_entry, True, True, 0)
+    
+    add_btn = Gtk.Button(label="Add")
+    new_box.pack_start(add_btn, False, False, 0)
+    box.pack_start(new_box, False, False, 0)
+    
+    def on_add_new(btn):
+        name = new_entry.get_text().strip()
+        if name:
+            project = projects_repo.create(name)
+            projects_combo.append(project.id, project.name)
+            projects_combo.set_active_id(project.id)
+            new_entry.set_text("")
+    
+    add_btn.connect("clicked", on_add_new)
+    new_entry.connect("activate", lambda e: on_add_new(None))
+    
+    dialog.show_all()
+    response = dialog.run()
+    
+    result = False
+    if response == Gtk.ResponseType.OK:
+        project_id = projects_combo.get_active_id()  # Empty string for "All Chats"
+        result = controller.move_chat_to_project(chat_id, project_id)
+    
+    dialog.destroy()
+    return result
+
+
+def show_manage_projects_dialog(parent, controller, on_change=None):
+    """
+    Show dialog to manage projects (rename, delete).
+    
+    Parameters
+    ----------
+    parent : Gtk.Window
+        Parent window.
+    controller : ChatController
+        The application controller.
+    on_change : callable
+        Called when projects are modified.
+    """
+    dialog = Gtk.Dialog(
+        title="Manage Projects",
+        transient_for=parent,
+        flags=0
+    )
+    dialog.add_button("Close", Gtk.ResponseType.CLOSE)
+    dialog.set_default_size(400, 300)
+    
+    box = dialog.get_content_area()
+    box.set_spacing(8)
+    box.set_margin_start(16)
+    box.set_margin_end(16)
+    box.set_margin_top(16)
+    box.set_margin_bottom(16)
+    
+    projects_repo = controller._projects_repo
+    
+    # Scrolled list of projects
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    box.pack_start(scrolled, True, True, 0)
+    
+    listbox = Gtk.ListBox()
+    listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+    scrolled.add(listbox)
+    
+    def refresh_list():
+        for child in listbox.get_children():
+            listbox.remove(child)
+        
+        for project in projects_repo.list_all():
+            row = Gtk.ListBoxRow()
+            row.project_id = project.id
+            
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            hbox.set_margin_start(8)
+            hbox.set_margin_end(8)
+            hbox.set_margin_top(4)
+            hbox.set_margin_bottom(4)
+            
+            label = Gtk.Label(label=project.name)
+            label.set_xalign(0)
+            hbox.pack_start(label, True, True, 0)
+            
+            row.add(hbox)
+            listbox.add(row)
+        
+        listbox.show_all()
+    
+    refresh_list()
+    
+    # Buttons
+    btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    box.pack_start(btn_box, False, False, 0)
+    
+    rename_btn = Gtk.Button(label="Rename")
+    delete_btn = Gtk.Button(label="Delete")
+    btn_box.pack_start(rename_btn, False, False, 0)
+    btn_box.pack_start(delete_btn, False, False, 0)
+    
+    def on_rename(btn):
+        row = listbox.get_selected_row()
+        if not row:
+            return
+        
+        project = projects_repo.get(row.project_id)
+        if not project:
+            return
+        
+        rename_dialog = Gtk.Dialog(
+            title="Rename Project",
+            transient_for=dialog,
+            flags=0
+        )
+        rename_dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Rename", Gtk.ResponseType.OK)
+        
+        rbox = rename_dialog.get_content_area()
+        rbox.set_spacing(8)
+        rbox.set_margin_start(12)
+        rbox.set_margin_end(12)
+        rbox.set_margin_top(12)
+        rbox.set_margin_bottom(12)
+        
+        entry = Gtk.Entry()
+        entry.set_text(project.name)
+        entry.set_activates_default(True)
+        rbox.add(entry)
+        
+        rename_dialog.set_default_response(Gtk.ResponseType.OK)
+        rename_dialog.show_all()
+        
+        if rename_dialog.run() == Gtk.ResponseType.OK:
+            new_name = entry.get_text().strip()
+            if new_name:
+                projects_repo.rename(row.project_id, new_name)
+                refresh_list()
+                if on_change:
+                    on_change()
+        
+        rename_dialog.destroy()
+    
+    def on_delete(btn):
+        row = listbox.get_selected_row()
+        if not row:
+            return
+        
+        project = projects_repo.get(row.project_id)
+        if not project:
+            return
+        
+        # Confirm deletion
+        confirm = Gtk.MessageDialog(
+            transient_for=dialog,
+            flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Delete project '{project.name}'?"
+        )
+        confirm.format_secondary_text("This will delete all chats in this project. This cannot be undone.")
+        
+        if confirm.run() == Gtk.ResponseType.YES:
+            # If deleting current project, switch to default
+            if controller.get_current_project() == row.project_id:
+                controller.switch_project("")
+            
+            projects_repo.delete(row.project_id)
+            refresh_list()
+            if on_change:
+                on_change()
+        
+        confirm.destroy()
+    
+    rename_btn.connect("clicked", on_rename)
+    delete_btn.connect("clicked", on_delete)
+    
+    dialog.show_all()
+    dialog.run()
+    dialog.destroy()

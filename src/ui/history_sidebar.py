@@ -101,10 +101,22 @@ class HistorySidebar(UIComponent):
         box.set_margin_start(10)
         box.set_margin_end(10)
         
+        # Top row: Project button + New Chat button
+        top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        
+        # Project selector button (folder icon)
+        self.project_button = Gtk.MenuButton()
+        self.project_button.set_image(Gtk.Image.new_from_icon_name("folder-symbolic", Gtk.IconSize.BUTTON))
+        self.project_button.set_tooltip_text("Select Project")
+        self._build_project_menu()
+        top_row.pack_start(self.project_button, False, False, 0)
+        
         # New Chat button
         new_chat_btn = Gtk.Button(label="New Chat")
         new_chat_btn.connect('clicked', self._on_new_chat_clicked)
-        box.pack_start(new_chat_btn, False, False, 0)
+        top_row.pack_start(new_chat_btn, True, True, 0)
+        
+        box.pack_start(top_row, False, False, 0)
         
         # Scrolled window for history list
         scrolled = Gtk.ScrolledWindow()
@@ -358,3 +370,120 @@ class HistorySidebar(UIComponent):
         if chat_id:
             self._current_chat_id = chat_id
             self.schedule_ui_update(lambda: self.select_chat(chat_id))
+    
+    def _build_project_menu(self) -> None:
+        """Build the project selector dropdown menu."""
+        menu = Gtk.Menu()
+        
+        # "All Chats" option (default history)
+        all_chats_item = Gtk.MenuItem(label="All Chats")
+        all_chats_item.connect("activate", self._on_project_selected, "")
+        menu.append(all_chats_item)
+        
+        menu.append(Gtk.SeparatorMenuItem())
+        
+        # List existing projects
+        if self._controller:
+            projects_repo = getattr(self._controller, '_projects_repo', None)
+            if projects_repo:
+                for project in projects_repo.list_all():
+                    item = Gtk.MenuItem(label=project.name)
+                    item.connect("activate", self._on_project_selected, project.id)
+                    menu.append(item)
+        
+        menu.append(Gtk.SeparatorMenuItem())
+        
+        # "New Project..." option
+        new_project_item = Gtk.MenuItem(label="New Project...")
+        new_project_item.connect("activate", self._on_new_project)
+        menu.append(new_project_item)
+        
+        # "Manage Projects..." option
+        manage_item = Gtk.MenuItem(label="Manage Projects...")
+        manage_item.connect("activate", self._on_manage_projects)
+        menu.append(manage_item)
+        
+        menu.show_all()
+        self.project_button.set_popup(menu)
+        
+        # Update button tooltip with current project
+        self._update_project_button_tooltip()
+    
+    def _update_project_button_tooltip(self) -> None:
+        """Update project button tooltip to show current project."""
+        if self._controller:
+            current = self._controller.get_setting('CURRENT_PROJECT', '')
+            if current:
+                projects_repo = getattr(self._controller, '_projects_repo', None)
+                if projects_repo:
+                    project = projects_repo.get(current)
+                    if project:
+                        self.project_button.set_tooltip_text(f"Project: {project.name}")
+                        return
+            self.project_button.set_tooltip_text("Project: All Chats")
+    
+    def _on_project_selected(self, menu_item, project_id: str) -> None:
+        """Handle project selection from menu."""
+        if self._controller:
+            self._controller.switch_project(project_id)
+            self._update_project_button_tooltip()
+            self.refresh()
+    
+    def _on_new_project(self, menu_item) -> None:
+        """Handle new project creation."""
+        if not self._controller:
+            return
+        
+        dialog = Gtk.Dialog(
+            title="New Project",
+            transient_for=self.widget.get_toplevel(),
+            flags=0
+        )
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Create", Gtk.ResponseType.OK)
+        
+        box = dialog.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        
+        label = Gtk.Label(label="Project Name:")
+        label.set_xalign(0)
+        box.add(label)
+        
+        entry = Gtk.Entry()
+        entry.set_activates_default(True)
+        box.add(entry)
+        
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.show_all()
+        
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            name = entry.get_text().strip()
+            if name:
+                projects_repo = getattr(self._controller, '_projects_repo', None)
+                if projects_repo:
+                    project = projects_repo.create(name)
+                    self._controller.switch_project(project.id)
+                    self._build_project_menu()
+                    self.refresh()
+        
+        dialog.destroy()
+    
+    def _on_manage_projects(self, menu_item) -> None:
+        """Open project management dialog."""
+        if not self._controller:
+            return
+        
+        from dialogs import show_manage_projects_dialog
+        show_manage_projects_dialog(
+            self.widget.get_toplevel(),
+            self._controller,
+            on_change=lambda: (self._build_project_menu(), self.refresh())
+        )
+    
+    def refresh_project_menu(self) -> None:
+        """Rebuild the project menu (call after project changes)."""
+        self._build_project_menu()

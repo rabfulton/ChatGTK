@@ -10,6 +10,7 @@ from .chat_history_repository import ChatHistoryRepository
 from .settings_repository import SettingsRepository
 from .api_keys_repository import APIKeysRepository
 from .model_cache_repository import ModelCacheRepository
+from .projects_repository import ProjectsRepository, Project, PROJECTS_DIR
 
 __all__ = [
     'Repository',
@@ -17,4 +18,7 @@ __all__ = [
     'SettingsRepository',
     'APIKeysRepository',
     'ModelCacheRepository',
+    'ProjectsRepository',
+    'Project',
+    'PROJECTS_DIR',
 ]

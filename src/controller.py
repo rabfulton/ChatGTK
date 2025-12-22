@@ -37,8 +37,9 @@ from utils import (
     load_api_keys,
     load_custom_models,
     save_custom_models,
+    set_history_dir_getter as set_utils_history_dir_getter,
 )
-from ai_providers import get_ai_provider
+from ai_providers import get_ai_provider, set_history_dir_getter as set_ai_history_dir_getter
 from conversation import (
     create_system_message,
     create_user_message,
@@ -87,8 +88,15 @@ class ChatController:
         # Initialize repositories
         self._settings_repo = settings_repo or SettingsRepository()
         self._api_keys_repo = api_keys_repo or APIKeysRepository()
-        self._chat_history_repo = chat_history_repo or ChatHistoryRepository()
         self._model_cache_repo = model_cache_repo or ModelCacheRepository()
+        
+        # Initialize projects repository
+        from repositories import ProjectsRepository
+        self._projects_repo = ProjectsRepository()
+        
+        # Initialize chat history repo with current project's history dir
+        self._chat_history_repo = chat_history_repo
+        self._init_history_repo_for_project()
         
         # Initialize event bus
         self._event_bus = event_bus or get_event_bus()
@@ -245,6 +253,85 @@ class ChatController:
     def memory_service(self):
         """Access the memory service (may be None if unavailable)."""
         return self._memory_service
+
+    # -----------------------------------------------------------------------
+    # Project management
+    # -----------------------------------------------------------------------
+
+    def _init_history_repo_for_project(self) -> None:
+        """Initialize chat history repository for the current project."""
+        from config import HISTORY_DIR
+        
+        current_project = self._settings_repo.get('CURRENT_PROJECT', '')
+        
+        if current_project:
+            history_dir = self._projects_repo.get_history_dir(current_project)
+        else:
+            history_dir = HISTORY_DIR
+        
+        self._chat_history_repo = ChatHistoryRepository(history_dir=history_dir)
+        
+        # Update chat service with new repository
+        if hasattr(self, '_chat_service'):
+            self._chat_service._history_repo = self._chat_history_repo
+        
+        # Update modules to use current history dir
+        set_ai_history_dir_getter(lambda: history_dir)
+        set_utils_history_dir_getter(lambda: history_dir)
+
+    def switch_project(self, project_id: str) -> None:
+        """Switch to a different project.
+        
+        Parameters
+        ----------
+        project_id : str
+            The project ID to switch to, or empty string for default history.
+        """
+        # Save current project setting
+        self._settings_manager.set('CURRENT_PROJECT', project_id)
+        self._settings_manager.save()
+        
+        # Reinitialize history repository
+        self._init_history_repo_for_project()
+        
+        # Clear current chat state
+        self.current_chat_id = None
+        self.conversation_history = [
+            create_system_message(self.system_message)
+        ]
+        
+        # Emit event for UI refresh
+        self._event_bus.publish(Event(
+            type=EventType.CHAT_CREATED,
+            data={'chat_id': '', 'project_switched': True},
+            source='controller'
+        ))
+
+    def get_current_project(self) -> Optional[str]:
+        """Get the current project ID (empty string for default)."""
+        return self._settings_manager.get('CURRENT_PROJECT', '')
+
+    def get_current_history_dir(self) -> str:
+        """Get the current history directory path."""
+        return str(self._chat_history_repo.history_dir)
+
+    def move_chat_to_project(self, chat_id: str, project_id: str) -> bool:
+        """Move a chat to a project (or default history if project_id is empty).
+        
+        Parameters
+        ----------
+        chat_id : str
+            The chat ID to move.
+        project_id : str
+            The target project ID, or empty string for default history.
+            
+        Returns
+        -------
+        bool
+            True if successful.
+        """
+        source_dir = str(self._chat_history_repo.history_dir)
+        return self._projects_repo.move_chat_to_project(chat_id, source_dir, project_id)
 
     # -----------------------------------------------------------------------
     # System prompts management
