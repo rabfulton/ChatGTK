@@ -19,6 +19,7 @@ class EventType(Enum):
     MESSAGE_SENT = auto()
     MESSAGE_RECEIVED = auto()
     MESSAGE_STREAMING = auto()
+    MESSAGE_DELETED = auto()
     
     # Model events
     MODELS_FETCHED = auto()

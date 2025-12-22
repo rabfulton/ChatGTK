@@ -926,8 +926,8 @@ class CustomProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                # Always add stripped result to snippets for UI display
-                if tool_result:
+                # Add to snippets for UI display only if not hidden
+                if tool_result and not should_hide_tool_result(tool_result):
                     tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
@@ -943,7 +943,7 @@ class CustomProvider(AIProvider):
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": "Image generated successfully." if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
@@ -1658,8 +1658,8 @@ class OpenAIProvider(AIProvider):
                 parsed_args = parse_tool_arguments(fc["arguments"])
                 tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
                 
-                # Always add stripped result to snippets for UI display
-                if tool_result:
+                # Add to snippets for UI display only if not hidden
+                if tool_result and not should_hide_tool_result(tool_result):
                     tool_result_snippets.append(strip_hide_prefix(tool_result))
                 
                 # Add the function call and its result to the conversation
@@ -1675,7 +1675,7 @@ class OpenAIProvider(AIProvider):
                 current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
-                    "output": "Image generated successfully." if should_hide_tool_result(tool_result) else strip_hide_prefix(tool_result) if tool_result else "",
+                    "output": strip_hide_prefix(tool_result) if tool_result else "",
                 })
         
         # If we exhausted tool rounds, return what we have
