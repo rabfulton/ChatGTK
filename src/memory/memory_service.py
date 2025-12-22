@@ -171,6 +171,10 @@ class MemoryService:
         
         return result
     
+    def delete_conversation_memories(self, conversation_id: str) -> int:
+        """Delete all memories for a conversation. Returns count deleted."""
+        return self._repository.delete_by_conversation(conversation_id)
+    
     def clear_all_memories(self) -> None:
         """Delete all memories."""
         self._repository.delete_all()

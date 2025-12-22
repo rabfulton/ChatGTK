@@ -419,7 +419,7 @@ def run_tool_call(
 
     elif tool_name == "search_memory":
         if context.search_handler is None:
-            return "Error: search/memory tool is not available."
+            return "Error: search tool is not available."
         keyword = args.get("keyword", "")
         source = args.get("source", "history")
         try:

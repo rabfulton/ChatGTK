@@ -287,6 +287,8 @@ SETTINGS_CONFIG = {
     'SEARCH_DIRECTORIES': {'type': str, 'default': ''},
     # Maximum number of search results to return to the model (1-5).
     'SEARCH_RESULT_LIMIT': {'type': int, 'default': 1},
+    # Number of characters to show before and after a search match.
+    'SEARCH_CONTEXT_WINDOW': {'type': int, 'default': 200},
     # Whether to show search results in the chat output (if False, results are only sent to the model).
     'SEARCH_SHOW_RESULTS': {'type': bool, 'default': False},
     # --- Memory System Settings ---
@@ -301,7 +303,7 @@ SETTINGS_CONFIG = {
     # Number of memory results to retrieve (1-10).
     'MEMORY_RETRIEVAL_TOP_K': {'type': int, 'default': 5},
     # Minimum similarity score for retrieval (0.0-1.0).
-    'MEMORY_MIN_SIMILARITY': {'type': float, 'default': 0.3},
+    'MEMORY_MIN_SIMILARITY': {'type': float, 'default': 0.5},
     # Whether to automatically add new messages to memory.
     'MEMORY_AUTO_IMPORT': {'type': bool, 'default': True},
     'MEMORY_AUTO_IMPORT': {'type': bool, 'default': True},

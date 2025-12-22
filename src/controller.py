@@ -504,12 +504,21 @@ class ChatController:
         return self._chat_service.list_chats()
 
     def delete_chat(self, chat_id: str) -> bool:
-        """Delete a chat via service."""
+        """Delete a chat via service, including associated memories."""
+        # Delete memories for this conversation if memory service is available
+        if self._memory_service:
+            try:
+                deleted = self._memory_service.delete_conversation_memories(chat_id)
+                if deleted:
+                    print(f"[Memory] Deleted {deleted} memories for chat {chat_id}")
+            except Exception as e:
+                print(f"[Memory] Error deleting memories for chat {chat_id}: {e}")
+        
         return self._chat_service.delete_chat(chat_id)
 
-    def search_history(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_history(self, query: str, limit: int = 10, context_window: int = 200) -> List[Dict[str, Any]]:
         """Search chat histories via service."""
-        return self._chat_service.search_history(query, limit, exclude_chat_id=self.current_chat_id)
+        return self._chat_service.search_history(query, limit, exclude_chat_id=self.current_chat_id, context_window=context_window)
 
     # -----------------------------------------------------------------------
     # Tool handlers (UI-agnostic implementations)
@@ -624,14 +633,16 @@ class ChatController:
         search_history_enabled = self._settings_manager.get('SEARCH_HISTORY_ENABLED', True)
         search_directories = self._settings_manager.get('SEARCH_DIRECTORIES', '') or ''
         result_limit = max(1, min(5, int(self._settings_manager.get('SEARCH_RESULT_LIMIT', 1))))
+        context_window = max(50, min(500, int(self._settings_manager.get('SEARCH_CONTEXT_WINDOW', 200))))
         show_results = self._settings_manager.get('SEARCH_SHOW_RESULTS', False)
         
-        pattern = re.compile(r'\b' + re.escape(keyword) + r'\b', re.IGNORECASE)
+        # Pattern with optional plural 's'
+        pattern = re.compile(r'\b' + re.escape(keyword) + r's?\b', re.IGNORECASE)
         results = []
         
-        # Search history
+        # Search history - pass context_window to repository
         if search_history_enabled and source in ("history", "all"):
-            search_results = self.search_history(keyword, result_limit)
+            search_results = self.search_history(keyword, result_limit, context_window)
             for sr in search_results:
                 matches_text = "\n".join(sr.get('matches', [])[:3])
                 results.append({
@@ -656,14 +667,19 @@ class ChatController:
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                 content = f.read()
-                            if pattern.search(content):
+                            match = pattern.search(content)
+                            if match:
                                 # Extract context around match
-                                match = pattern.search(content)
-                                start = max(0, match.start() - 100)
-                                end = min(len(content), match.end() + 100)
+                                start = max(0, match.start() - context_window)
+                                end = min(len(content), match.end() + context_window)
+                                snippet = content[start:end]
+                                if start > 0:
+                                    snippet = '...' + snippet
+                                if end < len(content):
+                                    snippet = snippet + '...'
                                 results.append({
                                     "source": filepath,
-                                    "content": f"...{content[start:end]}..."
+                                    "content": snippet
                                 })
                         except Exception:
                             pass
@@ -973,38 +989,45 @@ class ChatController:
         return messages
 
     def _get_memory_context_for_query(self) -> str:
-        """Get memory context for the last user message."""
+        """Get memory context based on recent conversation."""
         if not self._memory_service:
             return ""
         
         if not self._settings_manager.get('MEMORY_ENABLED', False):
             return ""
         
-        # Get the last user message as query
-        last_user_msg = None
+        # Build query from last few messages for better context
+        query_parts = []
+        msg_count = 0
         for msg in reversed(self.conversation_history):
-            if msg.get("role") == "user":
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    # Handle vision messages
-                    text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
-                    last_user_msg = " ".join(text_parts)
-                else:
-                    last_user_msg = content
-                break
+            role = msg.get("role", "")
+            if role == "system":
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                content = " ".join(text_parts)
+            if content:
+                query_parts.insert(0, content)
+                msg_count += 1
+                if msg_count >= 3:  # Last 3 messages for context
+                    break
         
-        if not last_user_msg:
+        if not query_parts:
             return ""
+        
+        # Combine recent messages, prioritizing the last user message
+        query_text = " ".join(query_parts)[-1000:]  # Limit query length
         
         try:
             context = self._memory_service.get_context_for_llm(
-                query_text=last_user_msg,
+                query_text=query_text,
                 k=self._settings_manager.get('MEMORY_RETRIEVAL_TOP_K', 5),
-                min_score=self._settings_manager.get('MEMORY_MIN_SIMILARITY', 0.3),
+                min_score=self._settings_manager.get('MEMORY_MIN_SIMILARITY', 0.5),
                 exclude_conversation_id=self.current_chat_id,
             )
             if context:
-                print(f"[Memory] Found relevant memories for query: {last_user_msg[:50]}...")
+                print(f"[Memory] Found relevant memories for query: {query_text[:80]}...")
             return context
         except Exception as e:
             print(f"[Memory] Error querying memory: {e}")

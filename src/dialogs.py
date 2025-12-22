@@ -2020,7 +2020,7 @@ class SettingsDialog(Gtk.Dialog):
         header_row.add(header_box)
         header_label = Gtk.Label()
         header_label.set_xalign(0)
-        header_label.set_markup("<b>Search/Memory Tool</b>")
+        header_label.set_markup("<b>Search Tool</b>")
         header_box.pack_start(header_label, True, True, 0)
         list_box.add(header_row)
 
@@ -2029,7 +2029,7 @@ class SettingsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Enable Search/Memory Tool", xalign=0)
+        label = Gtk.Label(label="Enable Search Tool", xalign=0)
         label.set_hexpand(True)
         self.switch_search_tool_settings = Gtk.Switch()
         current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
@@ -2083,6 +2083,20 @@ class SettingsDialog(Gtk.Dialog):
         self.combo_search_result_limit.set_active(max(0, min(4, current_limit - 1)))
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.combo_search_result_limit, False, True, 0)
+        list_box.add(row)
+
+        # Context Window setting
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Context Window", xalign=0)
+        label.set_tooltip_text("Characters to show before and after each search match (50-500)")
+        label.set_hexpand(True)
+        self.spin_search_context_window = Gtk.SpinButton.new_with_range(50, 500, 50)
+        self.spin_search_context_window.set_value(int(getattr(self, "search_context_window", 200)))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_search_context_window, False, True, 0)
         list_box.add(row)
 
         # Show Results in Chat checkbox
@@ -2299,6 +2313,7 @@ class SettingsDialog(Gtk.Dialog):
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Results to retrieve", xalign=0)
+        label.set_tooltip_text("Maximum number of relevant memories to inject into conversation context (1-10)")
         label.set_hexpand(True)
         self.spin_memory_top_k = Gtk.SpinButton.new_with_range(1, 10, 1)
         self.spin_memory_top_k.set_value(getattr(self, "memory_retrieval_top_k", 5))
@@ -2312,10 +2327,11 @@ class SettingsDialog(Gtk.Dialog):
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label="Min similarity score", xalign=0)
+        label.set_tooltip_text("Minimum similarity threshold (0.0-1.0). Higher = stricter matching.\n0.7+ very related, 0.5-0.7 related, <0.5 loosely related")
         label.set_hexpand(True)
         self.spin_memory_min_sim = Gtk.SpinButton.new_with_range(0.0, 1.0, 0.05)
         self.spin_memory_min_sim.set_digits(2)
-        self.spin_memory_min_sim.set_value(getattr(self, "memory_min_similarity", 0.3))
+        self.spin_memory_min_sim.set_value(getattr(self, "memory_min_similarity", 0.5))
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.spin_memory_min_sim, False, True, 0)
         list_box.add(row)
@@ -4436,6 +4452,7 @@ class SettingsDialog(Gtk.Dialog):
             'search_history_enabled': self.switch_search_history.get_active(),
             'search_directories': self.entry_search_directories.get_text().strip(),
             'search_result_limit': int(self.combo_search_result_limit.get_active_text() or '1'),
+            'search_context_window': int(self.spin_search_context_window.get_value()),
             'search_show_results': self.switch_search_show_results.get_active(),
             # Memory settings (only if available)
             'memory_enabled': getattr(self, 'switch_memory_enabled', None) and self.switch_memory_enabled.get_active() or False,
@@ -4764,7 +4781,7 @@ class ToolsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Enable Search/Memory Tool", xalign=0)
+        label = Gtk.Label(label="Enable Search Tool", xalign=0)
         label.set_hexpand(True)
         self.switch_search_tool = Gtk.Switch()
         current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
