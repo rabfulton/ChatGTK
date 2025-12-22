@@ -185,7 +185,7 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
   - To use the tools just ask your model "Write me a short poem and read it aloud".
 
-- **Search/Memory tool (`search_memory`)**
+- **Search tool (`search_memory`)**
   - Disabled by default; enable via **Enable Search Tool** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
   - Allows models to search past conversations and optionally configured directories for information using word-boundary matching (e.g., "dog" matches "dog," and "dog." but not "doggedly").
   - Searches both user questions and assistant responses from your conversation history (system messages are excluded).
@@ -205,6 +205,58 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - For **Gemini models**, this uses Grounding with Google Search via the `google_search` tool as documented in the Gemini API ([Gemini Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search)).
   - For Grok, this uses both a built-in `web_search` tool and a builtin `x_search` tool when appropriate.
   - Only models that support these tools will be configured to use them; when enabled, the assistant can automatically call web search when it needs fresh, real‑world information and return grounded answers with citations.
+
+## Memory System
+
+ChatGTK supports three complementary memory mechanisms that can be used separately or together to give your assistant context awareness:
+
+### 1. Conversation Buffer (Short-term Memory)
+Controls how many recent messages are sent to the model in each request.
+
+- Configure via **Settings → General → Conversation Buffer Length**
+- Options: `ALL` (entire conversation), or a specific number (e.g., `10`, `20`, `50`)
+- Setting a limit helps manage token costs for long conversations while keeping recent context
+- Acts as "working memory" - the model sees recent exchanges but older messages are not sent
+
+### 2. Search Tool (Long-term Recall)
+Allows the model to search past conversations and local documents using keyword matching.
+
+- Enable via **Tools** dialog or **Settings → Tool Options → Search/Memory Tool**
+- Uses word-boundary grep-style matching (e.g., "dog" matches "dog," but not "doggedly")
+- Can search:
+  - **Conversation history**: All saved chats (current conversation excluded)
+  - **Local directories**: Text files (.txt, .md, .json, .log, .csv) in configured folders
+- The model decides when to search based on user questions like "What did we discuss about X?"
+- Returns matching message snippets with source attribution
+- Configure **Show Results in Chat** to control whether results appear in the UI or only go to the model
+
+### 3. Semantic Memory (Vector Database)
+Provides intelligent, meaning-based recall using embeddings and a vector database.
+
+- Enable via **Settings → Memory** page
+- Requires optional dependencies: `qdrant-client` and optionally `sentence-transformers` for local embeddings
+- **Embedding Providers**:
+  - **Local**: Uses sentence-transformers (e.g., `all-MiniLM-L6-v2`) - runs offline, no API costs
+  - **OpenAI**: Uses `text-embedding-3-small` or other OpenAI embedding models
+  - **Gemini**: Uses Google's `text-embedding-004` model
+  - **Custom**: Any OpenAI-compatible `/v1/embeddings` endpoint, tested using `mistral-embed`
+- **How it works**:
+  - Messages are automatically converted to embeddings and stored in a local Qdrant database
+  - When you chat, relevant past context is retrieved based on semantic similarity
+  - Retrieved memories are injected into the conversation as additional context
+- **Configuration options**:
+  - **Store Mode**: Store `all` messages, only `user` messages, or only `assistant` messages
+  - **Auto Import**: Automatically store new messages as they occur
+  - **Top K**: Number of relevant memories to retrieve (1-20)
+  - **Min Similarity**: Threshold for memory relevance (0.0-1.0)
+- **Import existing history**: Use the **Import** button to index your existing conversation history
+- Unlike the Search Tool, semantic memory finds conceptually related content even without exact keyword matches
+
+### Combining Memory Types
+- Use **Conversation Buffer** for immediate context (what was just discussed)
+- Use **Search Tool** for explicit recall ("find where we talked about X")
+- Use **Semantic Memory** for automatic, intelligent context injection
+- All three can be enabled simultaneously for comprehensive memory coverage
 
 ## FAQ
 
@@ -229,16 +281,18 @@ install `texlive-fontsrecommended` from your package manager.
 - beets>=1.6.0 (optional, for music control tool)
 
 ### System Dependencies
-- python3
-- gtk-3.0
-- gtksourceview4
-- pulseaudio
-- texlive (for LaTeX support)
-- dvipng (for LaTeX rendering)
-- texlive-fontsrecommended (For better looking exported PDF's)
+- `python3`
+- `gtk-3.0`
+- `gtksourceview4`
+- `pulseaudio`
+- `texlive` (for LaTeX support)
+- `dvipng` (for LaTeX rendering)
+- `texlive-fontsrecommended` (For better looking exported PDF's)
 - Optional, for music control tool:
   - A music player such as `vlc` (configurable in Settings)
   - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
-  - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
+- `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
+- `qdrant-client`, `qdrant` Optional vector database for memory system
+- `sentence-transformers` Optional to support local embedding model for memory system
 
 <a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
