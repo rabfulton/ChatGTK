@@ -92,6 +92,15 @@ class HistorySidebar(UIComponent):
         self.subscribe(EventType.CHAT_DELETED, self._on_chat_event)
         self.subscribe(EventType.CHAT_LOADED, self._on_chat_loaded)
         self.subscribe(EventType.CHAT_CREATED, self._on_chat_event)
+        
+        # Set initial filter visibility from settings
+        show_filter = False
+        if self._controller:
+            show_filter = self._controller.get_setting('SIDEBAR_FILTER_VISIBLE', False)
+        self.search_toggle.set_active(show_filter)
+        self.filter_container.set_no_show_all(not show_filter)
+        if not show_filter:
+            self.filter_container.hide()
     
     def _build_ui(self) -> Gtk.Box:
         """Build the sidebar UI."""
@@ -101,7 +110,7 @@ class HistorySidebar(UIComponent):
         box.set_margin_start(10)
         box.set_margin_end(10)
         
-        # Top row: Project button + New Chat button
+        # Top row: Project button + Search toggle + New Chat button
         top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         
         # Project selector button (folder icon)
@@ -110,6 +119,13 @@ class HistorySidebar(UIComponent):
         self.project_button.set_tooltip_text("Select Project")
         self._build_project_menu()
         top_row.pack_start(self.project_button, False, False, 0)
+        
+        # Search/filter toggle button
+        self.search_toggle = Gtk.ToggleButton()
+        self.search_toggle.set_image(Gtk.Image.new_from_icon_name("edit-find-symbolic", Gtk.IconSize.BUTTON))
+        self.search_toggle.set_tooltip_text("Filter History")
+        self.search_toggle.connect("toggled", self._on_search_toggled)
+        top_row.pack_start(self.search_toggle, False, False, 0)
         
         # New Chat button
         new_chat_btn = Gtk.Button(label="New Chat")
@@ -131,6 +147,9 @@ class HistorySidebar(UIComponent):
         self.history_list.get_style_context().add_class('navigation-sidebar')
         scrolled.add(self.history_list)
         
+        # Filter container (hidden by default)
+        self.filter_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        
         # Filter entry
         filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.filter_entry = Gtk.Entry()
@@ -140,7 +159,7 @@ class HistorySidebar(UIComponent):
         self.filter_entry.connect("icon-press", self._on_filter_icon_pressed)
         self.filter_entry.connect("key-press-event", self._on_filter_keypress)
         filter_box.pack_start(self.filter_entry, True, True, 0)
-        box.pack_start(filter_box, False, False, 0)
+        self.filter_container.pack_start(filter_box, False, False, 0)
         
         # Filter options
         options_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -155,9 +174,29 @@ class HistorySidebar(UIComponent):
         self.whole_words_toggle.connect("toggled", self._on_whole_words_toggled)
         options_box.pack_start(self.whole_words_toggle, False, False, 0)
         
-        box.pack_start(options_box, False, False, 0)
+        self.filter_container.pack_start(options_box, False, False, 0)
+        
+        box.pack_start(self.filter_container, False, False, 0)
         
         return box
+    
+    def _on_search_toggled(self, button) -> None:
+        """Handle search toggle button."""
+        active = button.get_active()
+        self.filter_container.set_no_show_all(not active)
+        if active:
+            self.filter_container.show_all()
+            self.filter_entry.grab_focus()
+        else:
+            self.filter_container.hide()
+            self.filter_entry.set_text("")
+            self._filter_text = ""
+            self.refresh()
+        
+        # Save state
+        if self._controller:
+            self._controller._settings_manager.set('SIDEBAR_FILTER_VISIBLE', active)
+            self._controller._settings_manager.save()
     
     def refresh(self) -> None:
         """Refresh the history list from controller."""

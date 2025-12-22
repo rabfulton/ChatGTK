@@ -212,6 +212,7 @@ SETTINGS_CONFIG = {
     'REALTIME_VAD_THRESHOLD': {'type': float, 'default': 0.1},
     'MUTE_MIC_DURING_PLAYBACK': {'type': bool, 'default': True},
     'SIDEBAR_VISIBLE': {'type': bool, 'default': True},
+    'SIDEBAR_FILTER_VISIBLE': {'type': bool, 'default': False},
     'SIDEBAR_WIDTH': {'type': int, 'default': 200},
     'MAX_TOKENS': {'type': int, 'default': 0},
     # Conversation buffer length controls how much of the history is sent with
