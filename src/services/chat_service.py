@@ -30,6 +30,7 @@ class ChatService:
         settings_repo: SettingsRepository,
         api_keys_repo: APIKeysRepository,
         event_bus: Optional[EventBus] = None,
+        settings_manager=None,
     ):
         """
         Initialize the chat service.
@@ -44,11 +45,14 @@ class ChatService:
             Repository for API keys.
         event_bus : Optional[EventBus]
             Event bus for publishing events.
+        settings_manager : Optional[SettingsManager]
+            Optional settings manager for centralized reads.
         """
         self._history_repo = history_repo
         self._settings_repo = settings_repo
         self._api_keys_repo = api_keys_repo
         self._event_bus = event_bus
+        self._settings_manager = settings_manager
     
     def _emit(self, event_type: EventType, **data) -> None:
         """Emit an event if event bus is configured."""
@@ -71,7 +75,16 @@ class ChatService:
             The new chat ID.
         """
         if system_message is None:
-            system_message = self._settings_repo.get('SYSTEM_MESSAGE', 'You are a helpful assistant.')
+            if self._settings_manager is not None:
+                system_message = self._settings_manager.get(
+                    'SYSTEM_MESSAGE',
+                    'You are a helpful assistant.'
+                )
+            else:
+                system_message = self._settings_repo.get(
+                    'SYSTEM_MESSAGE',
+                    'You are a helpful assistant.'
+                )
         
         # Create conversation history with system message
         history = ConversationHistory(system_message=system_message)
@@ -241,4 +254,3 @@ class ChatService:
         
         return messages
     
-

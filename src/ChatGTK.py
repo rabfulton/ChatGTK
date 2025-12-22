@@ -98,10 +98,8 @@ class OpenAIGTKClient(Gtk.Window):
         self._init_event_subscriptions()
 
         # Load and apply settings (for UI settings like window_width, font_size, etc.)
-        # Note: settings like system_message will be routed to controller via properties
-        # Settings are loaded via controller's settings_manager
-        loaded = self.controller.settings_manager.get_all()
-        apply_settings(self, loaded)
+        # Note: settings like system_message will be routed to controller via properties.
+        self._sync_settings_from_manager()
         
         # Initialize window
         self.set_default_size(self.window_width, self.window_height)
@@ -135,7 +133,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_chat_selected=self.load_chat_by_filename,
             on_new_chat=lambda: self.on_new_chat_clicked(None),
             on_context_menu=self._on_sidebar_context_menu,
-            width=int(getattr(self, 'sidebar_width', 200)),
+            width=int(self.settings.get('SIDEBAR_WIDTH', 200)),
         )
         self.sidebar = self._history_sidebar.widget
         # Expose history_list for backward compatibility
@@ -159,7 +157,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.paned.pack2(vbox_main, True, False)
 
         # Track sidebar width in memory
-        self.current_sidebar_width = int(getattr(self, 'sidebar_width', 200))
+        self.current_sidebar_width = int(self.settings.get('SIDEBAR_WIDTH', 200))
         self._sidebar_initialized = False
 
         # Update memory value without saving to file
@@ -183,7 +181,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_sidebar_toggle=lambda: self.on_sidebar_toggle(None),
             on_settings=lambda: self.on_open_settings(None),
             on_tools=lambda: self.on_open_tools(None),
-            sidebar_visible=getattr(self, 'sidebar_visible', True),
+            sidebar_visible=self.settings.get('SIDEBAR_VISIBLE', True),
         )
         self.sidebar_button = self._toolbar.sidebar_button
         
@@ -228,8 +226,8 @@ class OpenAIGTKClient(Gtk.Window):
         self._chat_view = ChatView(
             event_bus=self.controller.event_bus,
             window=self,
-            ai_name=self.ai_name,
-            ai_color=self.ai_color,
+            ai_name=self.settings.get('AI_NAME', 'Assistant'),
+            ai_color=self.settings.get('AI_COLOR', '#0D47A1'),
             on_cancel=self._on_thinking_cancelled,
         )
         vbox_main.pack_start(self._chat_view.widget, True, True, 0)
@@ -250,7 +248,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_open_prompt_editor=lambda: self.on_open_prompt_editor(None),
         )
         # Apply user's configured font size
-        self._input_panel.apply_font_size(getattr(self, 'font_size', 12))
+        self._input_panel.apply_font_size(self.settings.get('FONT_SIZE', 12))
         vbox_main.pack_start(self._input_panel.widget, False, False, 0)
         
         # Expose widgets for backward compatibility
@@ -481,7 +479,7 @@ class OpenAIGTKClient(Gtk.Window):
     def _get_shortcuts(self) -> dict:
         """Get keyboard shortcuts from settings, merged with defaults."""
         from config import DEFAULT_SHORTCUTS
-        shortcuts_json = getattr(self, 'keyboard_shortcuts', '')
+        shortcuts_json = self.settings.get('KEYBOARD_SHORTCUTS', '')
         try:
             shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
         except json.JSONDecodeError:
@@ -536,7 +534,7 @@ class OpenAIGTKClient(Gtk.Window):
             return True
         elif action.startswith('model_'):
             # Get configured model for this slot
-            model_shortcuts_json = getattr(self, 'model_shortcuts', '{}')
+            model_shortcuts_json = self.settings.get('MODEL_SHORTCUTS', '{}')
             try:
                 model_shortcuts = json.loads(model_shortcuts_json) if model_shortcuts_json else {}
             except json.JSONDecodeError:
@@ -640,14 +638,14 @@ class OpenAIGTKClient(Gtk.Window):
     def _init_message_renderer(self):
         """Initialize the MessageRenderer with current settings and callbacks."""
         settings = RenderSettings(
-            font_size=self.font_size,
-            font_family=self.font_family,
-            ai_color=self.ai_color,
-            user_color=self.user_color,
-            ai_name=self.ai_name,
-            source_theme=self.source_theme,
-            latex_color=self.latex_color,
-            latex_dpi=getattr(self, 'latex_dpi', 200),
+            font_size=self.settings.get('FONT_SIZE', 12),
+            font_family=self.settings.get('FONT_FAMILY', 'Sans'),
+            ai_color=self.settings.get('AI_COLOR', '#0D47A1'),
+            user_color=self.settings.get('USER_COLOR', '#2E7D32'),
+            ai_name=self.settings.get('AI_NAME', 'Assistant'),
+            source_theme=self.settings.get('SOURCE_THEME', 'solarized-dark'),
+            latex_color=self.settings.get('LATEX_COLOR', '#000000'),
+            latex_dpi=self.settings.get('LATEX_DPI', 200),
         )
         callbacks = RenderCallbacks(
             on_context_menu=self.create_message_context_menu,
@@ -673,19 +671,24 @@ class OpenAIGTKClient(Gtk.Window):
         """Update renderer settings after settings change."""
         if hasattr(self, 'message_renderer'):
             self.message_renderer.settings = RenderSettings(
-                font_size=self.font_size,
-                font_family=self.font_family,
-                ai_color=self.ai_color,
-                user_color=self.user_color,
-                ai_name=self.ai_name,
-                source_theme=self.source_theme,
-                latex_color=self.latex_color,
-                latex_dpi=getattr(self, 'latex_dpi', 200),
+                font_size=self.settings.get('FONT_SIZE', 12),
+                font_family=self.settings.get('FONT_FAMILY', 'Sans'),
+                ai_color=self.settings.get('AI_COLOR', '#0D47A1'),
+                user_color=self.settings.get('USER_COLOR', '#2E7D32'),
+                ai_name=self.settings.get('AI_NAME', 'Assistant'),
+                source_theme=self.settings.get('SOURCE_THEME', 'solarized-dark'),
+                latex_color=self.settings.get('LATEX_COLOR', '#000000'),
+                latex_dpi=self.settings.get('LATEX_DPI', 200),
             )
 
     # -----------------------------------------------------------------------
     # System prompts management - delegated to controller
     # -----------------------------------------------------------------------
+
+    @property
+    def settings(self):
+        """Convenience access to settings manager."""
+        return self.controller.settings_manager
 
     @property
     def current_chat_id(self):
@@ -836,6 +839,10 @@ class OpenAIGTKClient(Gtk.Window):
         # Tool events
         bus.subscribe(EventType.TOOL_EXECUTED, self._on_tool_executed_event)
         bus.subscribe(EventType.TOOL_RESULT, self._on_tool_result_event)
+
+    def _sync_settings_from_manager(self):
+        """Sync object attributes from SettingsManager for legacy attribute reads."""
+        self.controller.settings_manager.apply_to_object(self)
 
     def _on_settings_changed_event(self, event):
         """Handle SETTINGS_CHANGED event - update UI if needed."""
@@ -1216,7 +1223,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         try:
             # Use unified TTS settings (tts_voice_provider)
-            provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+            provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
             
             # Check if this is a custom TTS model
             custom_models = getattr(self, 'custom_models', {}) or {}
@@ -1324,6 +1331,7 @@ class OpenAIGTKClient(Gtk.Window):
             save_object_settings(self)
             # Reload settings manager cache so controller sees updated values
             self.controller.settings_manager.reload()
+            self._sync_settings_from_manager()
 
             # Update message renderer settings and refresh existing message colors
             self._update_message_renderer_settings()
@@ -1460,6 +1468,7 @@ class OpenAIGTKClient(Gtk.Window):
             save_object_settings(self)
             # Reload settings manager cache so controller sees updated values
             self.controller.settings_manager.reload()
+            self._sync_settings_from_manager()
             # Update toolbar indicators
             self._update_tool_indicators()
         dialog.destroy()
@@ -2525,7 +2534,10 @@ class OpenAIGTKClient(Gtk.Window):
     def show_thinking_animation(self):
         """Show thinking animation - delegated to ChatView component."""
         if hasattr(self, '_chat_view'):
-            self._chat_view.set_ai_style(self.ai_name, self.ai_color)
+            self._chat_view.set_ai_style(
+                self.settings.get('AI_NAME', 'Assistant'),
+                self.settings.get('AI_COLOR', '#0D47A1')
+            )
             self._chat_view.show_thinking()
 
     def hide_thinking_animation(self):
@@ -2908,7 +2920,7 @@ class OpenAIGTKClient(Gtk.Window):
         already read aloud, clicking the play button will replay the cached audio.
         """
         btn_speak = Gtk.Button()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_speak.set_size_request(button_size, button_size)
         
         icon_play = Gtk.Image.new_from_icon_name("media-playback-start", Gtk.IconSize.SMALL_TOOLBAR)
@@ -2956,7 +2968,7 @@ class OpenAIGTKClient(Gtk.Window):
                             return
                         
                         # No cached file, use TTS synthesis based on current provider
-                        provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+                        provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
                         
                         # Check if this is a custom TTS model
                         custom_models = getattr(self, 'custom_models', {}) or {}
@@ -3021,7 +3033,7 @@ class OpenAIGTKClient(Gtk.Window):
         with the next question for editing.
         """
         btn_edit = Gtk.ToggleButton()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_edit.set_size_request(button_size, button_size)
         
         icon_edit = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
@@ -3073,7 +3085,7 @@ class OpenAIGTKClient(Gtk.Window):
     def create_save_button(self, image_path: str):
         """Create a save button for generated images."""
         btn_save = Gtk.Button()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_save.set_size_request(button_size, button_size)
         
         icon_save = Gtk.Image.new_from_icon_name("document-save-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
@@ -3086,7 +3098,7 @@ class OpenAIGTKClient(Gtk.Window):
     def create_copy_button(self, message_index: int):
         """Create a copy button to copy message text to clipboard."""
         btn_copy = Gtk.Button()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_copy.set_size_request(button_size, button_size)
         
         icon_copy = Gtk.Image.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
@@ -3118,9 +3130,9 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _get_tts_cache_path(self, text: str, chat_id: str) -> Path:
         """Get cache path - delegated to AudioService."""
-        provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
-        voice = getattr(self, 'tts_voice', None) or 'alloy'
-        model = "tts-1-hd" if provider == 'openai' and self.tts_hd else "tts-1"
+        provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
+        voice = self.settings.get('TTS_VOICE', None) or 'alloy'
+        model = "tts-1-hd" if provider == 'openai' and self.settings.get('TTS_HD', False) else "tts-1"
         return self.controller.audio_service._get_cache_path(
             self.controller.audio_service._clean_tts_text(text),
             chat_id, f"{provider}_{model}", voice
@@ -3139,8 +3151,8 @@ class OpenAIGTKClient(Gtk.Window):
             provider=provider,
             stop_event=stop_event,
             chat_id=chat_id,
-            voice=getattr(self, 'tts_voice', 'alloy'),
-            model='tts-1-hd' if self.tts_hd else 'tts-1',
+            voice=self.settings.get('TTS_VOICE', 'alloy'),
+            model='tts-1-hd' if self.settings.get('TTS_HD', False) else 'tts-1',
         )
         return result
 
@@ -3158,8 +3170,8 @@ class OpenAIGTKClient(Gtk.Window):
             stop_event=stop_event,
             chat_id=chat_id,
             model_id=model_id,
-            voice=getattr(self, 'tts_voice', 'alloy'),
-            prompt_template=getattr(self, 'tts_prompt_template', '') or 'Please say the following verbatim: "{text}"',
+            voice=self.settings.get('TTS_VOICE', 'alloy'),
+            prompt_template=self.settings.get('TTS_PROMPT_TEMPLATE', '') or 'Please say the following verbatim: "{text}"',
         )
 
     def _synthesize_and_play_gemini_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
@@ -3175,8 +3187,8 @@ class OpenAIGTKClient(Gtk.Window):
             provider=provider,
             stop_event=stop_event,
             chat_id=chat_id,
-            voice=getattr(self, 'tts_voice', 'Kore'),
-            prompt_template=getattr(self, 'tts_prompt_template', ''),
+            voice=self.settings.get('TTS_VOICE', 'Kore'),
+            prompt_template=self.settings.get('TTS_PROMPT_TEMPLATE', ''),
         )
 
     def _synthesize_and_play_custom_tts(self, text: str, *, chat_id: str, model_id: str, stop_event: threading.Event = None) -> bool:
@@ -3191,7 +3203,7 @@ class OpenAIGTKClient(Gtk.Window):
             return False
         
         # Determine voice
-        selected_voice = getattr(self, 'tts_voice', None) or ''
+        selected_voice = self.settings.get('TTS_VOICE', None) or ''
         cfg_voice = (cfg.get('voice') or '').strip()
         cfg_voices = cfg.get('voices', [])
         if isinstance(cfg_voices, list):
@@ -3229,7 +3241,7 @@ class OpenAIGTKClient(Gtk.Window):
         Runs in a background thread to avoid blocking the UI.
         """
         # Check if read aloud is enabled
-        if not getattr(self, 'read_aloud_enabled', False):
+        if not self.settings.get('READ_ALOUD_ENABLED', False):
             return
         
         # Use current chat_id if not specified
@@ -3244,7 +3256,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         def read_aloud_thread():
             # Use unified TTS settings (tts_voice_provider)
-            provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+            provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
             
             # Check if this is a custom TTS model
             custom_models = getattr(self, 'custom_models', {}) or {}
@@ -3349,8 +3361,11 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _get_realtime_prompt(self):
         """Return the realtime prompt with the AI name substituted."""
-        template = getattr(self, "realtime_prompt", "") or "Your name is {name}, speak quickly and professionally"
-        ai_name = getattr(self, "ai_name", "") or "Assistant"
+        template = self.settings.get(
+            'REALTIME_PROMPT',
+            "Your name is {name}, speak quickly and professionally"
+        )
+        ai_name = self.settings.get('AI_NAME', 'Assistant')
         return template.replace("{name}", ai_name)
 
     def _is_latex_math_image(self, img_path: str) -> bool:

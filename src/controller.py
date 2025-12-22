@@ -93,19 +93,19 @@ class ChatController:
         # Initialize projects repository
         from repositories import ProjectsRepository
         self._projects_repo = ProjectsRepository()
-        
-        # Initialize chat history repo with current project's history dir
-        self._chat_history_repo = chat_history_repo
-        self._init_history_repo_for_project()
-        
+
         # Initialize event bus
         self._event_bus = event_bus or get_event_bus()
-        
+
         # Initialize settings manager
         self._settings_manager = settings_manager or SettingsManager(
             repository=self._settings_repo,
             event_bus=self._event_bus,
         )
+
+        # Initialize chat history repo with current project's history dir
+        self._chat_history_repo = chat_history_repo
+        self._init_history_repo_for_project()
         
         # Initialize services with event bus
         self._chat_service = ChatService(
@@ -113,6 +113,7 @@ class ChatController:
             settings_repo=self._settings_repo,
             api_keys_repo=self._api_keys_repo,
             event_bus=self._event_bus,
+            settings_manager=self._settings_manager,
         )
         self._image_service = ImageGenerationService(
             chat_history_repo=self._chat_history_repo,
@@ -152,6 +153,7 @@ class ChatController:
         self._tool_service = ToolService(
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
+            settings_manager=self._settings_manager,
         )
         
         # Initialize memory service (optional - only if dependencies available)
@@ -261,8 +263,8 @@ class ChatController:
     def _init_history_repo_for_project(self) -> None:
         """Initialize chat history repository for the current project."""
         from config import HISTORY_DIR
-        
-        current_project = self._settings_repo.get('CURRENT_PROJECT', '')
+
+        current_project = self._settings_manager.get('CURRENT_PROJECT', '')
         
         if current_project:
             history_dir = self._projects_repo.get_history_dir(current_project)
@@ -1110,7 +1112,12 @@ class ChatController:
             enabled_tools = self.tool_manager.get_enabled_tools_for_model(
                 model_name, self.model_provider_map, self.custom_models
             )
-            new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
+            new_prompt = append_tool_guidance(
+                current_prompt,
+                enabled_tools,
+                include_math=True,
+                settings_manager=self._settings_manager
+            )
         except Exception as e:
             print(f"Error while appending tool guidance: {e}")
             new_prompt = current_prompt
@@ -1832,6 +1839,7 @@ class ChatController:
         self._tool_service = ToolService(
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
+            settings_manager=self._settings_manager,
         )
         # Re-initialize memory service if settings changed
         self._init_memory_service()

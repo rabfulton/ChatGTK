@@ -42,6 +42,7 @@ class ToolService:
         search_handler: Optional[Callable] = None,
         memory_handler: Optional[Callable] = None,
         event_bus: Optional[EventBus] = None,
+        settings_manager=None,
     ):
         """
         Initialize the tool service.
@@ -62,6 +63,8 @@ class ToolService:
             Handler for semantic memory retrieval tool.
         event_bus : Optional[EventBus]
             Event bus for publishing events.
+        settings_manager : Optional[SettingsManager]
+            Optional settings manager for centralized reads.
         """
         self._tool_manager = tool_manager
         self._handlers = {
@@ -72,6 +75,7 @@ class ToolService:
             'memory': memory_handler,
         }
         self._event_bus = event_bus
+        self._settings_manager = settings_manager
     
     def _emit(self, event_type: EventType, **data) -> None:
         """Emit an event if event bus is configured."""
@@ -272,7 +276,11 @@ class ToolService:
         """
         guidance = self.get_tool_guidance(model)
         if guidance:
-            return append_tool_guidance(system_message, guidance)
+            return append_tool_guidance(
+                system_message,
+                guidance,
+                settings_manager=self._settings_manager
+            )
         return system_message
     
     def update_handlers(

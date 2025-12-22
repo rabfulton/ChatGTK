@@ -82,6 +82,19 @@ def _get_settings_repo():
     return _settings_repo
 
 
+def _get_setting_value(parent, key, default=None):
+    """Read a setting via SettingsManager if available, else fall back to repository."""
+    manager = None
+    if parent is not None:
+        if hasattr(parent, "settings"):
+            manager = parent.settings
+        elif hasattr(parent, "controller") and hasattr(parent.controller, "settings_manager"):
+            manager = parent.controller.settings_manager
+    if manager is not None:
+        return manager.get(key, default)
+    return _get_settings_repo().get(key, default)
+
+
 def save_model_cache(cache: dict) -> None:
     """
     Save the model cache to disk.
@@ -1020,6 +1033,7 @@ class SettingsDialog(Gtk.Dialog):
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
+        self._parent = parent
         self.ai_provider = ai_provider  # OpenAI provider (for TTS preview)
         self.providers = providers or {}  # dict of provider_name -> provider instance
         self.initial_api_keys = api_keys or {}  # dict of provider_name -> key string
@@ -1028,9 +1042,8 @@ class SettingsDialog(Gtk.Dialog):
         self.set_modal(True)
 
         # Load saved dialog size or use defaults
-        settings_repo = _get_settings_repo()
-        dialog_width = settings_repo.get('SETTINGS_DIALOG_WIDTH', 800)
-        dialog_height = settings_repo.get('SETTINGS_DIALOG_HEIGHT', 800)
+        dialog_width = _get_setting_value(self._parent, 'SETTINGS_DIALOG_WIDTH', 800)
+        dialog_height = _get_setting_value(self._parent, 'SETTINGS_DIALOG_HEIGHT', 800)
         self.set_default_size(dialog_width, dialog_height)
 
         # Connect to size change signal to save dialog size
@@ -1286,7 +1299,7 @@ class SettingsDialog(Gtk.Dialog):
         self.combo_theme = Gtk.ComboBoxText()
         scheme_manager = GtkSource.StyleSchemeManager.get_default()
         themes = scheme_manager.get_scheme_ids()
-        current_theme = _get_settings_repo().get('SOURCE_THEME', 'solarized-dark')
+        current_theme = _get_setting_value(self._parent, 'SOURCE_THEME', 'solarized-dark')
         current_idx = 0
         for idx, theme_id in enumerate(sorted(themes)):
             self.combo_theme.append_text(theme_id)
@@ -3028,10 +3041,9 @@ class SettingsDialog(Gtk.Dialog):
     def _get_whitelisted_models(self) -> list:
         """Get all whitelisted models from settings."""
         models = []
-        settings_repo = _get_settings_repo()
         for key in ['OPENAI_MODEL_WHITELIST', 'GEMINI_MODEL_WHITELIST', 'GROK_MODEL_WHITELIST', 
                     'CLAUDE_MODEL_WHITELIST', 'PERPLEXITY_MODEL_WHITELIST', 'CUSTOM_MODEL_WHITELIST']:
-            whitelist = settings_repo.get(key, '')
+            whitelist = _get_setting_value(self._parent, key, '')
             if whitelist:
                 models.extend([m.strip() for m in whitelist.split(',') if m.strip()])
         return sorted(set(models))
@@ -4506,7 +4518,7 @@ class SettingsDialog(Gtk.Dialog):
             # Window / tray behavior
             'minimize_to_tray_enabled': self.switch_minimize_to_tray.get_active(),
             # Model display names - preserve what was saved during the dialog session
-            'model_display_names': _get_settings_repo().get('MODEL_DISPLAY_NAMES', ''),
+            'model_display_names': _get_setting_value(self._parent, 'MODEL_DISPLAY_NAMES', ''),
             
             # Advanced / Prompt Appendices
             # Helper to get text from stored buffers
@@ -4927,13 +4939,13 @@ class PromptEditorDialog(Gtk.Dialog):
 
     def __init__(self, parent, initial_text: str = "", on_voice_input=None):
         super().__init__(title="Edit Prompt", transient_for=parent, flags=0)
+        self._parent = parent
         self.set_modal(True)
         self.on_voice_input_callback = on_voice_input
 
         # Load saved dialog size or use defaults
-        settings_repo = _get_settings_repo()
-        dialog_width = settings_repo.get('PROMPT_EDITOR_DIALOG_WIDTH', 800)
-        dialog_height = settings_repo.get('PROMPT_EDITOR_DIALOG_HEIGHT', 500)
+        dialog_width = _get_setting_value(self._parent, 'PROMPT_EDITOR_DIALOG_WIDTH', 800)
+        dialog_height = _get_setting_value(self._parent, 'PROMPT_EDITOR_DIALOG_HEIGHT', 500)
         self.set_default_size(dialog_width, dialog_height)
 
         # Connect to size change signal to save dialog size
@@ -5436,7 +5448,7 @@ class PromptEditorDialog(Gtk.Dialog):
     def _on_key_press(self, widget, event):
         """Handle keyboard shortcuts using configurable bindings."""
         # Load shortcuts via repository
-        shortcuts_json = _get_settings_repo().get('KEYBOARD_SHORTCUTS', '')
+        shortcuts_json = _get_setting_value(self._parent, 'KEYBOARD_SHORTCUTS', '')
         try:
             shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
         except json.JSONDecodeError:
