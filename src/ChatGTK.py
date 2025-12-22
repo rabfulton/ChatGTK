@@ -247,6 +247,8 @@ class OpenAIGTKClient(Gtk.Window):
             on_attach_file=lambda: self.on_attach_file(None),
             on_open_prompt_editor=lambda: self.on_open_prompt_editor(None),
         )
+        # Apply user's configured font size
+        self._input_panel.apply_font_size(getattr(self, 'font_size', 12))
         vbox_main.pack_start(self._input_panel.widget, False, False, 0)
         
         # Expose widgets for backward compatibility

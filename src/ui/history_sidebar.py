@@ -130,7 +130,7 @@ class HistorySidebar(UIComponent):
         # New Chat button
         new_chat_btn = Gtk.Button(label="New Chat")
         new_chat_btn.connect('clicked', self._on_new_chat_clicked)
-        top_row.pack_start(new_chat_btn, True, True, 0)
+        top_row.pack_start(new_chat_btn, False, False, 0)
         
         box.pack_start(top_row, False, False, 0)
         

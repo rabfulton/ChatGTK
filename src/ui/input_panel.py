@@ -80,6 +80,20 @@ class InputPanel(UIComponent):
         # Main input row
         input_row = Gtk.Box(spacing=6)
         
+        # Voice button (microphone icon)
+        self.btn_voice = Gtk.Button()
+        self.btn_voice.set_image(Gtk.Image.new_from_icon_name("audio-input-microphone-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_voice.set_tooltip_text("Start Voice Input")
+        self.btn_voice.connect("clicked", self._on_voice_clicked)
+        input_row.pack_start(self.btn_voice, False, False, 0)
+        
+        # Attach button (paperclip icon)
+        self.btn_attach = Gtk.Button()
+        self.btn_attach.set_image(Gtk.Image.new_from_icon_name("mail-attachment-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_attach.set_tooltip_text("Attach File")
+        self.btn_attach.connect("clicked", self._on_attach_clicked)
+        input_row.pack_start(self.btn_attach, False, False, 0)
+        
         # Text entry
         self.entry = Gtk.Entry()
         self.entry.set_placeholder_text("Enter your question here...")
@@ -97,29 +111,23 @@ class InputPanel(UIComponent):
         btn_edit.connect("clicked", self._on_edit_clicked)
         input_row.pack_start(btn_edit, False, False, 0)
         
-        # Send button
-        self.btn_send = Gtk.Button(label="Send")
+        # Send button (send icon)
+        self.btn_send = Gtk.Button()
+        self.btn_send.set_image(Gtk.Image.new_from_icon_name("document-send-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_send.set_tooltip_text("Send")
         self.btn_send.connect("clicked", self._on_send_clicked)
         input_row.pack_start(self.btn_send, False, False, 0)
         
         container.pack_start(input_row, False, False, 0)
         
-        # Button row
-        button_row = Gtk.Box(spacing=6)
-        
-        # Voice button
-        self.btn_voice = Gtk.Button(label="Start Voice Input")
-        self.btn_voice.connect("clicked", self._on_voice_clicked)
-        button_row.pack_start(self.btn_voice, True, True, 0)
-        
-        # Attach button
-        self.btn_attach = Gtk.Button(label="Attach File")
-        self.btn_attach.connect("clicked", self._on_attach_clicked)
-        button_row.pack_start(self.btn_attach, True, True, 0)
-        
-        container.pack_start(button_row, False, False, 0)
-        
         return container
+    
+    def apply_font_size(self, font_size: int):
+        """Apply font size to the entry."""
+        css = f"entry {{ font-size: {font_size}pt; }}"
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css.encode())
+        self.entry.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     
     def get_text(self) -> str:
         """Get the current input text."""
@@ -140,12 +148,16 @@ class InputPanel(UIComponent):
     def set_recording_state(self, recording: bool):
         """Update the recording state."""
         self.recording = recording
-        label = "Recording... Click to Stop" if recording else "Start Voice Input"
-        self.btn_voice.set_label(label)
+        if recording:
+            self.btn_voice.set_image(Gtk.Image.new_from_icon_name("media-record-symbolic", Gtk.IconSize.BUTTON))
+            self.btn_voice.set_tooltip_text("Recording... Click to Stop")
+        else:
+            self.btn_voice.set_image(Gtk.Image.new_from_icon_name("audio-input-microphone-symbolic", Gtk.IconSize.BUTTON))
+            self.btn_voice.set_tooltip_text("Start Voice Input")
     
     def set_attachment_label(self, label: str):
-        """Update the attach button label."""
-        self.btn_attach.set_label(label)
+        """Update the attach button tooltip."""
+        self.btn_attach.set_tooltip_text(label)
     
     def _on_icon_press(self, entry, icon_pos, event):
         """Handle clear icon press."""
