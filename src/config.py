@@ -301,9 +301,9 @@ SETTINGS_CONFIG = {
     # What to store: "all", "user", or "assistant" messages.
     'MEMORY_STORE_MODE': {'type': str, 'default': 'all'},
     # Number of memory results to retrieve (1-10).
-    'MEMORY_RETRIEVAL_TOP_K': {'type': int, 'default': 5},
+    'MEMORY_RETRIEVAL_TOP_K': {'type': int, 'default': 3},
     # Minimum similarity score for retrieval (0.0-1.0).
-    'MEMORY_MIN_SIMILARITY': {'type': float, 'default': 0.5},
+    'MEMORY_MIN_SIMILARITY': {'type': float, 'default': 0.7},
     # Whether to automatically add new messages to memory.
     'MEMORY_AUTO_IMPORT': {'type': bool, 'default': True},
     'MEMORY_AUTO_IMPORT': {'type': bool, 'default': True},
