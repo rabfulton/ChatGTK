@@ -25,7 +25,6 @@ from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
 from model_cards import get_card, list_cards
 from repositories import ModelCacheRepository, SettingsRepository
 from utils import (
-    apply_settings,
     parse_color_to_rgba,
     save_api_keys,
     load_api_keys,
@@ -33,8 +32,6 @@ from utils import (
     save_custom_models,
     load_model_display_names,
     save_model_display_names,
-    get_object_settings,
-    convert_settings_for_save,
 )
 from config import (
     BASE_DIR,
@@ -93,6 +90,20 @@ def _get_setting_value(parent, key, default=None):
     if manager is not None:
         return manager.get(key, default)
     return _get_settings_repo().get(key, default)
+
+
+def _set_setting_value(parent, key, value, emit_event: bool = False) -> None:
+    """Write a setting via SettingsManager if available, else fall back to repository."""
+    manager = None
+    if parent is not None:
+        if hasattr(parent, "settings"):
+            manager = parent.settings
+        elif hasattr(parent, "controller") and hasattr(parent.controller, "settings_manager"):
+            manager = parent.controller.settings_manager
+    if manager is not None:
+        manager.set(key, value, emit_event=emit_event)
+    else:
+        _get_settings_repo().set(key, value)
 
 
 def save_model_cache(cache: dict) -> None:
@@ -1038,7 +1049,8 @@ class SettingsDialog(Gtk.Dialog):
         self.providers = providers or {}  # dict of provider_name -> provider instance
         self.initial_api_keys = api_keys or {}  # dict of provider_name -> key string
         self.custom_models = load_custom_models()
-        apply_settings(self, settings)
+        for key, value in settings.items():
+            setattr(self, key, value)
         self.set_modal(True)
 
         # Load saved dialog size or use defaults
@@ -1130,9 +1142,8 @@ class SettingsDialog(Gtk.Dialog):
         height = event.height
 
         # Save dialog size via repository
-        settings_repo = _get_settings_repo()
-        settings_repo.set('SETTINGS_DIALOG_WIDTH', width)
-        settings_repo.set('SETTINGS_DIALOG_HEIGHT', height)
+        _set_setting_value(self._parent, 'SETTINGS_DIALOG_WIDTH', width)
+        _set_setting_value(self._parent, 'SETTINGS_DIALOG_HEIGHT', height)
 
         return False  # Allow the event to continue
 
@@ -3387,9 +3398,9 @@ class SettingsDialog(Gtk.Dialog):
                     whitelist_models.add(model_id)
                     self.custom_model_whitelist = ",".join(sorted(whitelist_models))
                     # Save the updated whitelist immediately via repository
-                    settings_repo = _get_settings_repo()
-                    for key, value in convert_settings_for_save(get_object_settings(self)).items():
-                        settings_repo.set(key, value)
+                    new_settings = self.get_settings()
+                    for key, value in new_settings.items():
+                        _set_setting_value(self._parent, key, value)
                 
                 # Refresh image model dropdown if this is an image model
                 if (data.get("api_type") or "").lower() == "images":
@@ -4747,7 +4758,8 @@ class ToolsDialog(Gtk.Dialog):
 
     def __init__(self, parent, tool_use_supported=True, current_model=None, **settings):
         super().__init__(title="Tools", transient_for=parent, flags=0)
-        apply_settings(self, settings)
+        for key, value in settings.items():
+            setattr(self, key, value)
         self.tool_use_supported = tool_use_supported
         self.current_model = current_model
         self.set_modal(True)
@@ -5054,9 +5066,8 @@ class PromptEditorDialog(Gtk.Dialog):
         response = super().run()
         # Save size when dialog closes
         if hasattr(self, '_current_width') and hasattr(self, '_current_height'):
-            settings_repo = _get_settings_repo()
-            settings_repo.set('PROMPT_EDITOR_DIALOG_WIDTH', self._current_width)
-            settings_repo.set('PROMPT_EDITOR_DIALOG_HEIGHT', self._current_height)
+            _set_setting_value(self._parent, 'PROMPT_EDITOR_DIALOG_WIDTH', self._current_width)
+            _set_setting_value(self._parent, 'PROMPT_EDITOR_DIALOG_HEIGHT', self._current_height)
         return response
 
     def _on_voice_clicked(self, widget):

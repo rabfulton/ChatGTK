@@ -31,9 +31,6 @@ from services import (
 from settings import SettingsManager
 from events import EventBus, EventType, Event, get_event_bus
 from utils import (
-    apply_settings,
-    get_object_settings,
-    convert_settings_for_save,
     load_api_keys,
     load_custom_models,
     save_custom_models,

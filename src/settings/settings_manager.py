@@ -8,7 +8,7 @@ Provides a single point of access for all application settings with:
 - Caching for performance
 """
 
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 from repositories import SettingsRepository
 from events import EventBus, EventType, Event
 from config import SETTINGS_CONFIG
@@ -45,6 +45,14 @@ class SettingsManager:
         # Load all settings into cache
         self._cache = self._repo.get_all()
     
+    def _normalize_key(self, key: str) -> str:
+        """Normalize a settings key to canonical uppercase."""
+        return key.upper()
+
+    def normalize_keys(self, keys: Iterable[str]) -> List[str]:
+        """Normalize a list of settings keys."""
+        return [self._normalize_key(key) for key in keys]
+
     def get(self, key: str, default: Any = None) -> Any:
         """
         Get a setting value.
@@ -61,6 +69,7 @@ class SettingsManager:
         Any
             The setting value.
         """
+        key = self._normalize_key(key)
         if key in self._cache:
             return self._cache[key]
         return default
@@ -78,6 +87,7 @@ class SettingsManager:
         emit_event : bool
             Whether to emit SETTINGS_CHANGED event.
         """
+        key = self._normalize_key(key)
         old_value = self._cache.get(key)
         
         # Validate if we have config for this key
@@ -118,6 +128,35 @@ class SettingsManager:
             return config.get('default', value)
         
         return value
+
+    def set_many(
+        self,
+        settings: Dict[str, Any],
+        emit_event: bool = True,
+        normalize_keys: bool = True,
+    ) -> None:
+        """
+        Set multiple settings at once, emitting a single batch event.
+        """
+        changed: Dict[str, Dict[str, Any]] = {}
+        for key, value in settings.items():
+            if normalize_keys:
+                key = self._normalize_key(key)
+            old_value = self._cache.get(key)
+            if key in SETTINGS_CONFIG:
+                value = self._coerce_type(key, value)
+            if old_value != value:
+                self._cache[key] = value
+                self._repo.set(key, value)
+                self._dirty.add(key)
+                changed[key] = {'old': old_value, 'new': value}
+
+        if emit_event and self._event_bus and changed:
+            self._event_bus.publish(Event(
+                type=EventType.SETTINGS_CHANGED,
+                data={'batch': True, 'changes': changed},
+                source='settings_manager'
+            ))
     
     def get_all(self) -> Dict[str, Any]:
         """
@@ -205,7 +244,7 @@ class SettingsManager:
     
     def __contains__(self, key: str) -> bool:
         """Check if a setting exists."""
-        return key in self._cache
+        return self._normalize_key(key) in self._cache
     
     def __getitem__(self, key: str) -> Any:
         """Get a setting value using bracket notation."""

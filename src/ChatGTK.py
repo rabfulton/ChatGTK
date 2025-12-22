@@ -31,10 +31,6 @@ from utils import (
     parse_color_to_rgba,
     rgb_to_hex,
     insert_resized_image,
-    apply_settings,
-    get_object_settings,
-    save_object_settings,
-    convert_settings_for_save,
     load_api_keys,
     load_custom_models,
     save_custom_models,
@@ -451,14 +447,16 @@ class OpenAIGTKClient(Gtk.Window):
             self.ws_provider.stop_streaming()
             
         # Save settings via controller's settings_manager
-        to_save = get_object_settings(self)
-        to_save['WINDOW_WIDTH'] = self.current_geometry[0]
-        to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
-        to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
-        for key, value in convert_settings_for_save(to_save).items():
-            self.controller.settings_manager.set(key, value, emit_event=False)
+        self.settings.set_many(
+            {
+                'WINDOW_WIDTH': self.current_geometry[0],
+                'WINDOW_HEIGHT': self.current_geometry[1],
+                'SIDEBAR_WIDTH': self.current_sidebar_width,
+            },
+            emit_event=False,
+        )
         # Persist to disk
-        self.controller.settings_manager.save()
+        self.settings.save()
         
         # Hide tray icon on exit (only for StatusIcon backend)
         if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
@@ -846,6 +844,20 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _on_settings_changed_event(self, event):
         """Handle SETTINGS_CHANGED event - update UI if needed."""
+        if event.data.get('batch'):
+            changes = event.data.get('changes', {})
+            needs_renderer_update = False
+            for key, change in changes.items():
+                value = change.get('new')
+                attr = key.lower()
+                if hasattr(self, attr):
+                    setattr(self, attr, value)
+                if key in ('FONT_SIZE', 'LATEX_DPI'):
+                    needs_renderer_update = True
+            if needs_renderer_update:
+                GLib.idle_add(self._update_message_renderer_settings)
+            return
+
         key = event.data.get('key', '')
         value = event.data.get('value')
         
@@ -903,7 +915,8 @@ class OpenAIGTKClient(Gtk.Window):
             # Track last active chat when chat ID is assigned (first user message)
             if self.current_chat_id and self.last_active_chat != self.current_chat_id:
                 self.last_active_chat = self.current_chat_id
-                save_object_settings(self)
+                self.settings.set('LAST_ACTIVE_CHAT', self.current_chat_id, emit_event=False)
+                self.settings.save()
 
     def _on_message_received_event(self, event):
         """Handle MESSAGE_RECEIVED event - display assistant message in UI."""
@@ -1078,7 +1091,9 @@ class OpenAIGTKClient(Gtk.Window):
         self.controller.update_system_message(prompt["content"])
         
         # Persist the change
-        save_object_settings(self)
+        self.settings.set('ACTIVE_SYSTEM_PROMPT_ID', new_id, emit_event=False)
+        self.settings.set('SYSTEM_MESSAGE', prompt["content"], emit_event=False)
+        self.settings.save()
         
         # Refresh combo to put new selection first
         self._refresh_system_prompt_combo()
@@ -1327,10 +1342,8 @@ class OpenAIGTKClient(Gtk.Window):
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             new_settings = dialog.get_settings()
-            apply_settings(self, new_settings)
-            save_object_settings(self)
-            # Reload settings manager cache so controller sees updated values
-            self.controller.settings_manager.reload()
+            self.settings.set_many(new_settings, emit_event=True, normalize_keys=True)
+            self.settings.save()
             self._sync_settings_from_manager()
 
             # Update message renderer settings and refresh existing message colors
@@ -1370,6 +1383,9 @@ class OpenAIGTKClient(Gtk.Window):
 
             self.fetch_models_async()
         dialog.destroy()
+        if response != Gtk.ResponseType.OK:
+            # Ensure any live dialog writes are reflected in attributes.
+            self._sync_settings_from_manager()
 
     def on_open_prompt_editor(self, widget):
         """Open a larger dialog for composing a more complex prompt."""
@@ -1465,9 +1481,8 @@ class OpenAIGTKClient(Gtk.Window):
             self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
             self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
             # Persist all settings, including the updated tool flags.
-            save_object_settings(self)
-            # Reload settings manager cache so controller sees updated values
-            self.controller.settings_manager.reload()
+            self.settings.set_many(tool_settings, emit_event=False, normalize_keys=True)
+            self.settings.save()
             self._sync_settings_from_manager()
             # Update toolbar indicators
             self._update_tool_indicators()
@@ -2428,7 +2443,8 @@ class OpenAIGTKClient(Gtk.Window):
             
             # Save the last active chat to settings
             self.last_active_chat = chat_id
-            save_object_settings(self)
+            self.settings.set('LAST_ACTIVE_CHAT', chat_id, emit_event=False)
+            self.settings.save()
             
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:
@@ -2528,8 +2544,10 @@ class OpenAIGTKClient(Gtk.Window):
             
             if chat_id:
                 # Controller already updated current_chat_id, just sync last_active_chat
-                self.last_active_chat = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
-                save_object_settings(self)
+                last_active = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
+                self.last_active_chat = last_active
+                self.settings.set('LAST_ACTIVE_CHAT', last_active, emit_event=False)
+                self.settings.save()
 
     def show_thinking_animation(self):
         """Show thinking animation - delegated to ChatView component."""
