@@ -172,12 +172,34 @@ SEARCH_TOOL_SPEC = ToolSpec(
     },
 )
 
+MEMORY_RETRIEVAL_TOOL_SPEC = ToolSpec(
+    name="retrieve_memory",
+    description=(
+        "Search your semantic memory of past conversations with the user for relevant context. "
+        "Use this when the user references past discussions, asks about something they mentioned before, "
+        "or when historical context would help answer their question. This uses AI-powered semantic search."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Natural language query to search memories semantically. "
+                    "Describe what you're looking for in plain language."
+                ),
+            },
+        },
+    },
+)
+
 # Registry mapping tool name to spec for easy lookup.
 TOOL_REGISTRY: Dict[str, ToolSpec] = {
     IMAGE_TOOL_SPEC.name: IMAGE_TOOL_SPEC,
     MUSIC_TOOL_SPEC.name: MUSIC_TOOL_SPEC,
     READ_ALOUD_TOOL_SPEC.name: READ_ALOUD_TOOL_SPEC,
     SEARCH_TOOL_SPEC.name: SEARCH_TOOL_SPEC,
+    MEMORY_RETRIEVAL_TOOL_SPEC.name: MEMORY_RETRIEVAL_TOOL_SPEC,
 }
 
 
@@ -243,6 +265,8 @@ def append_tool_guidance(
             appendix = settings_repo.get("READ_ALOUD_TOOL_PROMPT_APPENDIX", "")
         elif tool_name == "search_memory":
             appendix = settings_repo.get("SEARCH_TOOL_PROMPT_APPENDIX", "")
+        elif tool_name == "retrieve_memory":
+            appendix = settings_repo.get("MEMORY_PROMPT_APPENDIX", "")
         
         # Fallback to spec if available (though now specs default to empty)
         if not appendix:
@@ -330,6 +354,7 @@ class ToolContext:
     music_handler: Optional[Callable[[str, Optional[str], Optional[float]], str]] = None
     read_aloud_handler: Optional[Callable[[str], str]] = None
     search_handler: Optional[Callable[[str, Optional[str]], str]] = None
+    memory_handler: Optional[Callable[[str], str]] = None  # (query) -> result
 
 
 def run_tool_call(
@@ -394,7 +419,7 @@ def run_tool_call(
 
     elif tool_name == "search_memory":
         if context.search_handler is None:
-            return "Error: search/memory tool is not available."
+            return "Error: search tool is not available."
         keyword = args.get("keyword", "")
         source = args.get("source", "history")
         try:
@@ -402,6 +427,16 @@ def run_tool_call(
         except Exception as e:
             print(f"Error in search_handler: {e}")
             return f"Error searching memory: {e}"
+
+    elif tool_name == "retrieve_memory":
+        if context.memory_handler is None:
+            return "Error: memory retrieval tool is not available."
+        query = args.get("query", "")
+        try:
+            return context.memory_handler(query)
+        except Exception as e:
+            print(f"Error in memory_handler: {e}")
+            return f"Error retrieving memory: {e}"
 
     else:
         return f"Error: unknown tool '{tool_name}' requested."

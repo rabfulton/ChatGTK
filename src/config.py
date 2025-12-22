@@ -69,13 +69,16 @@ CUSTOM_MODELS_FILE = os.path.join(PARENT_DIR, "custom_models.json")
 MODEL_CARD_OVERRIDES_FILE = os.path.join(PARENT_DIR, "model_card_overrides.json")
 CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
 
+# Memory database path (Qdrant embedded)
+MEMORY_DB_PATH = os.path.join(PARENT_DIR, "chat_memory")
+
 # ---------------------------------------------------------------------------
 # Default Appendix Constants (formerly in tools.py)
 # ---------------------------------------------------------------------------
 
 DEFAULT_SYSTEM_PROMPT_APPENDIX = (
     "When writing mathematical equations use LaTeX syntax with parentheses: \\( ... \\) for inline math and \\[ ... \\] for block math. "
-    "You always format your responses using markdown."
+    "You format your responses using markdown."
 )
 
 DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX = (
@@ -284,8 +287,33 @@ SETTINGS_CONFIG = {
     'SEARCH_DIRECTORIES': {'type': str, 'default': ''},
     # Maximum number of search results to return to the model (1-5).
     'SEARCH_RESULT_LIMIT': {'type': int, 'default': 1},
+    # Number of characters to show before and after a search match.
+    'SEARCH_CONTEXT_WINDOW': {'type': int, 'default': 200},
     # Whether to show search results in the chat output (if False, results are only sent to the model).
     'SEARCH_SHOW_RESULTS': {'type': bool, 'default': False},
+    # --- Memory System Settings ---
+    # Master switch for the semantic memory feature (requires qdrant-client and sentence-transformers).
+    'MEMORY_ENABLED': {'type': bool, 'default': False},
+    # Embedding mode: "local" (sentence-transformers), "openai", "gemini", or "cohere".
+    'MEMORY_EMBEDDING_MODE': {'type': str, 'default': 'local'},
+    # Embedding model name (depends on mode).
+    'MEMORY_EMBEDDING_MODEL': {'type': str, 'default': 'all-MiniLM-L6-v2'},
+    # What to store: "all", "user", or "assistant" messages.
+    'MEMORY_STORE_MODE': {'type': str, 'default': 'all'},
+    # Number of memory results to retrieve (1-10).
+    'MEMORY_RETRIEVAL_TOP_K': {'type': int, 'default': 5},
+    # Minimum similarity score for retrieval (0.0-1.0).
+    'MEMORY_MIN_SIMILARITY': {'type': float, 'default': 0.5},
+    # Whether to automatically add new messages to memory.
+    'MEMORY_AUTO_IMPORT': {'type': bool, 'default': True},
+    'MEMORY_AUTO_IMPORT': {'type': bool, 'default': True},
+    # Prompt appendix for memory context injection.
+    'MEMORY_PROMPT_APPENDIX': {
+        'type': str,
+        'default': 'You have access to retrieved information about the user from previous interactions. '
+                   'Use the retrieved memories only when they are relevant to the user\'s current request. '
+                   'Do not invent memories. If the retrieved memory does not seem relevant, ignore it.'
+    },
     # When enabled, closing or minimizing the main window can hide it to the
     # system tray instead of keeping it in the taskbar. A tray icon is shown
     # which can be used to restore or quit the application.

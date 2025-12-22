@@ -10,6 +10,7 @@ temp/
 history/
 __pycache__/
 test_exports/
+chat_memory/
 src/preview_custom
 chatgtk-launcher.sh
 test_latex_links.py

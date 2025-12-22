@@ -124,6 +124,7 @@ class CustomModelDialog(Gtk.Dialog):
         ("images", "images"),
         ("tts", "tts"),
         ("stt", "stt"),
+        ("embeddings", "embeddings"),
     ]
 
     def __init__(self, parent, initial: dict = None):
@@ -1015,7 +1016,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Audio", "Tool Options", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
+    CATEGORIES = ["General", "Audio", "Tool Options", "Memory", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
@@ -1085,6 +1086,7 @@ class SettingsDialog(Gtk.Dialog):
         self._build_general_page()
         self._build_audio_page()
         self._build_tool_options_page()
+        self._build_memory_page()
         self._build_system_prompts_page()
         self._build_custom_models_page()
         # Model Whitelist page is built lazily when that category is selected
@@ -2018,7 +2020,7 @@ class SettingsDialog(Gtk.Dialog):
         header_row.add(header_box)
         header_label = Gtk.Label()
         header_label.set_xalign(0)
-        header_label.set_markup("<b>Search/Memory Tool</b>")
+        header_label.set_markup("<b>Search Tool</b>")
         header_box.pack_start(header_label, True, True, 0)
         list_box.add(header_row)
 
@@ -2027,7 +2029,7 @@ class SettingsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Enable Search/Memory Tool", xalign=0)
+        label = Gtk.Label(label="Enable Search Tool", xalign=0)
         label.set_hexpand(True)
         self.switch_search_tool_settings = Gtk.Switch()
         current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
@@ -2083,6 +2085,20 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.combo_search_result_limit, False, True, 0)
         list_box.add(row)
 
+        # Context Window setting
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Context Window", xalign=0)
+        label.set_tooltip_text("Characters to show before and after each search match (50-500)")
+        label.set_hexpand(True)
+        self.spin_search_context_window = Gtk.SpinButton.new_with_range(50, 500, 50)
+        self.spin_search_context_window.set_value(int(getattr(self, "search_context_window", 200)))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_search_context_window, False, True, 0)
+        list_box.add(row)
+
         # Show Results in Chat checkbox
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -2103,6 +2119,461 @@ class SettingsDialog(Gtk.Dialog):
         self.switch_read_aloud_tool.connect("state-set", self._on_read_aloud_tool_state_set)
 
         self.stack.add_named(scroll, "Tool Options")
+
+    # -----------------------------------------------------------------------
+    # Memory page
+    # -----------------------------------------------------------------------
+    def _build_memory_page(self):
+        """Build the Memory settings page."""
+        from memory import MEMORY_AVAILABLE, get_missing_dependencies
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        scroll.add(list_box)
+        
+        if not MEMORY_AVAILABLE:
+            # Show installation instructions
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+            row.add(vbox)
+            
+            info_label = Gtk.Label()
+            info_label.set_markup(
+                "<b>Memory features require additional dependencies</b>\n\n"
+                "Install them with:\n"
+                "<tt>pip install qdrant-client sentence-transformers</tt>\n\n"
+                f"Missing: {', '.join(get_missing_dependencies())}"
+            )
+            info_label.set_xalign(0)
+            info_label.set_line_wrap(True)
+            vbox.pack_start(info_label, False, False, 0)
+            list_box.add(row)
+            self.stack.add_named(scroll, "Memory")
+            return
+        
+        # --- Enable Memory ---
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Semantic Memory</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+        
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Memory", xalign=0)
+        label.set_hexpand(True)
+        self.switch_memory_enabled = Gtk.Switch()
+        self.switch_memory_enabled.set_active(getattr(self, "memory_enabled", False))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_memory_enabled, False, True, 0)
+        list_box.add(row)
+        
+        # --- Embedding Settings ---
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Embedding Settings</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+        
+        # Embedding Mode
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Embedding Provider", xalign=0)
+        label.set_hexpand(True)
+        self.combo_memory_embedding_mode = Gtk.ComboBoxText()
+        
+        # Build available modes list (providers only, not individual models)
+        from memory import LOCAL_EMBEDDINGS_AVAILABLE
+        available_modes = []
+        if LOCAL_EMBEDDINGS_AVAILABLE:
+            available_modes.append("local")
+        available_modes.extend(["openai", "gemini", "cohere"])
+        # Add "custom" if there are any custom embedding models
+        self._custom_embedding_models = [
+            model_id for model_id, cfg in self.custom_models.items()
+            if cfg.get("api_type") == "embeddings"
+        ]
+        if self._custom_embedding_models:
+            available_modes.append("custom")
+        
+        self._memory_embedding_modes = available_modes
+        for mode in available_modes:
+            self.combo_memory_embedding_mode.append_text(mode)
+        
+        current_mode = getattr(self, "memory_embedding_mode", "openai" if not LOCAL_EMBEDDINGS_AVAILABLE else "local")
+        # Handle legacy custom:model_id format
+        if current_mode.startswith("custom:"):
+            current_mode = "custom"
+        if current_mode in available_modes:
+            mode_index = available_modes.index(current_mode)
+            self.combo_memory_embedding_mode.set_active(mode_index)
+        else:
+            self.combo_memory_embedding_mode.set_active(0)
+        
+        self.combo_memory_embedding_mode.connect("changed", self._on_memory_embedding_mode_changed)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_memory_embedding_mode, False, True, 0)
+        list_box.add(row)
+        
+        # Show note if local embeddings unavailable
+        if not LOCAL_EMBEDDINGS_AVAILABLE:
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            note = Gtk.Label()
+            note.set_markup("<small><i>Local embeddings require: pip install sentence-transformers</i></small>")
+            note.set_xalign(0)
+            row.add(note)
+            list_box.add(row)
+        
+        # Embedding Model
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        self.memory_model_row = row
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Embedding Model", xalign=0)
+        label.set_hexpand(True)
+        self.combo_memory_embedding_model = Gtk.ComboBoxText()
+        self._populate_embedding_models()
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_memory_embedding_model, False, True, 0)
+        list_box.add(row)
+        
+        # --- Storage Settings ---
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Storage Settings</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+        
+        # Store Mode
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Store Messages", xalign=0)
+        label.set_hexpand(True)
+        self.combo_memory_store_mode = Gtk.ComboBoxText()
+        for mode in ["all", "user", "assistant"]:
+            self.combo_memory_store_mode.append_text(mode)
+        current_store = getattr(self, "memory_store_mode", "all")
+        store_index = ["all", "user", "assistant"].index(current_store) if current_store in ["all", "user", "assistant"] else 0
+        self.combo_memory_store_mode.set_active(store_index)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_memory_store_mode, False, True, 0)
+        list_box.add(row)
+        
+        # Auto-import
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Auto-add new messages", xalign=0)
+        label.set_hexpand(True)
+        self.switch_memory_auto_import = Gtk.Switch()
+        self.switch_memory_auto_import.set_active(getattr(self, "memory_auto_import", True))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_memory_auto_import, False, True, 0)
+        list_box.add(row)
+        
+        # --- Retrieval Settings ---
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Retrieval Settings</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+        
+        # Top K
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Results to retrieve", xalign=0)
+        label.set_tooltip_text("Maximum number of relevant memories to inject into conversation context (1-10)")
+        label.set_hexpand(True)
+        self.spin_memory_top_k = Gtk.SpinButton.new_with_range(1, 10, 1)
+        self.spin_memory_top_k.set_value(getattr(self, "memory_retrieval_top_k", 5))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_memory_top_k, False, True, 0)
+        list_box.add(row)
+        
+        # Min Similarity
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Min similarity score", xalign=0)
+        label.set_tooltip_text("Minimum similarity threshold (0.0-1.0). Higher = stricter matching.\n0.7+ very related, 0.5-0.7 related, <0.5 loosely related")
+        label.set_hexpand(True)
+        self.spin_memory_min_sim = Gtk.SpinButton.new_with_range(0.0, 1.0, 0.05)
+        self.spin_memory_min_sim.set_digits(2)
+        self.spin_memory_min_sim.set_value(getattr(self, "memory_min_similarity", 0.5))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_memory_min_sim, False, True, 0)
+        list_box.add(row)
+        
+        # --- Import & Management ---
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Import &amp; Management</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+        
+        # Import button
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Import existing chats", xalign=0)
+        label.set_hexpand(True)
+        self.btn_memory_import = Gtk.Button(label="Import")
+        self.btn_memory_import.connect("clicked", self._on_memory_import_clicked)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.btn_memory_import, False, True, 0)
+        list_box.add(row)
+        
+        # Progress bar (hidden initially)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        self.memory_progress_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        row.add(self.memory_progress_box)
+        self.memory_progress_bar = Gtk.ProgressBar()
+        self.memory_progress_bar.set_show_text(True)
+        self.memory_progress_box.pack_start(self.memory_progress_bar, False, False, 0)
+        self.memory_progress_label = Gtk.Label(label="")
+        self.memory_progress_label.set_xalign(0)
+        self.memory_progress_box.pack_start(self.memory_progress_label, False, False, 0)
+        self.memory_progress_box.set_no_show_all(True)
+        self.memory_progress_box.hide()
+        list_box.add(row)
+        
+        # Stats
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        self.memory_stats_label = Gtk.Label(label="Memories: --", xalign=0)
+        self.memory_stats_label.set_hexpand(True)
+        btn_refresh = Gtk.Button(label="Refresh")
+        btn_refresh.connect("clicked", self._on_memory_refresh_stats)
+        hbox.pack_start(self.memory_stats_label, True, True, 0)
+        hbox.pack_start(btn_refresh, False, True, 0)
+        list_box.add(row)
+        
+        # Clear button
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Clear all memories", xalign=0)
+        label.set_hexpand(True)
+        self.btn_memory_clear = Gtk.Button(label="Clear")
+        self.btn_memory_clear.get_style_context().add_class("destructive-action")
+        self.btn_memory_clear.connect("clicked", self._on_memory_clear_clicked)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.btn_memory_clear, False, True, 0)
+        list_box.add(row)
+        
+        self.stack.add_named(scroll, "Memory")
+        
+        # Initial stats refresh
+        GLib.idle_add(self._on_memory_refresh_stats, None)
+    
+    def _populate_embedding_models(self):
+        """Populate embedding model dropdown based on selected mode."""
+        self.combo_memory_embedding_model.remove_all()
+        mode = self.combo_memory_embedding_mode.get_active_text() or "openai"
+        
+        models = {
+            "local": ["all-MiniLM-L6-v2", "all-mpnet-base-v2"],
+            "openai": ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
+            "gemini": ["text-embedding-004"],
+            "cohere": ["embed-english-v3.0", "embed-multilingual-v3.0"],
+            "custom": getattr(self, '_custom_embedding_models', []),
+        }
+        
+        model_list = models.get(mode, [])
+        for model in model_list:
+            self.combo_memory_embedding_model.append_text(model)
+        
+        current = getattr(self, "memory_embedding_model", "")
+        if current in model_list:
+            self.combo_memory_embedding_model.set_active(model_list.index(current))
+        elif model_list:
+            self.combo_memory_embedding_model.set_active(0)
+    
+    def _get_memory_embedding_mode(self) -> str:
+        """Get the actual embedding mode value."""
+        if not hasattr(self, 'combo_memory_embedding_mode') or self.combo_memory_embedding_mode is None:
+            return getattr(self, "memory_embedding_mode", "openai")
+        return self.combo_memory_embedding_mode.get_active_text() or "openai"
+    
+    def _on_memory_embedding_mode_changed(self, combo):
+        """Handle embedding mode change."""
+        self._populate_embedding_models()
+    
+    def _on_memory_import_clicked(self, button):
+        """Import existing conversations into memory."""
+        from memory import MEMORY_AVAILABLE
+        if not MEMORY_AVAILABLE:
+            return
+        
+        from memory import MemoryService
+        from repositories import ChatHistoryRepository
+        from config import MEMORY_DB_PATH
+        
+        button.set_sensitive(False)
+        self.memory_progress_box.show_all()
+        self.memory_progress_bar.set_fraction(0)
+        self.memory_progress_label.set_text("Starting import...")
+        
+        def do_import():
+            try:
+                mode = self._get_memory_embedding_mode()
+                model = self.combo_memory_embedding_model.get_active_text() or "text-embedding-3-small"
+                store_mode = self.combo_memory_store_mode.get_active_text() or "all"
+                
+                # Handle custom embedding providers
+                endpoint = None
+                api_key = None
+                if mode == "custom":
+                    cfg = self.custom_models.get(model, {})
+                    endpoint = cfg.get("endpoint", "")
+                    api_key = cfg.get("api_key", "")
+                
+                service = MemoryService(
+                    db_path=MEMORY_DB_PATH,
+                    embedding_mode=mode,
+                    embedding_model=model,
+                    api_key=api_key,
+                    endpoint=endpoint,
+                )
+                history_repo = ChatHistoryRepository()
+                
+                def progress_cb(current, total, chat_id):
+                    frac = current / total if total > 0 else 0
+                    GLib.idle_add(self._update_import_progress, frac, f"Importing {current}/{total}...")
+                
+                result = service.import_all_conversations(history_repo, store_mode, progress_cb)
+                service.close()
+                
+                GLib.idle_add(self._import_complete, result)
+            except Exception as e:
+                GLib.idle_add(self._import_error, str(e))
+        
+        import threading
+        threading.Thread(target=do_import, daemon=True).start()
+    
+    def _update_import_progress(self, fraction, text):
+        self.memory_progress_bar.set_fraction(fraction)
+        self.memory_progress_label.set_text(text)
+    
+    def _import_complete(self, result):
+        self.memory_progress_bar.set_fraction(1.0)
+        self.memory_progress_label.set_text(
+            f"Done: {result['imported']} imported, {result['skipped']} skipped, {result['messages']} messages"
+        )
+        self.btn_memory_import.set_sensitive(True)
+        self._on_memory_refresh_stats(None)
+    
+    def _import_error(self, error):
+        self.memory_progress_label.set_text(f"Error: {error}")
+        self.btn_memory_import.set_sensitive(True)
+    
+    def _on_memory_refresh_stats(self, button):
+        """Refresh memory statistics."""
+        from memory import MEMORY_AVAILABLE
+        if not MEMORY_AVAILABLE:
+            return
+        
+        try:
+            from config import MEMORY_DB_PATH
+            import os
+            
+            # Check if memory DB exists and get rough stats without opening Qdrant
+            # (to avoid locking conflicts with the main service)
+            db_path = MEMORY_DB_PATH
+            if os.path.exists(db_path) and os.path.isdir(db_path):
+                # Look for collection data files
+                collection_path = os.path.join(db_path, "collection", "memory")
+                if os.path.exists(collection_path):
+                    self.memory_stats_label.set_text("Memories: (database active)")
+                else:
+                    self.memory_stats_label.set_text("Memories: 0")
+            else:
+                self.memory_stats_label.set_text("Memories: 0")
+        except Exception as e:
+            self.memory_stats_label.set_text(f"Memories: (error)")
+    
+    def _on_memory_clear_clicked(self, button):
+        """Clear all memories after confirmation."""
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text="Clear all memories?"
+        )
+        dialog.format_secondary_text("This will permanently delete all stored memories. This cannot be undone.")
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK:
+            from memory import MEMORY_AVAILABLE
+            if not MEMORY_AVAILABLE:
+                return
+            try:
+                from config import MEMORY_DB_PATH
+                import shutil
+                import os
+                
+                # Remove the entire memory database folder
+                if os.path.exists(MEMORY_DB_PATH):
+                    shutil.rmtree(MEMORY_DB_PATH)
+                    self.memory_stats_label.set_text("Memories: 0 (cleared)")
+                else:
+                    self.memory_stats_label.set_text("Memories: 0")
+            except Exception as e:
+                print(f"[Memory] Error clearing: {e}")
+                # Show error to user
+                err_dialog = Gtk.MessageDialog(
+                    transient_for=self,
+                    flags=0,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="Could not clear memories"
+                )
+                err_dialog.format_secondary_text(f"Disable memory first, then try again.\n\nError: {e}")
+                err_dialog.run()
+                err_dialog.destroy()
 
     # -----------------------------------------------------------------------
     # System Prompts page
@@ -2647,6 +3118,12 @@ class SettingsDialog(Gtk.Dialog):
                 "Guidance appended when the search tool is enabled.",
                 "search_tool_prompt_appendix",
                 DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX
+            ),
+            (
+                "Memory Context Guidance",
+                "Guidance appended when memory context is injected into prompts.",
+                "memory_prompt_appendix",
+                SETTINGS_CONFIG.get('MEMORY_PROMPT_APPENDIX', {}).get('default', '')
             ),
         ]
         
@@ -3975,7 +4452,16 @@ class SettingsDialog(Gtk.Dialog):
             'search_history_enabled': self.switch_search_history.get_active(),
             'search_directories': self.entry_search_directories.get_text().strip(),
             'search_result_limit': int(self.combo_search_result_limit.get_active_text() or '1'),
+            'search_context_window': int(self.spin_search_context_window.get_value()),
             'search_show_results': self.switch_search_show_results.get_active(),
+            # Memory settings (only if available)
+            'memory_enabled': getattr(self, 'switch_memory_enabled', None) and self.switch_memory_enabled.get_active() or False,
+            'memory_embedding_mode': self._get_memory_embedding_mode(),
+            'memory_embedding_model': getattr(self, 'combo_memory_embedding_model', None) and self.combo_memory_embedding_model.get_active_text() or 'text-embedding-3-small',
+            'memory_store_mode': getattr(self, 'combo_memory_store_mode', None) and self.combo_memory_store_mode.get_active_text() or 'all',
+            'memory_auto_import': getattr(self, 'switch_memory_auto_import', None) and self.switch_memory_auto_import.get_active() or True,
+            'memory_retrieval_top_k': getattr(self, 'spin_memory_top_k', None) and int(self.spin_memory_top_k.get_value()) or 5,
+            'memory_min_similarity': getattr(self, 'spin_memory_min_sim', None) and self.spin_memory_min_sim.get_value() or 0.3,
             # Speech prompt template for Gemini TTS and audio-preview models
             'tts_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
             # Conversation buffer length (string: "ALL", "0", "10", etc.)
@@ -3992,6 +4478,7 @@ class SettingsDialog(Gtk.Dialog):
             'music_tool_prompt_appendix': get_buf_text('music_tool_prompt_appendix'),
             'read_aloud_tool_prompt_appendix': get_buf_text('read_aloud_tool_prompt_appendix'),
             'search_tool_prompt_appendix': get_buf_text('search_tool_prompt_appendix'),
+            'memory_prompt_appendix': get_buf_text('memory_prompt_appendix'),
             # Keyboard shortcuts
             'keyboard_shortcuts': json.dumps(getattr(self, '_shortcuts', {})),
             # Model shortcuts (model_1..model_5 -> model_id)
@@ -4294,7 +4781,7 @@ class ToolsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
-        label = Gtk.Label(label="Enable Search/Memory Tool", xalign=0)
+        label = Gtk.Label(label="Enable Search Tool", xalign=0)
         label.set_hexpand(True)
         self.switch_search_tool = Gtk.Switch()
         current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))

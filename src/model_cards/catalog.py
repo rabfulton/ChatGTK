@@ -299,7 +299,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-2025-08-07": ModelCard(
         id="gpt-5-2025-08-07",
@@ -309,7 +309,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-chat-latest": ModelCard(
         id="gpt-5-chat-latest",
@@ -319,7 +319,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-codex": ModelCard(
         id="gpt-5-codex",
@@ -329,7 +329,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-mini": ModelCard(
         id="gpt-5-mini",
@@ -339,7 +339,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-mini-2025-08-07": ModelCard(
         id="gpt-5-mini-2025-08-07",
@@ -349,7 +349,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-nano": ModelCard(
         id="gpt-5-nano",
@@ -359,7 +359,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-nano-2025-08-07": ModelCard(
         id="gpt-5-nano-2025-08-07",
@@ -369,7 +369,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-pro": ModelCard(
         id="gpt-5-pro",
@@ -379,7 +379,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-pro-2025-10-06": ModelCard(
         id="gpt-5-pro-2025-10-06",
@@ -389,27 +389,23 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5-search-api": ModelCard(
         id="gpt-5-search-api",
         provider="openai",
         display_name="GPT-5 Search API",
-        api_family="responses",
-        capabilities=Capabilities(
-            text=True, vision=True, files=True, tool_use=True, web_search=True
-        ),
-        quirks={"no_temperature": True, "search_optimized": True},
+        api_family="chat.completions",
+        capabilities=Capabilities(text=True),
+        quirks={"no_temperature": True, "search_optimized": True, "needs_developer_role": True},
     ),
     "gpt-5-search-api-2025-10-14": ModelCard(
         id="gpt-5-search-api-2025-10-14",
         provider="openai",
         display_name="GPT-5 Search API (2025-10-14)",
-        api_family="responses",
-        capabilities=Capabilities(
-            text=True, vision=True, files=True, tool_use=True, web_search=True
-        ),
-        quirks={"no_temperature": True, "search_optimized": True},
+        api_family="chat.completions",
+        capabilities=Capabilities(text=True),
+        quirks={"no_temperature": True, "search_optimized": True, "needs_developer_role": True},
     ),
 
     # ---------------------------------------------------------------------------
@@ -423,7 +419,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5.1-2025-11-13": ModelCard(
         id="gpt-5.1-2025-11-13",
@@ -433,7 +429,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5.1-chat-latest": ModelCard(
         id="gpt-5.1-chat-latest",
@@ -443,7 +439,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5.1-codex": ModelCard(
         id="gpt-5.1-codex",
@@ -453,7 +449,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5.1-codex-max": ModelCard(
         id="gpt-5.1-codex-max",
@@ -463,7 +459,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
     "gpt-5.1-codex-mini": ModelCard(
         id="gpt-5.1-codex-mini",
@@ -473,7 +469,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         capabilities=Capabilities(
             text=True, vision=True, files=True, tool_use=True, web_search=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "needs_developer_role": True},
     ),
 
     # ---------------------------------------------------------------------------
@@ -488,7 +484,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
             text=True, vision=True, files=True, tool_use=True, web_search=True,
             image_gen=True, image_edit=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "reasoning_effort_enabled": True, "reasoning_effort_level": "low", "needs_developer_role": True},
     ),
     "gpt-5.2-2025-12-11": ModelCard(
         id="gpt-5.2-2025-12-11",
@@ -499,7 +495,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
             text=True, vision=True, files=True, tool_use=True, web_search=True,
             image_gen=True, image_edit=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "reasoning_effort_enabled": True, "reasoning_effort_level": "low", "needs_developer_role": True},
     ),
     "gpt-5.2-chat-latest": ModelCard(
         id="gpt-5.2-chat-latest",
@@ -510,7 +506,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
             text=True, vision=True, files=True, tool_use=True, web_search=True,
             image_gen=True, image_edit=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "reasoning_effort_enabled": True, "reasoning_effort_level": "low", "needs_developer_role": True},
     ),
     "gpt-5.2-pro": ModelCard(
         id="gpt-5.2-pro",
@@ -521,7 +517,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
             text=True, vision=True, files=True, tool_use=True, web_search=True,
             image_gen=True, image_edit=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "reasoning_effort_enabled": True, "reasoning_effort_level": "low", "needs_developer_role": True},
     ),
     "gpt-5.2-pro-2025-12-11": ModelCard(
         id="gpt-5.2-pro-2025-12-11",
@@ -532,7 +528,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
             text=True, vision=True, files=True, tool_use=True, web_search=True,
             image_gen=True, image_edit=True
         ),
-        quirks={"no_temperature": True},
+        quirks={"no_temperature": True, "reasoning_effort_enabled": True, "reasoning_effort_level": "low", "needs_developer_role": True},
     ),
 
     # ---------------------------------------------------------------------------

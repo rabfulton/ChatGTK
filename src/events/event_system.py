@@ -19,6 +19,7 @@ class EventType(Enum):
     MESSAGE_SENT = auto()
     MESSAGE_RECEIVED = auto()
     MESSAGE_STREAMING = auto()
+    MESSAGE_DELETED = auto()
     
     # Model events
     MODELS_FETCHED = auto()
@@ -50,6 +51,14 @@ class EventType(Enum):
     # UI state events
     THINKING_STARTED = auto()
     THINKING_STOPPED = auto()
+    
+    # Memory events
+    MEMORY_ADDED = auto()
+    MEMORY_QUERIED = auto()
+    MEMORY_DELETED = auto()
+    MEMORY_CLEARED = auto()
+    MEMORY_IMPORT_PROGRESS = auto()
+    MEMORY_IMPORT_COMPLETE = auto()
 
 
 @dataclass

@@ -688,11 +688,6 @@ class OpenAIGTKClient(Gtk.Window):
         """Get the current chat ID from controller."""
         return self.controller.current_chat_id
 
-    @current_chat_id.setter
-    def current_chat_id(self, value):
-        """Set the current chat ID on controller."""
-        self.controller.current_chat_id = value
-
     @property
     def system_message(self):
         """Get the system message from controller."""
@@ -717,11 +712,6 @@ class OpenAIGTKClient(Gtk.Window):
     def conversation_history(self):
         """Get the conversation history from controller."""
         return self.controller.conversation_history
-
-    @conversation_history.setter
-    def conversation_history(self, value):
-        """Set the conversation history on controller."""
-        self.controller.conversation_history = value
 
     @property
     def providers(self):
@@ -871,8 +861,7 @@ class OpenAIGTKClient(Gtk.Window):
         """Handle cancel button click from ChatView."""
         self.request_cancelled = True
         cancel_text = "** Request cancelled by user **"
-        message_index = len(self.conversation_history)
-        self.conversation_history.append(create_assistant_message(cancel_text))
+        message_index = self.controller.add_notification(cancel_text, 'cancel')
         GLib.idle_add(lambda idx=message_index: self.append_message('ai', cancel_text, idx))
 
     def emit_thinking_started(self, model: str = None):
@@ -900,6 +889,10 @@ class OpenAIGTKClient(Gtk.Window):
         if event.source == 'controller':
             formatted = format_response(content)
             GLib.idle_add(lambda: self.append_message('user', formatted, index))
+            # Track last active chat when chat ID is assigned (first user message)
+            if self.current_chat_id and self.last_active_chat != self.current_chat_id:
+                self.last_active_chat = self.current_chat_id
+                save_object_settings(self)
 
     def _on_message_received_event(self, event):
         """Handle MESSAGE_RECEIVED event - display assistant message in UI."""
@@ -1066,8 +1059,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.system_message = prompt["content"]
         
         # Update the system message in the current conversation history
-        if self.conversation_history and self.conversation_history[0].get("role") == "system":
-            self.conversation_history[0]["content"] = prompt["content"]
+        self.controller.update_system_message(prompt["content"])
         
         # Persist the change
         save_object_settings(self)
@@ -1183,377 +1175,20 @@ class OpenAIGTKClient(Gtk.Window):
         
         if ts.supports_image_tools(model, self.model_provider_map, self.custom_models):
             handlers["image_tool_handler"] = lambda prompt_arg, image_path=None: \
-                self.generate_image_via_preferred_model(prompt_arg, last_msg, image_path)
+                self.controller.handle_image_tool(prompt_arg, image_path)
         
         if ts.supports_music_tools(model, self.model_provider_map, self.custom_models):
             handlers["music_tool_handler"] = lambda action, keyword=None, volume=None: \
-                self.control_music_via_beets(action, keyword=keyword, volume=volume)
+                self.controller.handle_music_tool(action, keyword=keyword, volume=volume)
         
         if ts.supports_read_aloud_tools(model, self.model_provider_map, self.custom_models):
             handlers["read_aloud_tool_handler"] = lambda text: self._handle_read_aloud_tool(text)
         
         if ts.supports_search_tools(model, self.model_provider_map, self.custom_models):
             handlers["search_tool_handler"] = lambda keyword, source=None: \
-                self._handle_search_memory_tool(keyword, source)
+                self.controller.handle_search_tool(keyword, source)
         
         return handlers
-
-    def generate_image_for_model(self, model, prompt, last_msg, chat_id, provider_name, has_attached_images):
-        """
-        Central helper to generate an image for any supported provider/model.
-        Delegates to ImageGenerationService.
-        """
-        # Prepare image data for editing
-        image_data = None
-        mime_type = None
-        
-        card = get_card(model, self.custom_models)
-        supports_image_edit = card.capabilities.image_edit if card else False
-        
-        if supports_image_edit and has_attached_images and last_msg.get("images"):
-            img = last_msg["images"][0]
-            # Load image data from path if not already loaded
-            if img.get("data"):
-                image_data = img.get("data")
-            elif img.get("path"):
-                try:
-                    with open(img["path"], "rb") as f:
-                        image_data = base64.b64encode(f.read()).decode("utf-8")
-                except Exception as e:
-                    print(f"[Image Edit] Error loading image from path: {e}")
-            mime_type = img.get("mime_type")
-        
-        # Get provider via controller
-        provider = self.controller.get_provider_for_model(model)
-        if not provider:
-            raise ValueError(f"{provider_name.title()} provider is not initialized")
-        
-        return self.controller.image_service.generate_image(
-            prompt=prompt,
-            model=model,
-            provider=provider,
-            provider_name=provider_name,
-            chat_id=chat_id,
-            image_data=image_data,
-            mime_type=mime_type,
-        )
-
-    def generate_image_via_preferred_model(self, prompt, last_msg, image_path=None):
-        """
-        Generate or edit an image using the user-configured preferred image model,
-        falling back to a safe OpenAI default if necessary.
-        
-        Note: We trust the user's selection here - if they've explicitly chosen
-        a model as the image handler, we'll try to use it even if it's not
-        recognized as a standard image model.
-        
-        Args:
-            prompt: The text prompt for image generation/editing
-            last_msg: The last user message dict
-            image_path: Optional path to source image for editing
-        """
-        preferred_model = getattr(self, "image_model", None) or "dall-e-3"
-        provider_name = self.get_provider_name_for_model(preferred_model)
-
-        # For standard image models, verify they're recognized. For custom models,
-        # trust the user's selection - they may have configured a responses API model
-        # that can generate images.
-        is_standard_image_model = self.controller.tool_service.is_image_model(preferred_model, provider_name, self.custom_models)
-        is_custom_model = provider_name == "custom" and preferred_model in (self.custom_models or {})
-        
-        if not is_standard_image_model and not is_custom_model:
-            # Only fall back if it's not a recognized image model AND not a custom model
-            preferred_model = "dall-e-3"
-            provider_name = "openai"
-
-        # If image_path is provided, create a synthetic last_msg with the image
-        effective_last_msg = last_msg
-        has_attached_images = "images" in last_msg and last_msg["images"]
-        
-        if image_path:
-            try:
-                effective_last_msg = {
-                    **last_msg,
-                    "images": [{"path": image_path, "mime_type": "image/png", "is_edit_source": True}]
-                }
-                has_attached_images = True
-            except Exception as e:
-                print(f"[Image Tool] Error loading image for editing: {e}")
-
-        print(f"[Image Tool] Using model: {preferred_model} (provider: {provider_name}), editing: {image_path is not None}")
-        try:
-            return self.generate_image_for_model(
-                model=preferred_model,
-                prompt=prompt or last_msg.get("content", "") or "",
-                last_msg=effective_last_msg,
-                chat_id=self.current_chat_id or "temp",
-                provider_name=provider_name,
-                has_attached_images=has_attached_images,
-            )
-        except Exception as e:
-            # If the preferred provider/model fails (e.g., missing key), fall
-            # back to OpenAI dall-e-3 as a last resort.
-            print(f"[Image Tool] Preferred model failed ({preferred_model} via {provider_name}): {e}")
-            fallback_model = "dall-e-3"
-            print(f"[Image Tool] Falling back to: {fallback_model} (provider: openai)")
-            try:
-                return self.generate_image_for_model(
-                    model=fallback_model,
-                    prompt=prompt or last_msg.get("content", "") or "",
-                    last_msg=last_msg,
-                    chat_id=self.current_chat_id or "temp",
-                    provider_name="openai",
-                    has_attached_images=False,
-                )
-            except Exception as inner:
-                raise RuntimeError(f"Image generation failed for both preferred and fallback models: {inner}") from inner
-
-    def _get_beets_library(self):
-        """
-        Get a beets Library instance based on configured settings.
-        
-        Returns a Library instance or raises an exception with a user-friendly message.
-        """
-        try:
-            from beets.library import Library
-        except ImportError:
-            raise RuntimeError(
-                "The beets library is not installed. Please install it with: pip install beets"
-            )
-        
-        library_db = getattr(self, "music_library_db", "") or ""
-        library_dir = getattr(self, "music_library_dir", "") or ""
-        
-        # If user provided a specific DB path, use it
-        if library_db:
-            if not os.path.exists(library_db):
-                raise RuntimeError(
-                    f"Beets library database not found at: {library_db}. "
-                    "Please check your Music Library DB path in Settings → Tool Options."
-                )
-            return Library(library_db, directory=library_dir if library_dir else None)
-        
-        # Check for app-generated library in the application folder
-        app_library_db = os.path.join(PARENT_DIR, "music_library.db")
-        if os.path.exists(app_library_db):
-            return Library(app_library_db, directory=library_dir if library_dir else None)
-        
-        # Otherwise try to use beets' default configuration
-        try:
-            import beets.util
-            from beets import config as beets_config
-            beets_config.read(user=True, defaults=True)
-            default_db = beets_config['library'].get()
-            default_dir = beets_config['directory'].get()
-            
-            if library_dir:
-                # User specified a directory but not a DB; use default DB with custom dir
-                return Library(default_db, directory=library_dir)
-            else:
-                return Library(default_db, directory=default_dir)
-        except Exception as e:
-            # If beets config fails, provide a helpful message
-            raise RuntimeError(
-                f"Could not load beets library. Either generate a library using the "
-                f"'Generate Library' button in Settings → Tool Options, configure a "
-                f"beets library DB path, or ensure beets is properly configured. "
-                f"Error: {e}"
-            )
-
-    def _control_music_via_beets(self, action, keyword=None, volume=None):
-        """
-        Core implementation of the control_music tool using beets library
-        and a local music player.
-        """
-        action = (action or "").strip().lower()
-        if not action:
-            return "Error: music control action is required."
-
-        player_path = getattr(self, "music_player_path", "/usr/bin/mpv") or "/usr/bin/mpv"
-
-        # Handle play action: query beets and launch player
-        if action == "play":
-            if not keyword or not keyword.strip():
-                return "Error: 'play' action requires a beets query string describing what to play."
-
-            try:
-                lib = self._get_beets_library()
-            except RuntimeError as e:
-                return f"Error: {e}"
-
-            # Query beets for matching items
-            query = keyword.strip()
-            try:
-                items = list(lib.items(query))
-            except Exception as e:
-                return f"Error querying beets library: {e}"
-
-            if not items:
-                return f"No tracks found matching query: {query}"
-
-            # Limit to a reasonable number of tracks to avoid enormous playlists
-            max_tracks = 100
-            if len(items) > max_tracks:
-                items = items[:max_tracks]
-                limited_msg = f" (limited to first {max_tracks} tracks)"
-            else:
-                limited_msg = ""
-
-            # Create a temporary M3U playlist
-            try:
-                playlist_fd, playlist_path = tempfile.mkstemp(suffix=".m3u", prefix="chatgtk_music_")
-                with os.fdopen(playlist_fd, 'w', encoding='utf-8') as f:
-                    f.write("#EXTM3U\n")
-                    for item in items:
-                        # item.path is bytes in beets, decode it
-                        path = item.path
-                        if isinstance(path, bytes):
-                            path = path.decode('utf-8', errors='replace')
-                        f.write(f"{path}\n")
-            except Exception as e:
-                return f"Error creating playlist: {e}"
-
-            # Launch the music player with the playlist.
-            # The user can configure the full command (including arguments) in
-            # the Music Player Executable setting, optionally using a
-            # "<playlist>" placeholder.
-            player_cmd_template = getattr(self, "music_player_path", "/usr/bin/mpv") or "/usr/bin/mpv"
-            try:
-                import shlex
-                parts = shlex.split(player_cmd_template)
-                if not parts:
-                    raise ValueError("Music player command is empty.")
-                if "<playlist>" in player_cmd_template:
-                    # Replace placeholder in each argument.
-                    cmd = [p.replace("<playlist>", playlist_path) for p in parts]
-                else:
-                    # No placeholder: append playlist path as a positional argument.
-                    cmd = parts + [playlist_path]
-            except ValueError as e:
-                # Clean up playlist on error
-                try:
-                    os.unlink(playlist_path)
-                except Exception:
-                    pass
-                return f"Error parsing music player command: {e}"
-
-            try:
-                print(f"Launching music player with command: {cmd}")
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                # Reap the child process in a background thread to avoid zombies
-                def cleanup_player():
-                    proc.wait()
-                    # Clean up playlist file after player exits
-                    try:
-                        os.unlink(playlist_path)
-                    except Exception:
-                        pass
-                threading.Thread(target=cleanup_player, daemon=True).start()
-                
-                return f"Started playing {len(items)} track(s) matching '{query}'{limited_msg}"
-            except FileNotFoundError:
-                # Clean up playlist on error
-                try:
-                    os.unlink(playlist_path)
-                except Exception:
-                    pass
-                return (
-                    f"Error: Music player not found at '{player_path}'. "
-                    "Please check your Music Player Executable path in Settings → Tool Options."
-                )
-            except Exception as e:
-                # Clean up playlist on error
-                try:
-                    os.unlink(playlist_path)
-                except Exception:
-                    pass
-                print(f"Error launching music player: {e}")
-                return f"Error starting music player: {e}"
-
-        # Non-play actions have limited support
-        # Try to use playerctl if available, targeting the configured player.
-        # For playerctl we only want the base executable name, without any
-        # command-line switches. For example, "mpv --playlist" should become
-        # just "mpv" when used as the player name.
-        player_name_source = str(player_path).strip().split()[0]
-        player_name = os.path.basename(player_name_source)
-        
-        if action in ("pause", "resume", "stop", "next", "previous", "volume_up", "volume_down", "set_volume"):
-            try:
-                # Check if playerctl is available
-                subprocess.run(
-                    ["playerctl", "--version"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-            except (FileNotFoundError, subprocess.CalledProcessError):
-                return (
-                    f"Action '{action}' requires playerctl for MPRIS control, but playerctl "
-                    "is not installed. Install playerctl via your package manager, or use "
-                    "'play' with a new query to start different music."
-                )
-
-            # Build playerctl command - try to target the player
-            base_cmd = ["playerctl", "-p", player_name]
-
-            if action == "pause":
-                cmd = base_cmd + ["pause"]
-                success_msg = "Paused playback."
-            elif action == "resume":
-                cmd = base_cmd + ["play"]
-                success_msg = "Resumed playback."
-            elif action == "stop":
-                cmd = base_cmd + ["stop"]
-                success_msg = "Stopped playback."
-            elif action == "next":
-                cmd = base_cmd + ["next"]
-                success_msg = "Skipped to next track."
-            elif action == "previous":
-                cmd = base_cmd + ["previous"]
-                success_msg = "Went back to previous track."
-            elif action == "volume_up":
-                cmd = base_cmd + ["volume", "0.05+"]
-                success_msg = "Increased volume."
-            elif action == "volume_down":
-                cmd = base_cmd + ["volume", "0.05-"]
-                success_msg = "Decreased volume."
-            elif action == "set_volume":
-                if volume is None:
-                    return "Error: 'set_volume' action requires a numeric volume value (0-100)."
-                try:
-                    vol = float(volume)
-                except (TypeError, ValueError):
-                    return "Error: volume must be a number between 0 and 100."
-                if vol > 1.0:
-                    vol = vol / 100.0
-                vol = max(0.0, min(1.0, vol))
-                cmd = base_cmd + ["volume", f"{vol:.2f}"]
-                success_msg = f"Set volume to approximately {int(vol * 100)}%."
-
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    stderr = (result.stderr or "").strip()
-                    stdout = (result.stdout or "").strip()
-                    detail = stderr or stdout or "Unknown error from playerctl."
-                    return f"Error controlling playback via playerctl: {detail}"
-                return success_msg
-            except Exception as e:
-                print(f"Error running playerctl command {cmd}: {e}")
-                return f"Error controlling playback: {e}"
-        else:
-            return f"Error: unsupported music control action '{action}'."
-
-    def control_music_via_beets(self, action, keyword=None, volume=None):
-        """
-        Public wrapper used by AI provider tool handlers to control music via beets.
-        """
-        return self._control_music_via_beets(action, keyword=keyword, volume=volume)
 
     def _handle_read_aloud_tool(self, text: str) -> str:
         """
@@ -1610,142 +1245,6 @@ class OpenAIGTKClient(Gtk.Window):
                 return "Failed to read text aloud."
         except Exception as e:
             return f"Error reading aloud: {e}"
-
-    def _handle_search_memory_tool(self, keyword: str, source: str = "history") -> str:
-        """
-        Handle search_memory tool calls from AI models.
-        
-        Searches past conversations and/or configured directories for the keyword
-        using word-boundary matching.
-        
-        Parameters
-        ----------
-        keyword : str
-            The word or phrase to search for.
-        source : str
-            Where to search: 'history', 'documents', or 'all'.
-        """
-        import re
-        import glob
-        from config import HISTORY_DIR
-        
-        print(f"[SearchTool] Called with keyword='{keyword}', source='{source}'")
-        
-        if not keyword:
-            return "No keyword provided for search."
-        
-        keyword = keyword.strip()
-        source = (source or "history").strip().lower()
-        
-        # Get settings
-        search_history_enabled = bool(getattr(self, "search_history_enabled", True))
-        search_directories = getattr(self, "search_directories", "") or ""
-        result_limit = int(getattr(self, "search_result_limit", 1))
-        result_limit = max(1, min(5, result_limit))
-        
-        # Build word-boundary regex pattern
-        pattern = re.compile(r'\b' + re.escape(keyword) + r'\b', re.IGNORECASE)
-        
-        results = []
-        
-        # Search history if enabled and source includes history
-        if search_history_enabled and source in ("history", "all"):
-            history_results = self._search_history_files(keyword, pattern, result_limit)
-            results.extend(history_results)
-        
-        # Search additional directories if source includes documents
-        if source in ("documents", "all") and search_directories:
-            dirs = [d.strip() for d in search_directories.split(",") if d.strip()]
-            for directory in dirs:
-                if os.path.isdir(directory):
-                    doc_results = self._search_directory(directory, keyword, pattern, result_limit - len(results))
-                    results.extend(doc_results)
-                    if len(results) >= result_limit:
-                        break
-        
-        # Limit results
-        results = results[:result_limit]
-        
-        if not results:
-            return f"No results found for '{keyword}'."
-        
-        # Format results for the model
-        formatted = []
-        for i, result in enumerate(results, 1):
-            formatted.append(f"--- Result {i} ---\nSource: {result['source']}\n{result['content']}")
-        
-        result_text = f"Found {len(results)} result(s) for '{keyword}':\n\n" + "\n\n".join(formatted)
-        
-        # If show_results is disabled, prefix with __HIDE_TOOL_RESULT__ so providers
-        # won't append it to the visible output (but it's still sent to the model)
-        show_results = bool(getattr(self, "search_show_results", False))
-        if not show_results:
-            return "__HIDE_TOOL_RESULT__" + result_text
-        return result_text
-    
-    def _search_history_files(self, keyword: str, pattern, limit: int) -> list:
-        """Search conversation history JSON files for keyword matches."""
-        # Use controller's search_history method which delegates to service/repository
-        search_results = self.controller.search_history(keyword, limit)
-        
-        results = []
-        for sr in search_results:
-            # Format matches for display
-            matches_text = "\n".join(sr.get('matches', [])[:3])
-            results.append({
-                "source": f"Chat: {sr.get('chat_title', sr.get('chat_id', 'Unknown'))}",
-                "content": matches_text
-            })
-        
-        return results
-    
-    def _search_directory(self, directory: str, keyword: str, pattern, limit: int) -> list:
-        """Search text files in a directory for keyword matches."""
-        import glob
-        
-        results = []
-        
-        # Search common text file types
-        file_patterns = ["*.txt", "*.md", "*.json", "*.log", "*.csv"]
-        
-        for file_pattern in file_patterns:
-            if len(results) >= limit:
-                break
-            
-            files = glob.glob(os.path.join(directory, "**", file_pattern), recursive=True)
-            
-            for filepath in files:
-                if len(results) >= limit:
-                    break
-                
-                try:
-                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-                    
-                    if pattern.search(content):
-                        # Extract matching lines with context
-                        lines = content.split('\n')
-                        matching_lines = []
-                        for i, line in enumerate(lines):
-                            if pattern.search(line):
-                                # Get line with some context
-                                start = max(0, i - 1)
-                                end = min(len(lines), i + 2)
-                                context = '\n'.join(lines[start:end])
-                                matching_lines.append(context)
-                                if len(matching_lines) >= 3:
-                                    break
-                        
-                        if matching_lines:
-                            results.append({
-                                "source": f"File: {filepath}",
-                                "content": "\n---\n".join(matching_lines)[:1000]
-                            })
-                            
-                except (IOError, UnicodeDecodeError):
-                    continue
-        
-        return results
 
     def apply_model_fetch_results(self, models, mapping):
         if mapping:
@@ -1824,8 +1323,7 @@ class OpenAIGTKClient(Gtk.Window):
             self._refresh_system_prompt_combo()
             
             # Update the system message in the current conversation if it exists
-            if self.conversation_history and self.conversation_history[0].get("role") == "system":
-                self.conversation_history[0]["content"] = self.system_message
+            self.controller.update_system_message(self.system_message)
 
             # Keep tools in sync via service
             self.controller.tool_service.enable_tool('image', bool(getattr(self, "image_tool_enabled", True)))
@@ -1843,8 +1341,12 @@ class OpenAIGTKClient(Gtk.Window):
             # Update custom models from dialog (already persisted on disk)
             if hasattr(dialog, "get_custom_models"):
                 self.custom_models = dialog.get_custom_models()
+                self.controller.custom_models = self.custom_models  # Sync to controller
                 # Drop any cached custom providers to avoid stale configs
                 self.custom_providers = {}
+
+            # Re-initialize memory service AFTER custom_models is updated
+            self.controller.update_tool_manager()
 
             self.fetch_models_async()
         dialog.destroy()
@@ -2063,17 +1565,8 @@ class OpenAIGTKClient(Gtk.Window):
             self.show_error_dialog("Please select a model before sending a message")
             return False
 
-        quick_image_request = question.lower().startswith("img:")
-        if quick_image_request:
-            question = question[4:].strip()
-            # Use the preferred image model when the user explicitly requests an
-            # image with the img: prefix, falling back to dall-e-3.
-            target_model = getattr(self, "image_model", None) or "dall-e-3"
-            provider_name = self.get_provider_name_for_model(target_model)
-            self.model_provider_map.setdefault(target_model, provider_name)
-        else:
-            target_model = selected_model
-            provider_name = self.get_provider_name_for_model(target_model)
+        target_model = selected_model
+        provider_name = self.get_provider_name_for_model(target_model)
 
         if provider_name == 'custom':
             # Custom models: resolve API key (supports $ENV_VAR syntax)
@@ -2132,19 +1625,6 @@ class OpenAIGTKClient(Gtk.Window):
             return False
         
         model_temperature = self._get_temperature_for_model(target_model)
-
-        if quick_image_request:
-            msg_index = len(self.conversation_history)
-            self.append_message('user', question, msg_index)
-            self.conversation_history.append(create_user_message(question))
-            self.entry_question.set_text("")
-            self.emit_thinking_started(target_model)
-            threading.Thread(
-                target=self.call_ai_api,
-                args=(target_model,),
-                daemon=True
-            ).start()
-            return
 
         # Check if we're in realtime mode
         if "realtime" in target_model.lower():
@@ -2294,31 +1774,18 @@ class OpenAIGTKClient(Gtk.Window):
                 print(f"Error processing file: {e}")
                 display_text = question + f"\n[Error attaching file]"
 
-        msg_index = len(self.conversation_history)
-        
         # Apply formatting (Markdown preprocessing like code blocks/tables) to the user message
         # just like we do for AI responses, so that code blocks render correctly.
         formatted_display_text = format_response(display_text)
         
-        self.append_message('user', formatted_display_text, msg_index)
-        
-        # Store user message in the chat history
-        user_msg = create_user_message(
+        # Add message via controller (handles history, memory, chat ID assignment)
+        # The MESSAGE_SENT event will trigger append_message via _on_message_sent_event
+        self.controller.add_user_message(
             question,
             images=images if images else None,
             files=files if files else None,
+            display_content=display_text if display_text != question else None,
         )
-        # Store display_content if it differs from the API content
-        if display_text != question:
-            user_msg["display_content"] = display_text
-            
-        self.conversation_history.append(user_msg)
-        
-        # Assign a chat ID if none exists
-        if self.current_chat_id is None:
-            # New chat - generate name and save
-            chat_name = generate_chat_name(self.conversation_history[1]['content'])
-            self.current_chat_id = chat_name
 
         # Clear the question input
         self.entry_question.set_text("")
@@ -2455,8 +1922,7 @@ class OpenAIGTKClient(Gtk.Window):
                 
             except Exception as e:
                 err_text = f"Error initializing audio system: {str(e)}"
-                msg_index = len(self.conversation_history)
-                self.conversation_history.append(create_assistant_message(err_text))
+                msg_index = self.controller.add_notification(err_text, 'error')
                 self.append_message('ai', err_text, msg_index)
                 self.btn_voice.set_label("Start Voice Input")
                 self.recording = False
@@ -2726,8 +2192,7 @@ class OpenAIGTKClient(Gtk.Window):
                 except Exception as e:
                     print(f"Real-time streaming error: {e}")
                     err_text = f"Error starting real-time streaming: {str(e)}"
-                    msg_index = len(self.conversation_history)
-                    self.conversation_history.append(create_assistant_message(err_text))
+                    msg_index = self.controller.add_notification(err_text, 'error')
                     self.append_message('ai', err_text, msg_index)
                     self.btn_voice.set_label("Start Voice Input")
                     self.recording = False
@@ -2765,8 +2230,7 @@ class OpenAIGTKClient(Gtk.Window):
                 self.message_widgets.clear()
                 
                 # Reset conversation state
-                self.conversation_history = [create_system_message(self.system_message)]
-                self.current_chat_id = None
+                self.controller.new_chat(self.system_message)
 
             # Delete the chat history via controller
             self.controller.delete_chat(filename)
@@ -2838,11 +2302,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_new_chat_clicked(self, button):
         """Start a new chat conversation."""
-        # Clear conversation history
-        self.conversation_history = [create_system_message(self.system_message)]
-        
-        # Reset chat ID to indicate this is a new chat
-        self.current_chat_id = None
+        self.controller.new_chat(self.system_message)
         self.history_list.unselect_all()
         
         # Clear pending edit image
@@ -2886,16 +2346,14 @@ class OpenAIGTKClient(Gtk.Window):
             save_current: If True, save the current chat before loading (default: True)
         """
         # Save current chat if it's new and has messages
-        if save_current and self.current_chat_id is None and len(self.conversation_history) > 1:
+        if save_current and self.current_chat_id is None and self.controller.get_message_count() > 1:
             self.save_current_chat()
         
         # Load via controller
         chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
         if self.controller.load_chat(chat_id):
-            # Sync from controller
-            history = self.controller.conversation_history
-            self.conversation_history = history
-            self.current_chat_id = self.controller.current_chat_id
+            # Controller now owns the state
+            history = self.conversation_history  # Read from controller
             
             # Save the last active chat to settings
             self.last_active_chat = chat_id
@@ -2985,7 +2443,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def save_current_chat(self):
         """Save the current chat history via controller."""
-        if len(self.conversation_history) > 1:  # More than just the system message
+        if self.controller.get_message_count() > 1:  # More than just the system message
             # Track model in system message
             current_model = self._get_model_id_from_combo()
             if current_model:
@@ -2995,12 +2453,10 @@ class OpenAIGTKClient(Gtk.Window):
                 if not is_excluded or not has_existing_model:
                     self.conversation_history[0]["model"] = current_model
 
-            # Sync conversation to controller and save
-            self.controller.conversation_history = self.conversation_history
             chat_id = self.controller.save_current_chat()
             
             if chat_id:
-                self.current_chat_id = chat_id
+                # Controller already updated current_chat_id, just sync last_active_chat
                 self.last_active_chat = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
                 save_object_settings(self)
 
@@ -3031,7 +2487,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def delete_message(self, message_index: int):
         """Delete a message from UI and history (excluding system message)."""
-        if message_index <= 0 or message_index >= len(self.conversation_history):
+        if message_index <= 0 or message_index >= self.controller.get_message_count():
             return
 
         widget_idx = message_index - 1  # message_widgets excludes system message
@@ -3044,10 +2500,7 @@ class OpenAIGTKClient(Gtk.Window):
         except Exception:
             pass
 
-        try:
-            del self.conversation_history[message_index]
-        except Exception:
-            return
+        self.controller.delete_message(message_index)
 
         # Reassign message_index for remaining widgets
         for idx, child in enumerate(self.message_widgets[widget_idx:], start=widget_idx):

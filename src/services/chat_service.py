@@ -169,7 +169,7 @@ class ChatService:
         metadata_list = self._history_repo.list_all()
         return [meta.to_dict() for meta in metadata_list]
     
-    def search_history(self, query: str, limit: int = 10, exclude_chat_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search_history(self, query: str, limit: int = 10, exclude_chat_id: Optional[str] = None, context_window: int = 200) -> List[Dict[str, Any]]:
         """
         Search chat histories for a keyword.
         
@@ -181,13 +181,15 @@ class ChatService:
             Maximum number of results.
         exclude_chat_id : Optional[str]
             Chat ID to exclude from results (e.g., current chat).
+        context_window : int
+            Characters to show before/after match.
             
         Returns
         -------
         List[Dict[str, Any]]
             List of search result dictionaries.
         """
-        results = self._history_repo.search(query, limit, exclude_chat_id)
+        results = self._history_repo.search(query, limit, exclude_chat_id, context_window)
         return [result.to_dict() for result in results]
     
     def prepare_messages_for_model(

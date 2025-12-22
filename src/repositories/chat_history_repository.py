@@ -268,7 +268,7 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
         
         return fallback
     
-    def search(self, query: str, limit: int = 10, exclude_chat_id: str = None) -> List[SearchResult]:
+    def search(self, query: str, limit: int = 10, exclude_chat_id: str = None, context_window: int = 200) -> List[SearchResult]:
         """
         Search chat histories for a keyword.
         
@@ -280,6 +280,8 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
             Maximum number of results to return.
         exclude_chat_id : str, optional
             Chat ID to exclude from search (e.g., current chat).
+        context_window : int
+            Characters to show before/after match.
             
         Returns
         -------
@@ -289,8 +291,9 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
         if not query:
             return []
         
-        # Build word-boundary regex pattern
-        pattern = re.compile(r'\b' + re.escape(query) + r'\b', re.IGNORECASE)
+        # Build word-boundary regex pattern with optional plural 's'
+        escaped = re.escape(query)
+        pattern = re.compile(r'\b' + escaped + r's?\b', re.IGNORECASE)
         results = []
         
         for chat_file in self.history_dir.glob("*.json"):
@@ -316,12 +319,17 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
                         continue
                     
                     content = msg.get('content', '')
-                    if pattern.search(content):
-                        # Truncate long messages
-                        display_content = content[:500]
-                        if len(content) > 500:
-                            display_content += '...'
-                        matching_messages.append(f"[{role}]: {display_content}")
+                    match = pattern.search(content)
+                    if match:
+                        # Extract context around the match
+                        start = max(0, match.start() - context_window)
+                        end = min(len(content), match.end() + context_window)
+                        snippet = content[start:end]
+                        if start > 0:
+                            snippet = '...' + snippet
+                        if end < len(content):
+                            snippet = snippet + '...'
+                        matching_messages.append(f"[{role}]: {snippet}")
                 
                 if matching_messages:
                     title = self._generate_title(messages, chat_id)

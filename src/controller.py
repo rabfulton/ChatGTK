@@ -145,6 +145,106 @@ class ChatController:
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
         )
+        
+        # Initialize memory service (optional - only if dependencies available)
+        self._memory_service = None
+        self._init_memory_service()
+
+    # -----------------------------------------------------------------------
+    # Memory service management
+    # -----------------------------------------------------------------------
+
+    def _init_memory_service(self) -> None:
+        """Initialize the memory service if dependencies are available and enabled."""
+        from memory import MEMORY_AVAILABLE
+        
+        if not MEMORY_AVAILABLE:
+            return
+        
+        # Close existing service first to release the database lock
+        if self._memory_service is not None:
+            try:
+                self._memory_service.close()
+            except Exception:
+                pass
+            self._memory_service = None
+        
+        if not self._settings_manager.get('MEMORY_ENABLED', False):
+            return
+        
+        try:
+            from memory import MemoryService
+            from config import MEMORY_DB_PATH
+            
+            mode = self._settings_manager.get('MEMORY_EMBEDDING_MODE', 'openai')
+            model = self._settings_manager.get('MEMORY_EMBEDDING_MODEL', 'text-embedding-3-small')
+            
+            # Handle custom embedding providers
+            endpoint = None
+            api_key = None
+            if mode == "custom":
+                cfg = self.custom_models.get(model, {})
+                endpoint = cfg.get("endpoint", "")
+                api_key = cfg.get("api_key", "")
+            
+            self._memory_service = MemoryService(
+                db_path=MEMORY_DB_PATH,
+                embedding_mode=mode,
+                embedding_model=model,
+                api_key=api_key,
+                endpoint=endpoint,
+                event_bus=self._event_bus,
+                settings_manager=self._settings_manager,
+            )
+            print(f"[Memory] Service initialized with mode={mode}, model={model}")
+        except Exception as e:
+            print(f"[Memory] Failed to initialize memory service: {e}")
+            import traceback
+            traceback.print_exc()
+            self._memory_service = None
+
+    def add_to_memory(self, text: str, role: str) -> None:
+        """Add a message to memory if enabled."""
+        if not self._memory_service:
+            return
+        if not self._settings_manager.get('MEMORY_AUTO_IMPORT', True):
+            return
+        
+        store_mode = self._settings_manager.get('MEMORY_STORE_MODE', 'all')
+        if store_mode == 'user' and role != 'user':
+            return
+        if store_mode == 'assistant' and role != 'assistant':
+            return
+        
+        try:
+            self._memory_service.add_memory(
+                text=text,
+                role=role,
+                conversation_id=self.current_chat_id or 'unsaved',
+            )
+        except Exception as e:
+            print(f"[Memory] Failed to add memory: {e}")
+
+    def query_memory(self, query: str) -> str:
+        """Query memory for relevant context."""
+        if not self._memory_service:
+            return ""
+        
+        try:
+            return self._memory_service.get_context_for_llm(
+                query_text=query,
+                k=self._settings_manager.get('MEMORY_RETRIEVAL_TOP_K', 5),
+                min_score=self._settings_manager.get('MEMORY_MIN_SIMILARITY', 0.3),
+                exclude_conversation_id=self.current_chat_id,
+            )
+        except Exception as e:
+            print(f"[Memory] Failed to query memory: {e}")
+            return ""
+
+    @property
+    def memory_service(self):
+        """Access the memory service (may be None if unavailable)."""
+        return self._memory_service
 
     # -----------------------------------------------------------------------
     # System prompts management
@@ -307,10 +407,51 @@ class ChatController:
     # Chat lifecycle
     # -----------------------------------------------------------------------
 
-    def new_chat(self) -> None:
+    def new_chat(self, system_message: Optional[str] = None) -> None:
         """Reset the conversation for a new chat."""
         self.current_chat_id = None
-        self.conversation_history = [create_system_message(self.system_message)]
+        msg = system_message if system_message is not None else self.system_message
+        self.conversation_history = [create_system_message(msg)]
+        self._event_bus.publish(Event(
+            type=EventType.CHAT_CREATED,
+            data={'system_message': msg},
+            source='controller'
+        ))
+
+    def update_system_message(self, content: str) -> None:
+        """Update the system message in the current conversation."""
+        if self.conversation_history and self.conversation_history[0].get("role") == "system":
+            self.conversation_history[0]["content"] = content
+
+    def delete_message(self, index: int) -> bool:
+        """Delete message at index. Returns True if successful."""
+        if 0 < index < len(self.conversation_history):  # Don't delete system message
+            del self.conversation_history[index]
+            self._event_bus.publish(Event(
+                type=EventType.MESSAGE_DELETED,
+                data={'index': index},
+                source='controller'
+            ))
+            return True
+        return False
+
+    def add_notification(self, content: str, notification_type: str = 'info') -> int:
+        """Add a notification message (cancel, error, etc.) as assistant message."""
+        msg = create_assistant_message(content)
+        msg_index = len(self.conversation_history)
+        self.conversation_history.append(msg)
+        return msg_index
+
+    def get_message_count(self) -> int:
+        """Get the number of messages in conversation history."""
+        return len(self.conversation_history)
+
+    def get_last_user_content(self) -> Optional[str]:
+        """Get content of the last user message, for chat name generation."""
+        for msg in reversed(self.conversation_history):
+            if msg.get('role') == 'user':
+                return msg.get('content', '')
+        return None
 
     def load_chat(self, chat_id: str) -> bool:
         """
@@ -363,12 +504,383 @@ class ChatController:
         return self._chat_service.list_chats()
 
     def delete_chat(self, chat_id: str) -> bool:
-        """Delete a chat via service."""
+        """Delete a chat via service, including associated memories."""
+        # Delete memories for this conversation if memory service is available
+        if self._memory_service:
+            try:
+                deleted = self._memory_service.delete_conversation_memories(chat_id)
+                if deleted:
+                    print(f"[Memory] Deleted {deleted} memories for chat {chat_id}")
+            except Exception as e:
+                print(f"[Memory] Error deleting memories for chat {chat_id}: {e}")
+        
         return self._chat_service.delete_chat(chat_id)
 
-    def search_history(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_history(self, query: str, limit: int = 10, context_window: int = 200) -> List[Dict[str, Any]]:
         """Search chat histories via service."""
-        return self._chat_service.search_history(query, limit, exclude_chat_id=self.current_chat_id)
+        return self._chat_service.search_history(query, limit, exclude_chat_id=self.current_chat_id, context_window=context_window)
+
+    # -----------------------------------------------------------------------
+    # Tool handlers (UI-agnostic implementations)
+    # -----------------------------------------------------------------------
+
+    def handle_image_tool(self, prompt: str, image_path: Optional[str] = None) -> str:
+        """
+        Handle image generation tool calls.
+        
+        Parameters
+        ----------
+        prompt : str
+            The image generation prompt.
+        image_path : Optional[str]
+            Path to source image for editing.
+            
+        Returns
+        -------
+        str
+            Result message or image tag.
+        """
+        import base64
+        
+        preferred_model = self._settings_manager.get('IMAGE_MODEL', 'dall-e-3') or 'dall-e-3'
+        provider_name = self.get_provider_name_for_model(preferred_model)
+        
+        # Verify model is valid for image generation
+        is_standard = self._tool_service.is_image_model(preferred_model, provider_name, self.custom_models)
+        is_custom = provider_name == "custom" and preferred_model in (self.custom_models or {})
+        
+        if not is_standard and not is_custom:
+            preferred_model = "dall-e-3"
+            provider_name = "openai"
+        
+        # Prepare image data for editing
+        image_data = None
+        mime_type = None
+        if image_path:
+            try:
+                with open(image_path, "rb") as f:
+                    image_data = base64.b64encode(f.read()).decode("utf-8")
+                mime_type = "image/png"
+            except Exception as e:
+                print(f"[Image Tool] Error loading image: {e}")
+        
+        # Also check last message for attached images
+        last_msg = self.conversation_history[-1] if self.conversation_history else {}
+        if not image_data and last_msg.get("images"):
+            img = last_msg["images"][0]
+            if img.get("data"):
+                image_data = img.get("data")
+            elif img.get("path"):
+                try:
+                    with open(img["path"], "rb") as f:
+                        image_data = base64.b64encode(f.read()).decode("utf-8")
+                except Exception:
+                    pass
+            mime_type = img.get("mime_type", "image/png")
+        
+        provider = self.get_provider_for_model(preferred_model)
+        if not provider:
+            raise ValueError(f"{provider_name.title()} provider is not initialized")
+        
+        try:
+            return self._image_service.generate_image(
+                prompt=prompt,
+                model=preferred_model,
+                provider=provider,
+                provider_name=provider_name,
+                chat_id=self.current_chat_id or "temp",
+                image_data=image_data,
+                mime_type=mime_type,
+            )
+        except Exception as e:
+            # Fallback to dall-e-3
+            print(f"[Image Tool] Preferred model failed: {e}, falling back to dall-e-3")
+            provider = self.get_provider_for_model("dall-e-3")
+            return self._image_service.generate_image(
+                prompt=prompt,
+                model="dall-e-3",
+                provider=provider,
+                provider_name="openai",
+                chat_id=self.current_chat_id or "temp",
+            )
+
+    def handle_search_tool(self, keyword: str, source: str = "history") -> str:
+        """
+        Handle search/memory tool calls.
+        
+        Parameters
+        ----------
+        keyword : str
+            The search keyword.
+        source : str
+            Where to search: 'history', 'documents', or 'all'.
+            
+        Returns
+        -------
+        str
+            Search results formatted for the model.
+        """
+        import re
+        import os
+        import glob
+        
+        if not keyword:
+            return "No keyword provided for search."
+        
+        keyword = keyword.strip()
+        source = (source or "history").strip().lower()
+        
+        search_history_enabled = self._settings_manager.get('SEARCH_HISTORY_ENABLED', True)
+        search_directories = self._settings_manager.get('SEARCH_DIRECTORIES', '') or ''
+        result_limit = max(1, min(5, int(self._settings_manager.get('SEARCH_RESULT_LIMIT', 1))))
+        context_window = max(50, min(500, int(self._settings_manager.get('SEARCH_CONTEXT_WINDOW', 200))))
+        show_results = self._settings_manager.get('SEARCH_SHOW_RESULTS', False)
+        
+        # Pattern with optional plural 's'
+        pattern = re.compile(r'\b' + re.escape(keyword) + r's?\b', re.IGNORECASE)
+        results = []
+        
+        # Search history - pass context_window to repository
+        if search_history_enabled and source in ("history", "all"):
+            search_results = self.search_history(keyword, result_limit, context_window)
+            for sr in search_results:
+                matches_text = "\n".join(sr.get('matches', [])[:3])
+                results.append({
+                    "source": f"Chat: {sr.get('chat_title', sr.get('chat_id', 'Unknown'))}",
+                    "content": matches_text
+                })
+        
+        # Search directories
+        if source in ("documents", "all") and search_directories:
+            dirs = [d.strip() for d in search_directories.split(",") if d.strip()]
+            for directory in dirs:
+                if len(results) >= result_limit:
+                    break
+                if not os.path.isdir(directory):
+                    continue
+                for ext in ["*.txt", "*.md", "*.json", "*.log", "*.csv"]:
+                    if len(results) >= result_limit:
+                        break
+                    for filepath in glob.glob(os.path.join(directory, "**", ext), recursive=True):
+                        if len(results) >= result_limit:
+                            break
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                            match = pattern.search(content)
+                            if match:
+                                # Extract context around match
+                                start = max(0, match.start() - context_window)
+                                end = min(len(content), match.end() + context_window)
+                                snippet = content[start:end]
+                                if start > 0:
+                                    snippet = '...' + snippet
+                                if end < len(content):
+                                    snippet = snippet + '...'
+                                results.append({
+                                    "source": filepath,
+                                    "content": snippet
+                                })
+                        except Exception:
+                            pass
+        
+        results = results[:result_limit]
+        
+        if not results:
+            return f"No results found for '{keyword}'."
+        
+        formatted = []
+        for i, result in enumerate(results, 1):
+            formatted.append(f"--- Result {i} ---\nSource: {result['source']}\n{result['content']}")
+        
+        result_text = f"Found {len(results)} result(s) for '{keyword}':\n\n" + "\n\n".join(formatted)
+        
+        if not show_results:
+            return "__HIDE_TOOL_RESULT__" + result_text
+        return result_text
+
+    def handle_music_tool(self, action: str, keyword: Optional[str] = None, volume: Optional[float] = None) -> str:
+        """
+        Handle music control tool calls.
+        
+        Parameters
+        ----------
+        action : str
+            The action: play, pause, resume, stop, next, previous, volume_up, volume_down, set_volume.
+        keyword : Optional[str]
+            Beets query string for 'play' action.
+        volume : Optional[float]
+            Volume level for 'set_volume' action (0-100).
+            
+        Returns
+        -------
+        str
+            Result message.
+        """
+        import subprocess
+        import tempfile
+        import threading
+        
+        action = (action or "").strip().lower()
+        if not action:
+            return "Error: music control action is required."
+        
+        player_path = self._settings_manager.get('MUSIC_PLAYER_PATH', '/usr/bin/mpv') or '/usr/bin/mpv'
+        
+        if action == "play":
+            if not keyword or not keyword.strip():
+                return "Error: 'play' action requires a beets query string."
+            
+            try:
+                lib = self._get_beets_library()
+            except RuntimeError as e:
+                return f"Error: {e}"
+            
+            query = keyword.strip()
+            try:
+                items = list(lib.items(query))
+            except Exception as e:
+                return f"Error querying beets library: {e}"
+            
+            if not items:
+                return f"No tracks found matching query: {query}"
+            
+            max_tracks = 100
+            limited_msg = ""
+            if len(items) > max_tracks:
+                items = items[:max_tracks]
+                limited_msg = f" (limited to first {max_tracks} tracks)"
+            
+            # Create playlist
+            try:
+                import os
+                playlist_fd, playlist_path = tempfile.mkstemp(suffix=".m3u", prefix="chatgtk_music_")
+                with os.fdopen(playlist_fd, 'w', encoding='utf-8') as f:
+                    f.write("#EXTM3U\n")
+                    for item in items:
+                        path = item.path
+                        if isinstance(path, bytes):
+                            path = path.decode('utf-8', errors='replace')
+                        f.write(f"{path}\n")
+            except Exception as e:
+                return f"Error creating playlist: {e}"
+            
+            # Launch player
+            try:
+                import shlex
+                import os
+                parts = shlex.split(player_path)
+                if "<playlist>" in player_path:
+                    cmd = [p.replace("<playlist>", playlist_path) for p in parts]
+                else:
+                    cmd = parts + [playlist_path]
+                
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                def cleanup():
+                    proc.wait()
+                    try:
+                        os.unlink(playlist_path)
+                    except Exception:
+                        pass
+                threading.Thread(target=cleanup, daemon=True).start()
+                
+                return f"Started playing {len(items)} track(s) matching '{query}'{limited_msg}"
+            except FileNotFoundError:
+                try:
+                    import os
+                    os.unlink(playlist_path)
+                except Exception:
+                    pass
+                return f"Error: Music player not found at '{player_path}'."
+            except Exception as e:
+                try:
+                    import os
+                    os.unlink(playlist_path)
+                except Exception:
+                    pass
+                return f"Error starting music player: {e}"
+        
+        # Non-play actions via playerctl
+        import os
+        player_name = os.path.basename(str(player_path).strip().split()[0])
+        
+        if action in ("pause", "resume", "stop", "next", "previous", "volume_up", "volume_down", "set_volume"):
+            try:
+                subprocess.run(["playerctl", "--version"], capture_output=True, check=True)
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                return f"Action '{action}' requires playerctl for MPRIS control."
+            
+            base_cmd = ["playerctl", "-p", player_name]
+            
+            cmd_map = {
+                "pause": (["pause"], "Paused playback."),
+                "resume": (["play"], "Resumed playback."),
+                "stop": (["stop"], "Stopped playback."),
+                "next": (["next"], "Skipped to next track."),
+                "previous": (["previous"], "Went back to previous track."),
+                "volume_up": (["volume", "0.05+"], "Increased volume."),
+                "volume_down": (["volume", "0.05-"], "Decreased volume."),
+            }
+            
+            if action == "set_volume":
+                if volume is None:
+                    return "Error: 'set_volume' requires a volume value (0-100)."
+                try:
+                    vol = float(volume)
+                except (TypeError, ValueError):
+                    return "Error: volume must be a number."
+                if vol > 1.0:
+                    vol = vol / 100.0
+                vol = max(0.0, min(1.0, vol))
+                cmd = base_cmd + ["volume", f"{vol:.2f}"]
+                success_msg = f"Set volume to {int(vol * 100)}%."
+            else:
+                args, success_msg = cmd_map[action]
+                cmd = base_cmd + args
+            
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    return f"Error: {result.stderr or result.stdout or 'Unknown error'}"
+                return success_msg
+            except Exception as e:
+                return f"Error controlling playback: {e}"
+        
+        return f"Error: unsupported action '{action}'."
+
+    def _get_beets_library(self):
+        """Get a beets Library instance based on settings."""
+        try:
+            from beets.library import Library
+        except ImportError:
+            raise RuntimeError("beets library not installed. Install with: pip install beets")
+        
+        library_db = self._settings_manager.get('MUSIC_LIBRARY_DB', '') or ''
+        library_dir = self._settings_manager.get('MUSIC_LIBRARY_DIR', '') or ''
+        
+        if library_db:
+            import os
+            if not os.path.exists(library_db):
+                raise RuntimeError(f"Beets library not found at: {library_db}")
+            return Library(library_db, directory=library_dir if library_dir else None)
+        
+        # Check for app-generated library
+        from config import PARENT_DIR
+        import os
+        app_library_db = os.path.join(PARENT_DIR, "music_library.db")
+        if os.path.exists(app_library_db):
+            return Library(app_library_db, directory=library_dir if library_dir else None)
+        
+        # Try beets default config
+        try:
+            from beets import config as beets_config
+            beets_config.read(user=True, defaults=True)
+            default_db = beets_config['library'].get()
+            default_dir = beets_config['directory'].get()
+            return Library(default_db, directory=library_dir or default_dir)
+        except Exception as e:
+            raise RuntimeError(f"Could not load beets library: {e}")
 
     # -----------------------------------------------------------------------
     # Message preparation
@@ -428,7 +940,7 @@ class ChatController:
 
     def messages_for_model(self, model_name: str) -> List[Dict[str, Any]]:
         """
-        Return the conversation history with tool guidance appended for chat models.
+        Return the conversation history with tool guidance and memory context appended for chat models.
         """
         if not self.conversation_history:
             return []
@@ -455,12 +967,71 @@ class ChatController:
 
         limited_history = self.apply_conversation_buffer_limit(self.conversation_history)
 
-        if new_prompt == current_prompt:
+        # Query memory for relevant context
+        memory_context = self._get_memory_context_for_query()
+        
+        if new_prompt == current_prompt and not memory_context:
             return limited_history
 
         messages = [msg.copy() for msg in limited_history]
         messages[0]["content"] = new_prompt
+        
+        # Inject memory context as second message (after system prompt)
+        if memory_context:
+            memory_appendix = self._settings_manager.get('MEMORY_PROMPT_APPENDIX', '')
+            memory_message = {
+                "role": "system",
+                "content": f"{memory_appendix}\n\n{memory_context}" if memory_appendix else memory_context
+            }
+            messages.insert(1, memory_message)
+            print(f"[Memory] Injected context into conversation")
+        
         return messages
+
+    def _get_memory_context_for_query(self) -> str:
+        """Get memory context based on recent conversation."""
+        if not self._memory_service:
+            return ""
+        
+        if not self._settings_manager.get('MEMORY_ENABLED', False):
+            return ""
+        
+        # Build query from last few messages for better context
+        query_parts = []
+        msg_count = 0
+        for msg in reversed(self.conversation_history):
+            role = msg.get("role", "")
+            if role == "system":
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                content = " ".join(text_parts)
+            if content:
+                query_parts.insert(0, content)
+                msg_count += 1
+                if msg_count >= 3:  # Last 3 messages for context
+                    break
+        
+        if not query_parts:
+            return ""
+        
+        # Combine recent messages, prioritizing the last user message
+        query_text = " ".join(query_parts)[-1000:]  # Limit query length
+        
+        try:
+            context = self._memory_service.get_context_for_llm(
+                query_text=query_text,
+                k=self._settings_manager.get('MEMORY_RETRIEVAL_TOP_K', 5),
+                min_score=self._settings_manager.get('MEMORY_MIN_SIMILARITY', 0.5),
+                exclude_conversation_id=self.current_chat_id,
+            )
+            if context:
+                print(f"[Memory] Found relevant memories for query: {query_text[:80]}...")
+            return context
+        except Exception as e:
+            print(f"[Memory] Error querying memory: {e}")
+            return ""
 
     # -----------------------------------------------------------------------
     # Service accessors
@@ -649,6 +1220,7 @@ class ChatController:
         content: str,
         images: Optional[List[Dict[str, Any]]] = None,
         files: Optional[List[Dict[str, Any]]] = None,
+        display_content: Optional[str] = None,
     ) -> int:
         """
         Add a user message to the conversation history.
@@ -661,6 +1233,8 @@ class ChatController:
             List of image attachments.
         files : Optional[List[Dict]]
             List of file attachments.
+        display_content : Optional[str]
+            Alternative content for display (e.g., with attachment info).
             
         Returns
         -------
@@ -668,14 +1242,28 @@ class ChatController:
             The index of the added message.
         """
         msg = self.prepare_message(content, images, files)
+        if display_content and display_content != content:
+            msg["display_content"] = display_content
         msg_index = len(self.conversation_history)
         self.conversation_history.append(msg)
         
+        # Auto-assign chat ID on first user message
+        if self.current_chat_id is None and msg_index == 1:
+            from utils import generate_chat_name
+            self.current_chat_id = generate_chat_name(content)
+        
         self._event_bus.publish(Event(
             type=EventType.MESSAGE_SENT,
-            data={'content': content, 'index': msg_index, 'role': 'user'},
+            data={
+                'content': display_content or content,
+                'index': msg_index,
+                'role': 'user'
+            },
             source='controller'
         ))
+        
+        # Add to memory if enabled
+        self.add_to_memory(content, 'user')
         
         return msg_index
 
@@ -703,15 +1291,10 @@ class ChatController:
             source='controller'
         ))
         
+        # Add to memory if enabled
+        self.add_to_memory(content, 'assistant')
+        
         return msg_index
-
-    def is_quick_image_request(self, content: str) -> bool:
-        """Check if content is a quick image generation request (img: prefix)."""
-        return content.lower().startswith("img:")
-
-    def get_image_prompt(self, content: str) -> str:
-        """Extract image prompt from img: prefixed content."""
-        return content[4:].strip()
 
     def get_preferred_image_model(self) -> str:
         """Get the user's preferred image generation model."""
@@ -885,6 +1468,9 @@ class ChatController:
             assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
             message_index = len(self.conversation_history)
             self.conversation_history.append(assistant_message)
+            
+            # Add to memory if enabled
+            self.add_to_memory(answer, 'assistant')
             
             # Store model in system message (first message)
             if self.conversation_history:
@@ -1097,3 +1683,5 @@ class ChatController:
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
         )
+        # Re-initialize memory service if settings changed
+        self._init_memory_service()
