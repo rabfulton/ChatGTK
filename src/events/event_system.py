@@ -21,6 +21,14 @@ class EventType(Enum):
     MESSAGE_STREAMING = auto()
     MESSAGE_DELETED = auto()
     
+    # Document events
+    DOCUMENT_CREATED = auto()
+    DOCUMENT_LOADED = auto()
+    DOCUMENT_SAVED = auto()
+    DOCUMENT_UPDATED = auto()
+    DOCUMENT_UNDO = auto()
+    DOCUMENT_REDO = auto()
+    
     # Model events
     MODELS_FETCHED = auto()
     MODEL_CHANGED = auto()

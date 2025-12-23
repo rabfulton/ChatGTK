@@ -133,6 +133,8 @@ class OpenAIGTKClient(Gtk.Window):
             on_chat_selected=self.load_chat_by_filename,
             on_new_chat=lambda: self.on_new_chat_clicked(None),
             on_context_menu=self._on_sidebar_context_menu,
+            on_document_selected=self.open_document,
+            on_new_document=self.create_new_document,
             width=int(self.settings.get('SIDEBAR_WIDTH', 200)),
         )
         self.sidebar = self._history_sidebar.widget
@@ -223,7 +225,7 @@ class OpenAIGTKClient(Gtk.Window):
         vbox_main.pack_start(self._toolbar.widget, False, False, 0)
 
         # Chat view component for message display
-        from ui import ChatView
+        from ui import ChatView, DocumentView
         self._chat_view = ChatView(
             event_bus=self.controller.event_bus,
             window=self,
@@ -231,7 +233,31 @@ class OpenAIGTKClient(Gtk.Window):
             ai_color=self.settings.get('AI_COLOR', '#0D47A1'),
             on_cancel=self._on_thinking_cancelled,
         )
-        vbox_main.pack_start(self._chat_view.widget, True, True, 0)
+        
+        # Document view component for Document Mode
+        self._document_view = DocumentView(
+            event_bus=self.controller.event_bus,
+            on_content_changed=self._on_document_content_changed,
+            on_undo=self._on_document_undo,
+            on_redo=self._on_document_redo,
+            on_export=self._on_document_export,
+            on_copy=self._on_document_copy,
+            font_family=self.settings.get('FONT_FAMILY', 'Sans'),
+            font_size=self.settings.get('FONT_SIZE', 12),
+        )
+        
+        # Track current view mode
+        self._in_document_mode = False
+        
+        # Stack to switch between chat and document views
+        self._view_stack = Gtk.Stack()
+        self._view_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self._view_stack.set_transition_duration(150)
+        self._view_stack.add_named(self._chat_view.widget, "chat")
+        self._view_stack.add_named(self._document_view.widget, "document")
+        self._view_stack.set_visible_child_name("chat")
+        
+        vbox_main.pack_start(self._view_stack, True, True, 0)
         # Expose conversation_box and message_widgets for backward compatibility
         self.conversation_box = self._chat_view.conversation_box
         self.message_widgets = self._chat_view.message_widgets
@@ -954,6 +980,210 @@ class OpenAIGTKClient(Gtk.Window):
         cancel_text = "** Request cancelled by user **"
         message_index = self.controller.add_notification(cancel_text, 'cancel')
         GLib.idle_add(lambda idx=message_index: self.append_message('ai', cancel_text, idx))
+
+    # -----------------------------------------------------------------------
+    # Document Mode callbacks
+    # -----------------------------------------------------------------------
+
+    def _on_document_content_changed(self, content: str) -> None:
+        """Handle manual content changes in Document Mode."""
+        self.controller.set_document_content(content)
+        # Debounced auto-save
+        if hasattr(self, '_doc_save_timeout') and self._doc_save_timeout:
+            GLib.source_remove(self._doc_save_timeout)
+        self._doc_save_timeout = GLib.timeout_add(1000, self._auto_save_document)
+
+    def _auto_save_document(self) -> bool:
+        """Auto-save the document after typing stops."""
+        self._doc_save_timeout = None
+        self.controller.save_document()
+        return False  # Don't repeat
+
+    def _on_document_undo(self) -> None:
+        """Handle undo in Document Mode."""
+        summary = self.controller.undo_document_edit()
+        if summary:
+            # Update the view with new content
+            self._document_view.set_content(self.controller.get_document_content())
+            self._update_document_undo_redo_state()
+
+    def _on_document_redo(self) -> None:
+        """Handle redo in Document Mode."""
+        summary = self.controller.redo_document_edit()
+        if summary:
+            self._document_view.set_content(self.controller.get_document_content())
+            self._update_document_undo_redo_state()
+
+    def _on_document_export(self) -> None:
+        """Handle export to PDF in Document Mode."""
+        if not self.controller.has_document():
+            return
+        doc = self.controller.document_service.current_document
+        
+        # Use native file chooser if available
+        if hasattr(Gtk, "FileChooserNative"):
+            dialog = Gtk.FileChooserNative(
+                title="Export Document to PDF",
+                transient_for=self,
+                action=Gtk.FileChooserAction.SAVE,
+                accept_label="Save",
+                cancel_label="Cancel",
+            )
+        else:
+            dialog = Gtk.FileChooserDialog(
+                title="Export Document to PDF",
+                parent=self,
+                action=Gtk.FileChooserAction.SAVE,
+            )
+            dialog.add_buttons(
+                "Cancel", Gtk.ResponseType.CANCEL,
+                "Save", Gtk.ResponseType.OK,
+            )
+        
+        # Add PDF filter
+        pdf_filter = Gtk.FileFilter()
+        pdf_filter.set_name("PDF files")
+        pdf_filter.add_pattern("*.pdf")
+        dialog.add_filter(pdf_filter)
+        dialog.set_current_name(f"{doc.title}.pdf")
+        
+        response = dialog.run()
+        if response in (Gtk.ResponseType.OK, Gtk.ResponseType.ACCEPT):
+            filename = dialog.get_filename()
+            if not filename.endswith('.pdf'):
+                filename += '.pdf'
+            
+            # Create a conversation-like structure for export_chat_to_pdf
+            # The document content is treated as an assistant message for rendering
+            conversation = [{'role': 'assistant', 'content': doc.content}]
+            
+            try:
+                result = export_chat_to_pdf(conversation, filename, doc.title)
+                success = result[0] if isinstance(result, tuple) else result
+                
+                if success:
+                    info_dialog = Gtk.MessageDialog(
+                        transient_for=self,
+                        flags=0,
+                        message_type=Gtk.MessageType.INFO,
+                        buttons=Gtk.ButtonsType.OK,
+                        text="Export successful",
+                    )
+                    info_dialog.format_secondary_text(f"Document exported to:\n{filename}")
+                    info_dialog.run()
+                    info_dialog.destroy()
+                else:
+                    self.show_error_dialog("Export failed. Check that LaTeX is installed.")
+            except Exception as e:
+                self.show_error_dialog(f"Export failed: {e}")
+        
+        dialog.destroy()
+
+    def _on_document_copy(self) -> None:
+        """Handle copy all in Document Mode."""
+        content = self.controller.get_document_content()
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(content, -1)
+
+    def _register_document_text_target(self) -> None:
+        """Register the current document as a text target for tool edits."""
+        if not self.controller.has_document():
+            return
+        from controller import TextTarget
+        target = TextTarget(
+            get_text=lambda: self.controller.get_document_content(),
+            apply_tool_edit=lambda text, summary=None: self._apply_document_tool_edit(text, summary),
+        )
+        self.controller.register_text_target("document", target)
+
+    def _apply_document_tool_edit(self, text: str, summary: str = None) -> None:
+        """Apply a tool edit to the document and update the view."""
+        self.controller.apply_document_edit(text, summary or "")
+        GLib.idle_add(self._sync_document_view)
+
+    def _sync_document_view(self) -> None:
+        """Sync the document view with the current document content."""
+        if self.controller.has_document():
+            self._document_view.set_content(self.controller.get_document_content())
+            self._update_document_undo_redo_state()
+
+    def _update_document_undo_redo_state(self) -> None:
+        """Update undo/redo button states."""
+        if self.controller.has_document():
+            self._document_view.set_undo_enabled(self.controller.document_service.can_undo)
+            self._document_view.set_redo_enabled(self.controller.document_service.can_redo)
+
+    def _switch_to_document_view(self) -> None:
+        """Switch to Document Mode view."""
+        self._in_document_mode = True
+        self._view_stack.set_visible_child_name("document")
+        # Set popover anchor to input panel
+        self._document_view.set_popover_anchor(self._input_panel.widget)
+        if self.controller.has_document():
+            doc = self.controller.document_service.current_document
+            self._document_view.set_title(doc.title)
+            self._document_view.set_content(doc.content)
+            self._update_document_undo_redo_state()
+            self._register_document_text_target()
+
+    def _switch_to_chat_view(self) -> None:
+        """Switch to Chat view."""
+        self._in_document_mode = False
+        self._view_stack.set_visible_child_name("chat")
+        # Unregister document target
+        if "document" in self.controller._text_targets:
+            del self.controller._text_targets["document"]
+
+    def open_document(self, doc_id: str) -> bool:
+        """Open a document in Document Mode."""
+        if self.controller.load_document(doc_id):
+            self._switch_to_document_view()
+            return True
+        return False
+
+    def create_new_document(self) -> None:
+        """Create a new document and open it."""
+        # Show dialog to get title
+        dialog = Gtk.Dialog(
+            title="New Document",
+            parent=self,
+            flags=0,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK,
+        )
+        
+        box = dialog.get_content_area()
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        
+        label = Gtk.Label(label="Document title:")
+        label.set_xalign(0)
+        box.add(label)
+        
+        entry = Gtk.Entry()
+        entry.set_text("Untitled")
+        entry.set_activates_default(True)
+        box.add(entry)
+        
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.show_all()
+        
+        response = dialog.run()
+        title = entry.get_text().strip() or "Untitled"
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK:
+            self.controller.new_document(title=title)
+            self._switch_to_document_view()
+            self._history_sidebar.refresh()
+
+    # -----------------------------------------------------------------------
+    # Event emission helpers
+    # -----------------------------------------------------------------------
 
     def emit_thinking_started(self, model: str = None):
         """Emit THINKING_STARTED event and show animation."""
@@ -2567,7 +2797,77 @@ class OpenAIGTKClient(Gtk.Window):
         
     def _on_sidebar_context_menu(self, row, event):
         """Handle sidebar context menu request."""
-        self.create_history_context_menu(row)
+        if hasattr(row, 'is_document') and row.is_document:
+            self._create_document_context_menu(row)
+        else:
+            self.create_history_context_menu(row)
+
+    def _create_document_context_menu(self, row):
+        """Create a context menu for document items."""
+        menu = Gtk.Menu()
+        
+        # Rename option
+        rename_item = Gtk.MenuItem(label="Rename Document")
+        rename_item.connect("activate", self._on_rename_document, row)
+        menu.append(rename_item)
+        
+        # Delete option
+        delete_item = Gtk.MenuItem(label="Delete Document")
+        delete_item.connect("activate", self._on_delete_document, row)
+        menu.append(delete_item)
+        
+        menu.show_all()
+        menu.popup_at_pointer(None)
+
+    def _on_rename_document(self, widget, row):
+        """Handle rename document action."""
+        dialog = Gtk.Dialog(title="Rename Document", parent=self, flags=0)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Rename", Gtk.ResponseType.OK)
+        
+        box = dialog.get_content_area()
+        box.set_spacing(6)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        
+        doc = self.controller.document_service.get_document(row.doc_id)
+        entry = Gtk.Entry()
+        entry.set_text(doc.title if doc else "Untitled")
+        entry.set_activates_default(True)
+        box.add(entry)
+        
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.show_all()
+        response = dialog.run()
+        
+        if response == Gtk.ResponseType.OK:
+            new_name = entry.get_text().strip()
+            if new_name and doc:
+                self.controller.document_service.update_document(row.doc_id, title=new_name)
+                self._history_sidebar.refresh()
+        
+        dialog.destroy()
+
+    def _on_delete_document(self, widget, row):
+        """Handle delete document action."""
+        dialog = Gtk.MessageDialog(
+            parent=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Delete this document?"
+        )
+        dialog.format_secondary_text("This action cannot be undone.")
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.YES:
+            self.controller.document_service.delete_document(row.doc_id)
+            # If viewing this document, switch to chat view
+            if self._in_document_mode and self.controller.document_service.current_document_id == row.doc_id:
+                self._switch_to_chat_view()
+            self._history_sidebar.refresh()
 
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""
@@ -2588,6 +2888,11 @@ class OpenAIGTKClient(Gtk.Window):
             filename: The chat filename (with or without .json extension)
             save_current: If True, save the current chat before loading (default: True)
         """
+        # Switch to chat view if in document mode
+        if self._in_document_mode:
+            self._switch_to_chat_view()
+            self.controller.close_document()
+        
         # Save current chat if it's new and has messages
         if save_current and self.current_chat_id is None and self.controller.get_message_count() > 1:
             self.save_current_chat()

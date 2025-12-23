@@ -9,10 +9,12 @@ from .chat_service import ChatService
 from .image_service import ImageGenerationService
 from .audio_service import AudioService
 from .tool_service import ToolService
+from .document_service import DocumentService
 
 __all__ = [
     'ChatService',
     'ImageGenerationService',
     'AudioService',
     'ToolService',
+    'DocumentService',
 ]

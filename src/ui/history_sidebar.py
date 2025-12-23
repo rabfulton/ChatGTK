@@ -38,6 +38,8 @@ class HistorySidebar(UIComponent):
         on_rename_chat: Optional[Callable[[str], None]] = None,
         on_export_chat: Optional[Callable[[str], None]] = None,
         on_context_menu: Optional[Callable[[Gtk.ListBoxRow, Gdk.EventButton], None]] = None,
+        on_document_selected: Optional[Callable[[str], None]] = None,
+        on_new_document: Optional[Callable[[], None]] = None,
         width: int = 200,
     ):
         """
@@ -61,6 +63,10 @@ class HistorySidebar(UIComponent):
             Callback when export is requested.
         on_context_menu : Optional[Callable]
             Callback for custom context menu handling.
+        on_document_selected : Optional[Callable[[str], None]]
+            Callback when a document is selected.
+        on_new_document : Optional[Callable[[], None]]
+            Callback when new document is requested.
         width : int
             Initial sidebar width.
         """
@@ -73,6 +79,8 @@ class HistorySidebar(UIComponent):
         self._on_rename_chat = on_rename_chat
         self._on_export_chat = on_export_chat
         self._on_context_menu = on_context_menu
+        self._on_document_selected = on_document_selected
+        self._on_new_document = on_new_document
         
         # Filter state
         self._filter_text = ""
@@ -126,6 +134,13 @@ class HistorySidebar(UIComponent):
         self.search_toggle.set_tooltip_text("Filter History")
         self.search_toggle.connect("toggled", self._on_search_toggled)
         top_row.pack_start(self.search_toggle, False, False, 0)
+        
+        # New Document button (left of New Chat)
+        new_doc_btn = Gtk.Button()
+        new_doc_btn.set_image(Gtk.Image.new_from_icon_name("document-new-symbolic", Gtk.IconSize.BUTTON))
+        new_doc_btn.set_tooltip_text("New Document")
+        new_doc_btn.connect('clicked', self._on_new_document_clicked)
+        top_row.pack_start(new_doc_btn, False, False, 0)
         
         # New Chat button
         new_chat_btn = Gtk.Button(label="New Chat")
@@ -203,12 +218,19 @@ class HistorySidebar(UIComponent):
         if not self._controller:
             return
         
-        # Get histories
+        # Get histories (chats)
         histories = self._controller.list_chats()
         
-        # Apply filter
+        # Get documents
+        documents = []
+        if hasattr(self._controller, 'list_documents'):
+            documents = self._controller.list_documents()
+        
+        # Apply filter to chats
         if self._filter_text:
             histories = [h for h in histories if self._matches_filter(h)]
+            # Also filter documents by title
+            documents = [d for d in documents if self._filter_text.lower() in d.get('title', '').lower()]
         
         # Preserve selection
         selected_id = self._current_chat_id
@@ -216,6 +238,20 @@ class HistorySidebar(UIComponent):
         # Clear and repopulate
         for child in self.history_list.get_children():
             self.history_list.remove(child)
+        
+        # Add documents first (with distinct styling)
+        for doc in documents:
+            row = self._create_document_row(doc)
+            self.history_list.add(row)
+        
+        # Add separator if we have both documents and chats
+        if documents and histories:
+            separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            separator_row = Gtk.ListBoxRow()
+            separator_row.set_selectable(False)
+            separator_row.set_activatable(False)
+            separator_row.add(separator)
+            self.history_list.add(separator_row)
         
         for history in histories:
             row = self._create_row(history)
@@ -226,6 +262,42 @@ class HistorySidebar(UIComponent):
         # Restore selection
         if selected_id:
             self.select_chat(selected_id)
+    
+    def _create_document_row(self, doc: Dict[str, Any]) -> Gtk.ListBoxRow:
+        """Create a row for a document entry."""
+        row = Gtk.ListBoxRow()
+        
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        vbox.set_margin_start(10)
+        vbox.set_margin_end(10)
+        
+        # Title with document icon prefix
+        title = doc.get('title', 'Untitled')
+        title_label = Gtk.Label(label=f"📄 {title}", xalign=0)
+        title_label.get_style_context().add_class('title')
+        title_label.set_line_wrap(False)
+        title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        
+        # Timestamp
+        timestamp = doc.get('updated_at') or doc.get('created_at', '')
+        if isinstance(timestamp, str) and 'T' in timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                timestamp = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                pass
+        
+        time_label = Gtk.Label(label=str(timestamp), xalign=0)
+        time_label.get_style_context().add_class('timestamp')
+        
+        vbox.pack_start(title_label, True, True, 0)
+        vbox.pack_start(time_label, True, True, 0)
+        
+        row.add(vbox)
+        row.doc_id = doc.get('id', '')
+        row.is_document = True
+        
+        return row
     
     def _create_row(self, history: Dict[str, Any]) -> Gtk.ListBoxRow:
         """Create a row for a chat history entry."""
@@ -339,8 +411,17 @@ class HistorySidebar(UIComponent):
         if self._on_new_chat:
             self._on_new_chat()
     
+    def _on_new_document_clicked(self, button) -> None:
+        """Handle new document button click."""
+        if self._on_new_document:
+            self._on_new_document()
+    
     def _on_row_activated(self, listbox, row) -> None:
         """Handle history row selection."""
+        if row and hasattr(row, 'is_document') and row.is_document:
+            if self._on_document_selected and hasattr(row, 'doc_id'):
+                self._on_document_selected(row.doc_id)
+            return
         if row and hasattr(row, 'chat_id'):
             self._current_chat_id = row.chat_id
             if self._on_chat_selected:

@@ -100,8 +100,9 @@ class ChatController:
         self._model_cache_repo = model_cache_repo or ModelCacheRepository()
         
         # Initialize projects repository
-        from repositories import ProjectsRepository
+        from repositories import ProjectsRepository, DocumentRepository
         self._projects_repo = ProjectsRepository()
+        self._document_repo = DocumentRepository()
 
         # Initialize event bus
         self._event_bus = event_bus or get_event_bus()
@@ -186,6 +187,13 @@ class ChatController:
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
             settings_manager=self._settings_manager,
+        )
+        
+        # Initialize document service
+        from services import DocumentService
+        self._document_service = DocumentService(
+            repository=self._document_repo,
+            event_bus=self._event_bus,
         )
         
         # Initialize memory service (optional - only if dependencies available)
@@ -459,6 +467,64 @@ class ChatController:
         """Access the memory service (may be None if unavailable)."""
         return self._memory_service
 
+    @property
+    def document_service(self):
+        """Access the document service."""
+        return self._document_service
+
+    # -----------------------------------------------------------------------
+    # Document management
+    # -----------------------------------------------------------------------
+
+    def new_document(self, title: str = "Untitled", content: str = "") -> 'Document':
+        """Create a new document."""
+        return self._document_service.new_document(title, content)
+
+    def load_document(self, doc_id: str) -> bool:
+        """Load a document by ID. Returns True if successful."""
+        doc = self._document_service.load_document(doc_id)
+        return doc is not None
+
+    def save_document(self) -> Optional[str]:
+        """Save the current document. Returns doc_id or None."""
+        return self._document_service.save_document()
+
+    def close_document(self) -> None:
+        """Close the current document."""
+        self._document_service.close_document()
+
+    def apply_document_edit(self, new_content: str, summary: str = "") -> bool:
+        """Apply a tool edit to the current document."""
+        return self._document_service.apply_tool_edit(new_content, summary)
+
+    def set_document_content(self, content: str) -> bool:
+        """Set document content from manual typing (no undo)."""
+        return self._document_service.set_content_manual(content)
+
+    def undo_document_edit(self) -> Optional[str]:
+        """Undo the last document edit. Returns summary or None."""
+        return self._document_service.undo()
+
+    def redo_document_edit(self) -> Optional[str]:
+        """Redo the last undone edit. Returns summary or None."""
+        return self._document_service.redo()
+
+    def get_document_content(self) -> str:
+        """Get current document content."""
+        return self._document_service.content
+
+    def has_document(self) -> bool:
+        """Check if a document is currently loaded."""
+        return self._document_service.has_document
+
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """List all documents."""
+        return self._document_service.list_documents()
+
+    def delete_document(self, doc_id: str) -> bool:
+        """Delete a document."""
+        return self._document_service.delete_document(doc_id)
+
     # -----------------------------------------------------------------------
     # Project management
     # -----------------------------------------------------------------------
@@ -475,6 +541,12 @@ class ChatController:
             history_dir = HISTORY_DIR
         
         self._chat_history_repo = ChatHistoryRepository(history_dir=history_dir)
+        
+        # Update document repository for current project
+        from repositories import DocumentRepository
+        self._document_repo = DocumentRepository(history_dir=history_dir)
+        if hasattr(self, '_document_service'):
+            self._document_service._repository = self._document_repo
         
         # Update chat service with new repository
         if hasattr(self, '_chat_service'):
@@ -1335,6 +1407,11 @@ class ChatController:
             return self.apply_conversation_buffer_limit(self.conversation_history)
 
         current_prompt = first_message.get("content", "") or ""
+
+        # Add document mode guidance if in document mode
+        if self.has_document() and "document" in self._text_targets:
+            from config import DEFAULT_DOCUMENT_MODE_PROMPT_APPENDIX
+            current_prompt = current_prompt + "\n\n" + DEFAULT_DOCUMENT_MODE_PROMPT_APPENDIX
 
         # Get enabled tools for this model and append guidance
         try:

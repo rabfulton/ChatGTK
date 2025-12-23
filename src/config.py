@@ -169,6 +169,18 @@ DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX = (
     "Always provide a short summary of the change."
 )
 
+DEFAULT_DOCUMENT_MODE_PROMPT_APPENDIX = (
+    "You are in Document Mode. Your task is to edit the document directly.\n\n"
+    "Use apply_text_edit with target=\"document\" to make changes. "
+    "Use text_get with target=\"document\" to read the current content first.\n\n"
+    "Operations (in order of preference):\n"
+    "1. search_replace: Find exact text and replace it.\n"
+    "2. replace: Provide complete new content.\n"
+    "3. diff: Only for complex multi-location edits.\n\n"
+    "Keep responses brief - just apply the edit and provide a short summary. "
+    "Do not explain what you're going to do, just do it."
+)
+
 DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX_LEGACY = (
     "You can edit a named text target using apply_text_edit. Use text_get to read "
     "the current text. Prefer operation=diff with unified diff text; use "
