@@ -200,6 +200,18 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
   - Example usage: "Do you remember what we discussed about Python decorators?" or "Search my notes for information about project deadlines".
 
+- **Text edit tools (`text_get`, `apply_text_edit`)**
+  - Disabled by default; enable via **Enable Text Edit Tool** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
+  - Lets the model read and edit a selected target file using function/tool calls.
+  - Usage flow:
+    - Click the attach button (paperclip) to select a target file. When a target is set, the icon switches to a file indicator.
+  - The model uses `text_get` with `target="file"` to read the current text.
+  - The model uses `apply_text_edit` with `operation="search_replace"` (preferred), then `replace`, then `diff`.
+  - Notes:
+    - Diff edits use the system `patch` utility; ensure it is installed.
+    - The target selection is per‑chat and restored when reopening the chat.
+    - Messages that apply edits include an undo button in the header to revert the last tool edit.
+
 - **Web search (provider-native tools)**
   - Disabled by default; enable via **Enable Web Search** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
   - For **OpenAI models**, this uses the built-in `web_search` tool described in the OpenAI tools docs ([OpenAI web search guide](https://platform.openai.com/docs/guides/tools/web-search?api-mode=responses)).
