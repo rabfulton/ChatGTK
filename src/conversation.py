@@ -70,6 +70,8 @@ class Message:
         Provider-specific metadata.
     model : Optional[str]
         Model ID (stored in system message for chat restoration).
+    text_edit_events : Optional[List[Dict[str, Any]]]
+        Optional list of text edit events for undo support.
     """
     role: str
     content: str
@@ -77,7 +79,8 @@ class Message:
     files: Optional[List[Dict[str, Any]]] = None
     provider_meta: ProviderMeta = field(default_factory=ProviderMeta)
     model: Optional[str] = None
-    
+    text_edit_events: Optional[List[Dict[str, Any]]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization or API calls."""
         result: Dict[str, Any] = {
@@ -91,6 +94,8 @@ class Message:
             result["files"] = self.files
         if self.model:
             result["model"] = self.model
+        if self.text_edit_events:
+            result["text_edit_events"] = self.text_edit_events
         return result
     
     @classmethod
@@ -103,6 +108,7 @@ class Message:
             files=data.get("files"),
             provider_meta=ProviderMeta.from_dict(data.get("provider_meta")),
             model=data.get("model"),
+            text_edit_events=data.get("text_edit_events"),
         )
 
 

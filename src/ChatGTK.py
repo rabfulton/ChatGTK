@@ -3306,6 +3306,10 @@ class OpenAIGTKClient(Gtk.Window):
         def on_undo_clicked(widget):
             success, message = self.controller.undo_text_edit_for_message(message_index)
             if success:
+                # Remove the undo button from the header
+                parent = widget.get_parent()
+                if parent:
+                    parent.remove(widget)
                 msg_index = self.controller.add_notification(message or "Undo applied.")
                 GLib.idle_add(lambda: self.append_message('ai', message or "Undo applied.", msg_index))
             else:

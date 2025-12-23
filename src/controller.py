@@ -330,6 +330,7 @@ class ChatController:
                     "summary": summary or "",
                     "previous_text": original_text,
                 })
+                print(f"[TextEditTool] Logged edit event, pending count: {len(self._pending_text_edit_events)}")
             return summary or "Text updated."
         except Exception as e:
             print(f"[TextEditTool] Error applying edit to '{target}': {e}")
@@ -1861,6 +1862,7 @@ class ChatController:
             assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
             if self._pending_text_edit_events:
                 assistant_message["text_edit_events"] = list(self._pending_text_edit_events)
+                print(f"[TextEditTool] Saving {len(self._pending_text_edit_events)} edit events to message")
             message_index = len(self.conversation_history)
             self.conversation_history.append(assistant_message)
             if self._pending_text_edit_events:
