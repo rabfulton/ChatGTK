@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import os
 import json
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
 
 from repositories import (
@@ -48,6 +52,14 @@ from tools import (
     is_chat_completion_model,
     append_tool_guidance,
 )
+from config import DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX, DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX_LEGACY
+
+
+@dataclass
+class TextTarget:
+    """Text target for tool-based edits."""
+    get_text: Callable[[], str]
+    apply_tool_edit: Callable[[str, Optional[str]], None]
 
 
 class ChatController:
@@ -99,6 +111,7 @@ class ChatController:
             repository=self._settings_repo,
             event_bus=self._event_bus,
         )
+        self._migrate_text_edit_prompt_appendix()
 
         # Initialize chat history repo with current project's history dir
         self._chat_history_repo = chat_history_repo
@@ -145,6 +158,9 @@ class ChatController:
             create_system_message(self.system_message)
         ]
         
+        # Text targets for reusable text edit tools
+        self._text_targets: Dict[str, TextTarget] = {}
+        
         # Provider management
         self.providers: Dict[str, Any] = {}
         self.model_provider_map: Dict[str, str] = {}
@@ -158,6 +174,7 @@ class ChatController:
             music_tool_enabled=self._settings_manager.get('MUSIC_TOOL_ENABLED', False),
             read_aloud_tool_enabled=self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False),
             search_tool_enabled=self._settings_manager.get('SEARCH_TOOL_ENABLED', False),
+            text_edit_tool_enabled=self._settings_manager.get('TEXT_EDIT_TOOL_ENABLED', False),
         )
         
         # Initialize tool service with event bus
@@ -223,6 +240,97 @@ class ChatController:
             import traceback
             traceback.print_exc()
             self._memory_service = None
+
+    def _migrate_text_edit_prompt_appendix(self) -> None:
+        current = self._settings_manager.get('TEXT_EDIT_TOOL_PROMPT_APPENDIX', '')
+        if current == DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX_LEGACY:
+            self._settings_manager.set(
+                'TEXT_EDIT_TOOL_PROMPT_APPENDIX',
+                DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX,
+                emit_event=False,
+            )
+            self._settings_manager.save()
+
+    # -----------------------------------------------------------------------
+    # Reusable text edit tool targets
+    # -----------------------------------------------------------------------
+
+    def register_text_target(self, name: str, target: TextTarget) -> None:
+        """Register a text target for tool-based edits."""
+        if not name:
+            raise ValueError("Text target name is required.")
+        self._text_targets[name] = target
+
+    def unregister_text_target(self, name: str) -> None:
+        """Remove a registered text target."""
+        self._text_targets.pop(name, None)
+
+    def has_text_targets(self) -> bool:
+        """Return True if any text targets are registered."""
+        return bool(self._text_targets)
+
+    def _get_text_target(self, target: str) -> Optional[TextTarget]:
+        return self._text_targets.get(target)
+
+    def handle_text_get(self, target: str) -> str:
+        """Return the current text for a registered target."""
+        entry = self._get_text_target(target)
+        if entry is None:
+            return f"Error: unknown text target '{target}'."
+        try:
+            return entry.get_text() or ""
+        except Exception as e:
+            return f"Error reading text target '{target}': {e}"
+
+    def handle_apply_text_edit(
+        self,
+        target: str,
+        operation: str,
+        text: str,
+        summary: Optional[str] = None,
+    ) -> str:
+        """Apply a tool edit to a registered target."""
+        entry = self._get_text_target(target)
+        if entry is None:
+            return f"Error: unknown text target '{target}'."
+        if operation not in ("replace", "diff"):
+            return f"Error: unsupported text edit operation '{operation}'."
+        try:
+            new_text = text
+            if operation == "diff":
+                original = entry.get_text() or ""
+                new_text = self._apply_unified_diff(original, text)
+            entry.apply_tool_edit(new_text, summary)
+            print(f"[TextEditTool] Applied {operation} edit to '{target}'.")
+            return summary or "Text updated."
+        except Exception as e:
+            print(f"[TextEditTool] Error applying edit to '{target}': {e}")
+            return f"Error applying text edit to '{target}': {e}"
+
+    def _apply_unified_diff(self, original_text: str, diff_text: str) -> str:
+        """Apply a unified diff to text using the system patch utility."""
+        if shutil.which("patch") is None:
+            raise RuntimeError("patch utility not found; diff edits require patch.")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = os.path.join(tmpdir, "target.txt")
+            patched_path = os.path.join(tmpdir, "patched.txt")
+            with open(original_path, "w", encoding="utf-8") as handle:
+                handle.write(original_text or "")
+            result = subprocess.run(
+                ["patch", "--silent", "--output", patched_path, original_path],
+                input=diff_text or "",
+                text=True,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or result.stdout or "").strip()
+                if stderr:
+                    print(f"[TextEditTool] patch error: {stderr}")
+                raise RuntimeError(stderr or "patch failed")
+            if not os.path.exists(patched_path):
+                raise RuntimeError("patch did not produce output")
+            with open(patched_path, "r", encoding="utf-8", errors="ignore") as handle:
+                return handle.read()
 
     def add_to_memory(self, text: str, role: str) -> None:
         """Add a message to memory if enabled."""
@@ -1136,6 +1244,8 @@ class ChatController:
             enabled_tools = self.tool_manager.get_enabled_tools_for_model(
                 model_name, self.model_provider_map, self.custom_models
             )
+            if self.tool_manager.text_edit_tool_enabled and self.has_text_targets():
+                enabled_tools.update({"text_get", "apply_text_edit"})
             new_prompt = append_tool_guidance(
                 current_prompt,
                 enabled_tools,
@@ -1854,6 +1964,7 @@ class ChatController:
             music_tool_enabled=self._settings_manager.get('MUSIC_TOOL_ENABLED', False),
             read_aloud_tool_enabled=self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False),
             search_tool_enabled=self._settings_manager.get('SEARCH_TOOL_ENABLED', False),
+            text_edit_tool_enabled=self._settings_manager.get('TEXT_EDIT_TOOL_ENABLED', False),
         )
         # Update tool service with new tool manager and event bus
         self._tool_service = ToolService(

@@ -59,7 +59,7 @@ from conversation import (
     create_assistant_message,
     get_first_user_content,
 )
-from controller import ChatController
+from controller import ChatController, TextTarget
 from events import EventType, Event
 from message_renderer import MessageRenderer, RenderSettings, RenderCallbacks, create_source_view
 
@@ -111,6 +111,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.web_search_enabled = bool(self.settings.get('WEB_SEARCH_ENABLED', False))
         self.read_aloud_tool_enabled = bool(self.settings.get('READ_ALOUD_TOOL_ENABLED', False))
         self.search_tool_enabled = bool(self.settings.get('SEARCH_TOOL_ENABLED', False))
+        self.text_edit_tool_enabled = bool(self.settings.get('TEXT_EDIT_TOOL_ENABLED', False))
 
         # Remember the current geometry if not maximized
         self.current_geometry = (window_width, window_height)
@@ -263,6 +264,9 @@ class OpenAIGTKClient(Gtk.Window):
         self.pending_edit_image = None
         self.pending_edit_message_index = None
         self._edit_buttons = []
+        self.text_edit_target_path = None
+        self._pending_text_edit_target_path = None
+        self._refresh_attach_button_label()
 
         # Check LaTeX installation
         if not is_latex_installed():
@@ -858,6 +862,7 @@ class OpenAIGTKClient(Gtk.Window):
             'MUSIC_TOOL_ENABLED': 'music',
             'READ_ALOUD_TOOL_ENABLED': 'read_aloud',
             'SEARCH_TOOL_ENABLED': 'search',
+            'TEXT_EDIT_TOOL_ENABLED': 'text_edit',
         }
         tool_indicator_keys = set(tool_key_map.keys()) | {'WEB_SEARCH_ENABLED'}
         system_prompt_keys = {'SYSTEM_PROMPTS_JSON', 'ACTIVE_SYSTEM_PROMPT_ID'}
@@ -887,6 +892,8 @@ class OpenAIGTKClient(Gtk.Window):
                         tool_key_map[key],
                         bool(value)
                     )
+                    if key == 'TEXT_EDIT_TOOL_ENABLED':
+                        GLib.idle_add(self._refresh_attach_button_label)
                 if key in tool_indicator_keys:
                     needs_tool_indicator_update = True
             if needs_renderer_update:
@@ -926,6 +933,8 @@ class OpenAIGTKClient(Gtk.Window):
         elif key in tool_key_map:
             self.controller.tool_service.enable_tool(tool_key_map[key], bool(value))
             GLib.idle_add(self._update_tool_indicators)
+            if key == 'TEXT_EDIT_TOOL_ENABLED':
+                GLib.idle_add(self._refresh_attach_button_label)
         elif key == 'WEB_SEARCH_ENABLED':
             GLib.idle_add(self._update_tool_indicators)
         elif key == 'SYSTEM_MESSAGE':
@@ -975,6 +984,11 @@ class OpenAIGTKClient(Gtk.Window):
             if self.current_chat_id and last_active_chat != self.current_chat_id:
                 self.settings.set('LAST_ACTIVE_CHAT', self.current_chat_id, emit_event=False)
                 self.settings.save()
+            if self.current_chat_id and self._pending_text_edit_target_path:
+                self.controller.save_current_chat(
+                    metadata={"text_edit_target_path": self._pending_text_edit_target_path}
+                )
+                self._pending_text_edit_target_path = None
 
     def _on_message_received_event(self, event):
         """Handle MESSAGE_RECEIVED event - display assistant message in UI."""
@@ -1088,6 +1102,7 @@ class OpenAIGTKClient(Gtk.Window):
                 web_search=bool(getattr(self, "web_search_enabled", False)),
                 read_aloud=bool(getattr(self, "read_aloud_tool_enabled", False)),
                 search=bool(getattr(self, "search_tool_enabled", False)),
+                text_edit=bool(getattr(self, "text_edit_tool_enabled", False)),
             )
 
     # -----------------------------------------------------------------------
@@ -1279,6 +1294,11 @@ class OpenAIGTKClient(Gtk.Window):
         if ts.supports_search_tools(model, self.model_provider_map, self.custom_models):
             handlers["search_tool_handler"] = lambda keyword, source=None: \
                 self.controller.handle_search_tool(keyword, source)
+
+        if self.controller.tool_manager.text_edit_tool_enabled and self.controller.has_text_targets():
+            handlers["text_get_handler"] = lambda target: self.controller.handle_text_get(target)
+            handlers["text_edit_handler"] = lambda target, operation, text, summary=None: \
+                self.controller.handle_apply_text_edit(target, operation, text, summary)
         
         return handlers
 
@@ -2166,6 +2186,12 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_attach_file(self, widget):
         """Handle file attachment."""
+        if getattr(self, "text_edit_tool_enabled", False):
+            if self.text_edit_target_path:
+                self._clear_text_edit_target()
+                return
+            self._select_text_edit_target()
+            return
         dialog = Gtk.FileChooserDialog(
             title="Please choose a file",
             parent=self,
@@ -2234,6 +2260,108 @@ class OpenAIGTKClient(Gtk.Window):
             return
         
         dialog.destroy()
+
+    def _select_text_edit_target(self):
+        dialog = Gtk.FileChooserDialog(
+            title="Select target file for text edits",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+        )
+
+        filter_any = Gtk.FileFilter()
+        filter_any.set_name("All files")
+        filter_any.add_pattern("*")
+        dialog.add_filter(filter_any)
+
+        filter_docs = Gtk.FileFilter()
+        filter_docs.set_name("Text files (TXT, MD, CSV, JSON)")
+        filter_docs.add_mime_type("text/plain")
+        filter_docs.add_mime_type("text/markdown")
+        filter_docs.add_mime_type("text/x-markdown")
+        filter_docs.add_mime_type("text/csv")
+        filter_docs.add_mime_type("application/json")
+        filter_docs.add_mime_type("text/html")
+        filter_docs.add_mime_type("application/xml")
+        filter_docs.add_mime_type("text/xml")
+        filter_docs.add_pattern("*.txt")
+        filter_docs.add_pattern("*.md")
+        filter_docs.add_pattern("*.csv")
+        filter_docs.add_pattern("*.json")
+        filter_docs.add_pattern("*.html")
+        filter_docs.add_pattern("*.xml")
+        dialog.add_filter(filter_docs)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            filepath = dialog.get_filename()
+            dialog.destroy()
+            try:
+                size = os.path.getsize(filepath)
+                size_str = f"{size / 1_000_000:.1f}MB" if size > 1_000_000 else f"{size / 1000:.0f}KB"
+                if size > 1_000_000:
+                    if not self._show_large_file_warning(f"File is {size_str}"):
+                        return
+            except OSError:
+                pass
+            self._set_text_edit_target(filepath)
+            return
+
+        dialog.destroy()
+
+    def _set_text_edit_target(self, filepath: str):
+        if not filepath:
+            return
+        if not os.path.exists(filepath):
+            self.show_error_dialog(f"Target file not found: {filepath}")
+            return
+        self.text_edit_target_path = filepath
+        self._pending_text_edit_target_path = None
+        target = TextTarget(
+            get_text=lambda: self._read_text_target_file(filepath),
+            apply_tool_edit=lambda text, summary=None: self._write_text_target_file(filepath, text),
+        )
+        self.controller.register_text_target("file", target)
+        if self.current_chat_id:
+            self.controller.save_current_chat(metadata={"text_edit_target_path": filepath})
+        else:
+            self._pending_text_edit_target_path = filepath
+        self._refresh_attach_button_label()
+
+    def _clear_text_edit_target(self):
+        self.text_edit_target_path = None
+        self._pending_text_edit_target_path = None
+        self.controller.unregister_text_target("file")
+        self._refresh_attach_button_label()
+
+    def _read_text_target_file(self, filepath: str) -> str:
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as handle:
+                return handle.read()
+        except Exception as e:
+            return f"Error: unable to read target file: {e}"
+
+    def _write_text_target_file(self, filepath: str, text: str) -> None:
+        with open(filepath, "w", encoding="utf-8") as handle:
+            handle.write(text or "")
+
+    def _refresh_attach_button_label(self):
+        if getattr(self, "text_edit_tool_enabled", False):
+            if self.text_edit_target_path:
+                filename = os.path.basename(self.text_edit_target_path)
+                self.btn_attach.set_image(Gtk.Image.new_from_icon_name("text-x-generic-symbolic", Gtk.IconSize.BUTTON))
+                self.btn_attach.set_tooltip_text(
+                    f"Editing {filename}\nClick again to remove"
+                )
+            else:
+                self.btn_attach.set_image(Gtk.Image.new_from_icon_name("mail-attachment-symbolic", Gtk.IconSize.BUTTON))
+                self.btn_attach.set_tooltip_text("Select a target file for text edits")
+            return
+        self.btn_attach.set_image(Gtk.Image.new_from_icon_name("mail-attachment-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_attach.set_tooltip_text("Attach a file to the message")
 
     def on_voice_input(self, widget):
         current_model = self._get_model_id_from_combo()
@@ -2417,6 +2545,7 @@ class OpenAIGTKClient(Gtk.Window):
         """Start a new chat conversation."""
         self.controller.new_chat(self.system_message)
         self.history_list.unselect_all()
+        self._clear_text_edit_target()
         
         # Clear pending edit image
         self._clear_pending_edit_image()
@@ -2471,6 +2600,16 @@ class OpenAIGTKClient(Gtk.Window):
             # Save the last active chat to settings
             self.settings.set('LAST_ACTIVE_CHAT', chat_id, emit_event=False)
             self.settings.save()
+
+            try:
+                metadata = get_chat_metadata(chat_id)
+            except Exception:
+                metadata = {}
+            target_path = metadata.get("text_edit_target_path")
+            if target_path:
+                self._set_text_edit_target(target_path)
+            else:
+                self._clear_text_edit_target()
             
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:

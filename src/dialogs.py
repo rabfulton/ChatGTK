@@ -42,6 +42,7 @@ from config import (
     DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX,
     DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX,
     DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX,
+    DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX,
     DEFAULT_SHORTCUTS,
 )
 from ai_providers import CustomProvider
@@ -2037,6 +2038,44 @@ class SettingsDialog(Gtk.Dialog):
         row.set_activatable(False)
         list_box.add(row)
 
+        # ---- Text Edit Tool section ----
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Text Edit Tool</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+
+        # Enable Text Edit Tool
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Text Edit Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_text_edit_tool_settings = Gtk.Switch()
+        current_text_edit_tool_enabled = bool(getattr(self, "text_edit_tool_enabled", False))
+        self.switch_text_edit_tool_settings.set_active(current_text_edit_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_text_edit_tool_settings, False, True, 0)
+        list_box.add(row)
+
+        # --- Separator ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
         # ---- Search/Memory Tool section ----
         header_row = Gtk.ListBoxRow()
         _add_listbox_row_margins(header_row)
@@ -3162,6 +3201,12 @@ class SettingsDialog(Gtk.Dialog):
                 "Guidance appended when the search tool is enabled.",
                 "search_tool_prompt_appendix",
                 DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX
+            ),
+            (
+                "Text Edit Tool Guidance",
+                "Guidance appended when the text edit tool is enabled.",
+                "text_edit_tool_prompt_appendix",
+                DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX
             ),
             (
                 "Memory Context Guidance",
@@ -4507,6 +4552,7 @@ class SettingsDialog(Gtk.Dialog):
             # Read Aloud settings (uses unified TTS settings above)
             'read_aloud_enabled': self.switch_read_aloud.get_active(),
             'read_aloud_tool_enabled': self.switch_read_aloud_tool.get_active(),
+            'text_edit_tool_enabled': self.switch_text_edit_tool_settings.get_active(),
             # Search/Memory Tool settings
             'search_tool_enabled': self.switch_search_tool_settings.get_active(),
             'search_history_enabled': self.switch_search_history.get_active(),
@@ -4538,6 +4584,7 @@ class SettingsDialog(Gtk.Dialog):
             'music_tool_prompt_appendix': get_buf_text('music_tool_prompt_appendix'),
             'read_aloud_tool_prompt_appendix': get_buf_text('read_aloud_tool_prompt_appendix'),
             'search_tool_prompt_appendix': get_buf_text('search_tool_prompt_appendix'),
+            'text_edit_tool_prompt_appendix': get_buf_text('text_edit_tool_prompt_appendix'),
             'memory_prompt_appendix': get_buf_text('memory_prompt_appendix'),
             # Keyboard shortcuts
             'keyboard_shortcuts': json.dumps(getattr(self, '_shortcuts', {})),
@@ -4851,6 +4898,20 @@ class ToolsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_search_tool, False, True, 0)
         list_box.add(row)
 
+        # Enable/disable text edit tool for text models
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Text Edit Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_text_edit_tool = Gtk.Switch()
+        current_text_edit_tool_enabled = bool(getattr(self, "text_edit_tool_enabled", False))
+        self.switch_text_edit_tool.set_active(current_text_edit_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_text_edit_tool, False, True, 0)
+        list_box.add(row)
+
         # For Gemini models, disable other tools when web search is enabled
         if self.is_gemini:
             self.switch_web_search.connect("notify::active", self._on_gemini_web_search_toggled)
@@ -4925,11 +4986,13 @@ class ToolsDialog(Gtk.Dialog):
         self.switch_music_tool.set_sensitive(not web_search_active)
         self.switch_read_aloud_tool.set_sensitive(not web_search_active)
         self.switch_search_tool.set_sensitive(not web_search_active)
+        self.switch_text_edit_tool.set_sensitive(not web_search_active)
         if web_search_active:
             self.switch_image_tool.set_active(False)
             self.switch_music_tool.set_active(False)
             self.switch_read_aloud_tool.set_active(False)
             self.switch_search_tool.set_active(False)
+            self.switch_text_edit_tool.set_active(False)
 
     def get_tool_settings(self):
         """Return the tool settings from the dialog."""
@@ -4939,6 +5002,7 @@ class ToolsDialog(Gtk.Dialog):
             "web_search_enabled": self.switch_web_search.get_active(),
             "read_aloud_tool_enabled": self.switch_read_aloud_tool.get_active(),
             "search_tool_enabled": self.switch_search_tool.get_active(),
+            "text_edit_tool_enabled": self.switch_text_edit_tool.get_active(),
         }
 
 

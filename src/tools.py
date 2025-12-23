@@ -84,6 +84,62 @@ IMAGE_TOOL_SPEC = ToolSpec(
     },
 )
 
+TEXT_GET_TOOL_SPEC = ToolSpec(
+    name="text_get",
+    description=(
+        "Return the full text for a named target buffer. "
+        "Use this to read the current document or other editable text target."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "The logical target name (e.g. document, system_prompt).",
+            },
+        },
+        "required": ["target"],
+    },
+    prompt_appendix=(
+        "Use text_get to read the current text for a target before editing."
+    ),
+)
+
+APPLY_TEXT_EDIT_TOOL_SPEC = ToolSpec(
+    name="apply_text_edit",
+    description=(
+        "Apply a single text edit to a named target. Use operation=diff with a unified diff "
+        "when possible; use operation=replace to provide full replacement text."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "The logical target name (e.g. document, system_prompt).",
+            },
+            "operation": {
+                "type": "string",
+                "enum": ["replace", "diff"],
+                "description": "The edit operation to apply.",
+            },
+            "text": {
+                "type": "string",
+                "description": "Replacement text or unified diff, depending on operation.",
+            },
+            "summary": {
+                "type": "string",
+                "description": "Short summary of the edit for UI status.",
+            },
+        },
+        "required": ["target", "operation", "text"],
+    },
+    prompt_appendix=(
+        "When updating a text target, call apply_text_edit with operation=diff and "
+        "include a short summary."
+    ),
+)
+
 MUSIC_TOOL_SPEC = ToolSpec(
     name="control_music",
     description=(
@@ -200,6 +256,8 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
     READ_ALOUD_TOOL_SPEC.name: READ_ALOUD_TOOL_SPEC,
     SEARCH_TOOL_SPEC.name: SEARCH_TOOL_SPEC,
     MEMORY_RETRIEVAL_TOOL_SPEC.name: MEMORY_RETRIEVAL_TOOL_SPEC,
+    TEXT_GET_TOOL_SPEC.name: TEXT_GET_TOOL_SPEC,
+    APPLY_TEXT_EDIT_TOOL_SPEC.name: APPLY_TEXT_EDIT_TOOL_SPEC,
 }
 
 
@@ -287,6 +345,12 @@ def append_tool_guidance(
         elif tool_name == "search_memory":
             appendix = _get_setting_value(
                 "SEARCH_TOOL_PROMPT_APPENDIX",
+                "",
+                settings_manager=settings_manager
+            )
+        elif tool_name == "apply_text_edit":
+            appendix = _get_setting_value(
+                "TEXT_EDIT_TOOL_PROMPT_APPENDIX",
                 "",
                 settings_manager=settings_manager
             )
@@ -384,6 +448,8 @@ class ToolContext:
     read_aloud_handler: Optional[Callable[[str], str]] = None
     search_handler: Optional[Callable[[str, Optional[str]], str]] = None
     memory_handler: Optional[Callable[[str], str]] = None  # (query) -> result
+    text_get_handler: Optional[Callable[[str], str]] = None
+    text_edit_handler: Optional[Callable[[str, str, str, Optional[str]], str]] = None
 
 
 def run_tool_call(
@@ -467,6 +533,33 @@ def run_tool_call(
             print(f"Error in memory_handler: {e}")
             return f"Error retrieving memory: {e}"
 
+    elif tool_name == "text_get":
+        if context.text_get_handler is None:
+            return "Error: text_get tool is not available."
+        target = args.get("target", "")
+        try:
+            result = context.text_get_handler(target)
+            if isinstance(result, str) and result.startswith("Error:"):
+                return result
+            return HIDE_TOOL_RESULT_PREFIX + (result or "")
+        except Exception as e:
+            print(f"Error in text_get_handler: {e}")
+            return f"Error reading text target: {e}"
+
+    elif tool_name == "apply_text_edit":
+        if context.text_edit_handler is None:
+            return "Error: apply_text_edit tool is not available."
+        target = args.get("target", "")
+        operation = args.get("operation", "replace")
+        text = args.get("text", "")
+        summary = args.get("summary")
+        try:
+            result = context.text_edit_handler(target, operation, text, summary)
+            return HIDE_TOOL_RESULT_PREFIX + (result or "")
+        except Exception as e:
+            print(f"Error in text_edit_handler: {e}")
+            return f"Error applying text edit: {e}"
+
     else:
         return f"Error: unknown tool '{tool_name}' requested."
 
@@ -513,6 +606,8 @@ def build_enabled_tools_from_handlers(
     music_handler=None,
     read_aloud_handler=None,
     search_handler=None,
+    text_get_handler=None,
+    text_edit_handler=None,
 ) -> Set[str]:
     """
     Build the set of enabled tool names based on which handlers are provided.
@@ -529,6 +624,10 @@ def build_enabled_tools_from_handlers(
         enabled.add("read_aloud")
     if search_handler is not None:
         enabled.add("search_memory")
+    if text_get_handler is not None:
+        enabled.add("text_get")
+    if text_edit_handler is not None:
+        enabled.add("apply_text_edit")
     return enabled
 
 
@@ -572,6 +671,7 @@ class ToolManager:
         music_tool_enabled: bool = False,
         read_aloud_tool_enabled: bool = False,
         search_tool_enabled: bool = False,
+        text_edit_tool_enabled: bool = False,
     ):
         """
         Initialize the ToolManager.
@@ -586,11 +686,14 @@ class ToolManager:
             Whether the read aloud tool is globally enabled.
         search_tool_enabled : bool
             Whether the search/memory tool is globally enabled.
+        text_edit_tool_enabled : bool
+            Whether the text edit tools are globally enabled.
         """
         self.image_tool_enabled = image_tool_enabled
         self.music_tool_enabled = music_tool_enabled
         self.read_aloud_tool_enabled = read_aloud_tool_enabled
         self.search_tool_enabled = search_tool_enabled
+        self.text_edit_tool_enabled = text_edit_tool_enabled
 
     def get_provider_name_for_model(
         self,
@@ -727,6 +830,17 @@ class ToolManager:
         print(f"[SearchTool] supports_search_tools({model_name}) = {supports}")
         return supports
 
+    def supports_text_edit_tools(
+        self,
+        model_name: str,
+        model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> bool:
+        """Return True if the given model should be offered text edit tools."""
+        if not self.text_edit_tool_enabled:
+            return False
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
+
     def get_enabled_tools_for_model(
         self,
         model_name: str,
@@ -745,6 +859,9 @@ class ToolManager:
             enabled.add("read_aloud")
         if self.supports_search_tools(model_name, model_provider_map, custom_models):
             enabled.add("search_memory")
+        if self.supports_text_edit_tools(model_name, model_provider_map, custom_models):
+            enabled.add("text_get")
+            enabled.add("apply_text_edit")
         print(f"[ToolManager] get_enabled_tools_for_model({model_name}) = {enabled}")
         return enabled
 

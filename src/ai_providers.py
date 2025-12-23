@@ -304,6 +304,8 @@ class CustomProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ):
         api_type = (self.api_type or "chat.completions").lower()
         card = get_card(model)
@@ -322,6 +324,8 @@ class CustomProvider(AIProvider):
                 music_tool_handler=music_tool_handler,
                 read_aloud_tool_handler=read_aloud_tool_handler,
                 search_tool_handler=search_tool_handler,
+                text_get_handler=text_get_handler,
+                text_edit_handler=text_edit_handler,
             )
         
         if api_type == "tts":
@@ -383,7 +387,12 @@ class CustomProvider(AIProvider):
         
         # Determine which tools are enabled
         enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+            image_tool_handler,
+            music_tool_handler,
+            read_aloud_tool_handler,
+            search_tool_handler,
+            text_get_handler,
+            text_edit_handler,
         )
         
         # Build tool declarations for custom provider (uses OpenAI-compatible format)
@@ -469,6 +478,8 @@ class CustomProvider(AIProvider):
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
                 search_handler=search_tool_handler,
+                text_get_handler=text_get_handler,
+                text_edit_handler=text_edit_handler,
             )
             
             for tc in tool_calls:
@@ -835,6 +846,8 @@ class CustomProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ):
         # Use base endpoint to avoid appending /responses to an endpoint that already has /chat/completions
         base = self._get_base_endpoint()
@@ -845,7 +858,12 @@ class CustomProvider(AIProvider):
         
         # Determine which function tools are enabled
         enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+            image_tool_handler,
+            music_tool_handler,
+            read_aloud_tool_handler,
+            search_tool_handler,
+            text_get_handler,
+            text_edit_handler,
         )
         
         # Build tools array
@@ -903,6 +921,8 @@ class CustomProvider(AIProvider):
             music_handler=music_tool_handler,
             read_aloud_handler=read_aloud_tool_handler,
             search_handler=search_tool_handler,
+            text_get_handler=text_get_handler,
+            text_edit_handler=text_edit_handler,
         )
         
         max_tool_rounds = 3
@@ -1546,6 +1566,8 @@ class OpenAIProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ) -> str:
         """
         Generate a response using the OpenAI Responses API.
@@ -1600,7 +1622,12 @@ class OpenAIProvider(AIProvider):
         
         # Determine which function tools are enabled
         enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+            image_tool_handler,
+            music_tool_handler,
+            read_aloud_tool_handler,
+            search_tool_handler,
+            text_get_handler,
+            text_edit_handler,
         )
         
         # Build tools array
@@ -1645,6 +1672,8 @@ class OpenAIProvider(AIProvider):
             music_handler=music_tool_handler,
             read_aloud_handler=read_aloud_tool_handler,
             search_handler=search_tool_handler,
+            text_get_handler=text_get_handler,
+            text_edit_handler=text_edit_handler,
         )
         
         max_tool_rounds = 3
@@ -1875,6 +1904,8 @@ class OpenAIProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ) -> str:
         """
         Generate a response using chat.completions for reasoning models (o1, o3, o4).
@@ -1932,7 +1963,12 @@ class OpenAIProvider(AIProvider):
         enabled_tools = set()
         if model_supports_tools:
             enabled_tools = build_enabled_tools_from_handlers(
-                image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+                image_tool_handler,
+                music_tool_handler,
+                read_aloud_tool_handler,
+                search_tool_handler,
+                text_get_handler,
+                text_edit_handler,
             )
         
         tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else []
@@ -1955,6 +1991,8 @@ class OpenAIProvider(AIProvider):
             music_handler=music_tool_handler,
             read_aloud_handler=read_aloud_tool_handler,
             search_handler=search_tool_handler,
+            text_get_handler=text_get_handler,
+            text_edit_handler=text_edit_handler,
         )
         
         tool_aware_messages = formatted_messages.copy()
@@ -2020,6 +2058,8 @@ class OpenAIProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ):
         """
         Generate a chat completion using the most appropriate API.
@@ -2059,6 +2099,8 @@ class OpenAIProvider(AIProvider):
                     music_tool_handler=music_tool_handler,
                     read_aloud_tool_handler=read_aloud_tool_handler,
                     search_tool_handler=search_tool_handler,
+                    text_get_handler=text_get_handler,
+                    text_edit_handler=text_edit_handler,
                 )
         
         # Default path: use Responses API for everything else
@@ -2075,6 +2117,8 @@ class OpenAIProvider(AIProvider):
             music_tool_handler=music_tool_handler,
             read_aloud_tool_handler=read_aloud_tool_handler,
             search_tool_handler=search_tool_handler,
+            text_get_handler=text_get_handler,
+            text_edit_handler=text_edit_handler,
         )
     
     def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
@@ -2502,6 +2546,8 @@ class GrokProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ):
         """
         Generate a chat completion using Grok text models.
@@ -2521,7 +2567,13 @@ class GrokProvider(AIProvider):
         # Decide whether to route via the Responses API for web search.
         has_function_tools = any(
             handler is not None
-            for handler in (image_tool_handler, music_tool_handler, read_aloud_tool_handler)
+            for handler in (
+                image_tool_handler,
+                music_tool_handler,
+                read_aloud_tool_handler,
+                text_get_handler,
+                text_edit_handler,
+            )
         )
         if web_search_enabled and not has_function_tools and self._supports_web_search_tool(model):
             return self._generate_with_responses_api(
@@ -2580,7 +2632,12 @@ class GrokProvider(AIProvider):
         # API follows the OpenAI tools schema:
         # https://docs.x.ai/docs/guides/tools/overview
         enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+            image_tool_handler,
+            music_tool_handler,
+            read_aloud_tool_handler,
+            search_tool_handler,
+            text_get_handler,
+            text_edit_handler,
         )
         tools = build_tools_for_provider(enabled_tools, "grok")
         if tools:
@@ -2641,6 +2698,8 @@ class GrokProvider(AIProvider):
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
                 search_handler=search_tool_handler,
+                text_get_handler=text_get_handler,
+                text_edit_handler=text_edit_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -2781,6 +2840,8 @@ class ClaudeProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ):
         """
         Generate a chat completion using Claude models via the OpenAI-compatible
@@ -2842,7 +2903,12 @@ class ClaudeProvider(AIProvider):
         # Enable tools for Claude chat models when handlers are supplied. The
         # compatibility layer supports the OpenAI tools schema.
         enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+            image_tool_handler,
+            music_tool_handler,
+            read_aloud_tool_handler,
+            search_tool_handler,
+            text_get_handler,
+            text_edit_handler,
         )
         tools = build_tools_for_provider(enabled_tools, "claude")
         if tools:
@@ -2903,6 +2969,8 @@ class ClaudeProvider(AIProvider):
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
                 search_handler=search_tool_handler,
+                text_get_handler=text_get_handler,
+                text_edit_handler=text_edit_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -2998,6 +3066,8 @@ class PerplexityProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ):
         """
         Generate a chat completion using Perplexity models via the OpenAI-compatible
@@ -3230,6 +3300,8 @@ class GeminiProvider(AIProvider):
         music_tool_handler=None,
         read_aloud_tool_handler=None,
         search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ):
         self._require_key()
         card = get_card(model)
@@ -3241,7 +3313,12 @@ class GeminiProvider(AIProvider):
         
         # Check if function tools are enabled
         enabled_tools = build_enabled_tools_from_handlers(
-            image_tool_handler, music_tool_handler, read_aloud_tool_handler, search_tool_handler
+            image_tool_handler,
+            music_tool_handler,
+            read_aloud_tool_handler,
+            search_tool_handler,
+            text_get_handler,
+            text_edit_handler,
         )
 
         # Gemini native API doesn't support combining google_search with function calling
@@ -3303,6 +3380,8 @@ class GeminiProvider(AIProvider):
                 music_handler=music_tool_handler,
                 read_aloud_handler=read_aloud_tool_handler,
                 search_handler=search_tool_handler,
+                text_get_handler=text_get_handler,
+                text_edit_handler=text_edit_handler,
             )
             tool_segments = []
             for tc in tool_calls:

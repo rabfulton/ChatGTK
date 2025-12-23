@@ -41,6 +41,8 @@ class ToolService:
         read_aloud_handler: Optional[Callable] = None,
         search_handler: Optional[Callable] = None,
         memory_handler: Optional[Callable] = None,
+        text_get_handler: Optional[Callable] = None,
+        text_edit_handler: Optional[Callable] = None,
         event_bus: Optional[EventBus] = None,
         settings_manager=None,
     ):
@@ -73,6 +75,8 @@ class ToolService:
             'read_aloud': read_aloud_handler,
             'search': search_handler,
             'memory': memory_handler,
+            'text_get': text_get_handler,
+            'text_edit': text_edit_handler,
         }
         self._event_bus = event_bus
         self._settings_manager = settings_manager
@@ -115,6 +119,8 @@ class ToolService:
                 read_aloud_handler=self._handlers.get('read_aloud'),
                 search_handler=self._handlers.get('search'),
                 memory_handler=self._handlers.get('memory'),
+                text_get_handler=self._handlers.get('text_get'),
+                text_edit_handler=self._handlers.get('text_edit'),
             )
             
             # Execute tool
@@ -170,6 +176,12 @@ class ToolService:
         if self._tool_manager.search_tool_enabled and self._handlers.get('search'):
             available.append('search_memory')
         
+        if self._tool_manager.text_edit_tool_enabled and self._handlers.get('text_get'):
+            available.append('text_get')
+        
+        if self._tool_manager.text_edit_tool_enabled and self._handlers.get('text_edit'):
+            available.append('apply_text_edit')
+        
         return available
     
     def build_tool_declarations(self, model: str, provider: str) -> List[Dict]:
@@ -201,6 +213,9 @@ class ToolService:
             enabled_tools.add('read_aloud')
         if self._tool_manager.search_tool_enabled:
             enabled_tools.add('search')
+        if self._tool_manager.text_edit_tool_enabled:
+            enabled_tools.add('text_get')
+            enabled_tools.add('apply_text_edit')
         
         if not enabled_tools:
             return []
@@ -332,6 +347,8 @@ class ToolService:
             self._tool_manager.read_aloud_tool_enabled = enabled
         elif tool_name == 'search':
             self._tool_manager.search_tool_enabled = enabled
+        elif tool_name == 'text_edit':
+            self._tool_manager.text_edit_tool_enabled = enabled
     
     def is_tool_enabled(self, tool_name: str) -> bool:
         """
@@ -355,6 +372,8 @@ class ToolService:
             return self._tool_manager.read_aloud_tool_enabled
         elif tool_name == 'search':
             return self._tool_manager.search_tool_enabled
+        elif tool_name == 'text_edit':
+            return self._tool_manager.text_edit_tool_enabled
         return False
 
     # -------------------------------------------------------------------------

@@ -153,6 +153,21 @@ DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX = (
     "'history' (past conversations), 'documents' (configured directories), or 'all'."
 )
 
+DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX = (
+    "You can edit the currently selected target file using apply_text_edit. "
+    "When a target file is selected, use target=\"file\". Do not ask the user to "
+    "provide the target name. Use text_get with target=\"file\" to read the full "
+    "text before editing. Prefer operation=diff with unified diff text; use "
+    "operation=replace only when needed. Provide a short summary of the change."
+)
+
+DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX_LEGACY = (
+    "You can edit a named text target using apply_text_edit. Use text_get to read "
+    "the current text. Prefer operation=diff with unified diff text; use "
+    "operation=replace only when needed. Provide a short summary of the change. "
+    "When a target file is selected, use target=\"file\"."
+)
+
 # ---------------------------------------------------------------------------
 # Default System Prompts
 # ---------------------------------------------------------------------------
@@ -317,6 +332,8 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the search/memory tool to text models.
     # When enabled, models can search past conversations and configured directories.
     'SEARCH_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Master switch for exposing the text edit tools to text models.
+    'TEXT_EDIT_TOOL_ENABLED': {'type': bool, 'default': False},
     # Whether to include the conversation history folder in search tool queries.
     'SEARCH_HISTORY_ENABLED': {'type': bool, 'default': True},
     # Comma-separated list of additional directories to search (for documents, notes, etc.).
@@ -360,6 +377,7 @@ SETTINGS_CONFIG = {
     'MUSIC_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX},
     'READ_ALOUD_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX},
     'SEARCH_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX},
+    'TEXT_EDIT_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX},
     # Keyboard shortcuts - JSON-encoded dict mapping action names to key combos
     'KEYBOARD_SHORTCUTS': {'type': str, 'default': ''},
     # Model shortcuts - JSON-encoded dict mapping model_1..model_5 to model IDs
