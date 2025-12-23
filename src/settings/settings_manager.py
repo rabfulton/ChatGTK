@@ -203,45 +203,6 @@ class SettingsManager:
         """Check if there are unsaved changes."""
         return len(self._dirty) > 0
     
-    def apply_to_object(self, obj: Any) -> None:
-        """
-        Apply all settings as attributes on an object.
-        
-        This provides backward compatibility with code that expects
-        settings as object attributes.
-        
-        Parameters
-        ----------
-        obj : Any
-            The object to apply settings to.
-        """
-        for key, value in self._cache.items():
-            setattr(obj, key.lower(), value)
-    
-    def update_from_object(self, obj: Any, save: bool = False) -> None:
-        """
-        Update settings from object attributes.
-        
-        This provides backward compatibility with code that modifies
-        settings via object attributes.
-        
-        Parameters
-        ----------
-        obj : Any
-            The object to read settings from.
-        save : bool
-            Whether to persist changes immediately.
-        """
-        for key in self._cache.keys():
-            attr = key.lower()
-            if hasattr(obj, attr):
-                value = getattr(obj, attr)
-                if value != self._cache.get(key):
-                    self.set(key, value, emit_event=False)
-        
-        if save:
-            self.save()
-    
     def __contains__(self, key: str) -> bool:
         """Check if a setting exists."""
         return self._normalize_key(key) in self._cache
