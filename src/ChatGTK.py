@@ -106,6 +106,11 @@ class OpenAIGTKClient(Gtk.Window):
 
         # UI-only state (not delegated to controller)
         self.message_widgets = []
+        self.image_tool_enabled = bool(self.settings.get('IMAGE_TOOL_ENABLED', True))
+        self.music_tool_enabled = bool(self.settings.get('MUSIC_TOOL_ENABLED', False))
+        self.web_search_enabled = bool(self.settings.get('WEB_SEARCH_ENABLED', False))
+        self.read_aloud_tool_enabled = bool(self.settings.get('READ_ALOUD_TOOL_ENABLED', False))
+        self.search_tool_enabled = bool(self.settings.get('SEARCH_TOOL_ENABLED', False))
 
         # Remember the current geometry if not maximized
         self.current_geometry = (window_width, window_height)
@@ -854,6 +859,7 @@ class OpenAIGTKClient(Gtk.Window):
             'READ_ALOUD_TOOL_ENABLED': 'read_aloud',
             'SEARCH_TOOL_ENABLED': 'search',
         }
+        tool_indicator_keys = set(tool_key_map.keys()) | {'WEB_SEARCH_ENABLED'}
         system_prompt_keys = {'SYSTEM_PROMPTS_JSON', 'ACTIVE_SYSTEM_PROMPT_ID'}
 
         if event.data.get('batch'):
@@ -877,11 +883,12 @@ class OpenAIGTKClient(Gtk.Window):
                 if key == 'SYSTEM_MESSAGE':
                     system_message_value = value
                 if key in tool_key_map:
-                    needs_tool_indicator_update = True
                     self.controller.tool_service.enable_tool(
                         tool_key_map[key],
                         bool(value)
                     )
+                if key in tool_indicator_keys:
+                    needs_tool_indicator_update = True
             if needs_renderer_update:
                 def apply_renderer_updates():
                     self._update_message_renderer_settings()
@@ -918,6 +925,8 @@ class OpenAIGTKClient(Gtk.Window):
             GLib.idle_add(self._refresh_system_prompt_combo)
         elif key in tool_key_map:
             self.controller.tool_service.enable_tool(tool_key_map[key], bool(value))
+            GLib.idle_add(self._update_tool_indicators)
+        elif key == 'WEB_SEARCH_ENABLED':
             GLib.idle_add(self._update_tool_indicators)
         elif key == 'SYSTEM_MESSAGE':
             self.controller.update_system_message(value)
