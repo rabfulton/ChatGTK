@@ -108,24 +108,30 @@ TEXT_GET_TOOL_SPEC = ToolSpec(
 APPLY_TEXT_EDIT_TOOL_SPEC = ToolSpec(
     name="apply_text_edit",
     description=(
-        "Apply a single text edit to a named target. Use operation=diff with a unified diff "
-        "when possible; use operation=replace to provide full replacement text."
+        "Apply a single text edit to a named target. Operations:\n"
+        "- search_replace: Find exact text and replace it (most reliable for targeted edits)\n"
+        "- diff: Apply a unified diff (for complex multi-location edits)\n"
+        "- replace: Replace entire content (for small files or complete rewrites)"
     ),
     parameters={
         "type": "object",
         "properties": {
             "target": {
                 "type": "string",
-                "description": "The logical target name (e.g. document, system_prompt).",
+                "description": "The logical target name (e.g. document, file, system_prompt).",
             },
             "operation": {
                 "type": "string",
-                "enum": ["replace", "diff"],
-                "description": "The edit operation to apply.",
+                "enum": ["replace", "diff", "search_replace"],
+                "description": "The edit operation: search_replace (preferred), diff, or replace.",
             },
             "text": {
                 "type": "string",
-                "description": "Replacement text or unified diff, depending on operation.",
+                "description": "For replace: full new text. For diff: unified diff. For search_replace: the NEW text to insert.",
+            },
+            "search": {
+                "type": "string",
+                "description": "For search_replace: the EXACT text to find and replace (must match exactly, including whitespace).",
             },
             "summary": {
                 "type": "string",
@@ -135,8 +141,7 @@ APPLY_TEXT_EDIT_TOOL_SPEC = ToolSpec(
         "required": ["target", "operation", "text"],
     },
     prompt_appendix=(
-        "When updating a text target, call apply_text_edit with operation=diff and "
-        "include a short summary."
+        "When updating a text target, prefer operation=search_replace for targeted edits."
     ),
 )
 
@@ -449,7 +454,7 @@ class ToolContext:
     search_handler: Optional[Callable[[str, Optional[str]], str]] = None
     memory_handler: Optional[Callable[[str], str]] = None  # (query) -> result
     text_get_handler: Optional[Callable[[str], str]] = None
-    text_edit_handler: Optional[Callable[[str, str, str, Optional[str]], str]] = None
+    text_edit_handler: Optional[Callable[[str, str, str, Optional[str], Optional[str]], str]] = None  # (target, op, text, summary, search)
 
 
 def run_tool_call(
@@ -553,8 +558,9 @@ def run_tool_call(
         operation = args.get("operation", "replace")
         text = args.get("text", "")
         summary = args.get("summary")
+        search = args.get("search")
         try:
-            result = context.text_edit_handler(target, operation, text, summary)
+            result = context.text_edit_handler(target, operation, text, summary, search)
             return HIDE_TOOL_RESULT_PREFIX + (result or "")
         except Exception as e:
             print(f"Error in text_edit_handler: {e}")

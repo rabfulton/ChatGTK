@@ -292,12 +292,13 @@ class ChatController:
         operation: str,
         text: str,
         summary: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> str:
         """Apply a tool edit to a registered target."""
         entry = self._get_text_target(target)
         if entry is None:
             return f"Error: unknown text target '{target}'."
-        if operation not in ("replace", "diff"):
+        if operation not in ("replace", "diff", "search_replace"):
             return f"Error: unsupported text edit operation '{operation}'."
         try:
             original_text = entry.get_text() or ""
@@ -308,9 +309,18 @@ class ChatController:
                     print("[TextEditTool] Diff format invalid; refusing to apply.")
                     return (
                         "Error: diff must be unified format with ---/+++ headers and @@ hunks. "
-                        "Retry with a valid unified diff or use operation=replace with full text."
+                        "Use operation=search_replace instead for targeted edits."
                     )
                 new_text = self._apply_unified_diff(original_text, normalized_diff)
+            elif operation == "search_replace":
+                if not search:
+                    return "Error: search_replace requires 'search' parameter with text to find."
+                if search not in original_text:
+                    return f"Error: search text not found in target. Make sure it matches exactly including whitespace."
+                count = original_text.count(search)
+                if count > 1:
+                    print(f"[TextEditTool] Warning: search text found {count} times, replacing all occurrences.")
+                new_text = original_text.replace(search, text)
             entry.apply_tool_edit(new_text, summary)
             print(f"[TextEditTool] Applied {operation} edit to '{target}'.")
             if not self._suppress_text_edit_logging:
@@ -326,7 +336,7 @@ class ChatController:
             if operation == "diff":
                 return (
                     f"Error applying text edit to '{target}': {e}. "
-                    "Retry with a valid unified diff or use operation=replace with full text."
+                    "Use operation=search_replace instead for targeted edits."
                 )
             return f"Error applying text edit to '{target}': {e}"
 
@@ -339,8 +349,9 @@ class ChatController:
             patched_path = os.path.join(tmpdir, "patched.txt")
             with open(original_path, "w", encoding="utf-8") as handle:
                 handle.write(original_text or "")
+            # Use --fuzz=3 to allow fuzzy matching for slightly misaligned diffs
             result = subprocess.run(
-                ["patch", "--silent", "--output", patched_path, original_path],
+                ["patch", "--silent", "--fuzz=3", "--output", patched_path, original_path],
                 input=diff_text or "",
                 text=True,
                 capture_output=True,

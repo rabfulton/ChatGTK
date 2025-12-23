@@ -155,21 +155,18 @@ DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX = (
 
 DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX = (
     "You can edit the currently selected target file using apply_text_edit. "
-    "When a target file is selected, use target=\"file\". Do not ask the user to "
-    "provide the target name. Use text_get with target=\"file\" to read the full "
-    "text before editing. Prefer operation=diff with unified diff text; use "
-    "operation=replace only when needed. Provide a short summary of the change "
-    "in the tool call. When using operation=diff, put ONLY the unified diff in "
-    "the tool's text field (no prose in the diff).\n\n"
-    "Example diff:\n"
-    "--- a/file\n"
-    "+++ b/file\n"
-    "@@ -1,2 +1,2 @@\n"
-    " Hello\n"
-    "-World\n"
-    "+ChatGTK\n"
-    "\nIf a diff fails, retry with a corrected unified diff or use operation=replace "
-    "with the full updated text."
+    "When a target file is selected, use target=\"file\". Use text_get with "
+    "target=\"file\" to read the full text before editing.\n\n"
+    "Operations (in order of preference):\n"
+    "1. search_replace: Find exact text and replace it. Provide 'search' (text to find) "
+    "and 'text' (replacement). The search must match EXACTLY including whitespace.\n"
+    "2. replace: For small files, provide complete new content in 'text'.\n"
+    "3. diff: Only for complex multi-location edits. Use valid unified diff format.\n\n"
+    "Example search_replace:\n"
+    "  operation: \"search_replace\"\n"
+    "  search: \"def old_function():\\n    pass\"\n"
+    "  text: \"def new_function():\\n    return True\"\n\n"
+    "Always provide a short summary of the change."
 )
 
 DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX_LEGACY = (

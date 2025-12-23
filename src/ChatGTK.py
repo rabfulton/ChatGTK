@@ -1298,8 +1298,8 @@ class OpenAIGTKClient(Gtk.Window):
 
         if self.controller.tool_manager.text_edit_tool_enabled and self.controller.has_text_targets():
             handlers["text_get_handler"] = lambda target: self.controller.handle_text_get(target)
-            handlers["text_edit_handler"] = lambda target, operation, text, summary=None: \
-                self.controller.handle_apply_text_edit(target, operation, text, summary)
+            handlers["text_edit_handler"] = lambda target, operation, text, summary=None, search=None: \
+                self.controller.handle_apply_text_edit(target, operation, text, summary, search)
         
         return handlers
 
