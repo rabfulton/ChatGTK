@@ -662,6 +662,7 @@ class OpenAIGTKClient(Gtk.Window):
             create_edit_button=self.create_edit_button,
             create_save_button=self.create_save_button,
             create_copy_button=self.create_copy_button,
+            create_undo_button=self.create_undo_button,
         )
         self.message_renderer = MessageRenderer(
             settings=settings,
@@ -1180,8 +1181,8 @@ class OpenAIGTKClient(Gtk.Window):
         # Gather whitelist sets from settings (parsed from comma-separated strings)
         whitelists = {}
         for provider_key in ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom'):
-            attr = f"{provider_key}_model_whitelist"
-            whitelist_str = getattr(self, attr, "") or ""
+            setting_key = f"{provider_key.upper()}_MODEL_WHITELIST"
+            whitelist_str = self.settings.get(setting_key, "") or ""
             whitelists[provider_key] = set(m.strip() for m in whitelist_str.split(",") if m.strip())
 
         def fetch_thread():
@@ -2601,10 +2602,7 @@ class OpenAIGTKClient(Gtk.Window):
             self.settings.set('LAST_ACTIVE_CHAT', chat_id, emit_event=False)
             self.settings.save()
 
-            try:
-                metadata = get_chat_metadata(chat_id)
-            except Exception:
-                metadata = {}
+            metadata = getattr(self.controller, "current_chat_metadata", {}) or {}
             target_path = metadata.get("text_edit_target_path")
             if target_path:
                 self._set_text_edit_target(target_path)
@@ -3295,6 +3293,26 @@ class OpenAIGTKClient(Gtk.Window):
         
         btn_copy.connect("clicked", on_copy_clicked)
         return btn_copy
+
+    def create_undo_button(self, message_index: int):
+        """Create an undo button for tool-applied text edits."""
+        btn_undo = Gtk.Button()
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
+        btn_undo.set_size_request(button_size, button_size)
+        icon_undo = Gtk.Image.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        btn_undo.set_image(icon_undo)
+        btn_undo.set_tooltip_text("Undo last text edit")
+
+        def on_undo_clicked(widget):
+            success, message = self.controller.undo_text_edit_for_message(message_index)
+            if success:
+                msg_index = self.controller.add_notification(message or "Undo applied.")
+                GLib.idle_add(lambda: self.append_message('ai', message or "Undo applied.", msg_index))
+            else:
+                self.show_error_dialog(message or "Undo failed.")
+
+        btn_undo.connect("clicked", on_undo_clicked)
+        return btn_undo
 
     def _clear_pending_edit_image(self, except_path: str = None):
         """Clear pending edit image and deactivate all edit buttons except the specified one."""

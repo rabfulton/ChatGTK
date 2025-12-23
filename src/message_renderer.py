@@ -42,6 +42,7 @@ class RenderCallbacks:
     create_edit_button: Optional[Callable[[str, int], Gtk.Widget]] = None  # (image_path, msg_index) -> button
     create_save_button: Optional[Callable[[str], Gtk.Widget]] = None  # (image_path) -> button
     create_copy_button: Optional[Callable[[int], Gtk.Widget]] = None  # (msg_index) -> button
+    create_undo_button: Optional[Callable[[int], Gtk.Widget]] = None  # (msg_index) -> button
 
 
 class MessageRenderer:
@@ -274,6 +275,11 @@ class MessageRenderer:
         speech_btn = self.callbacks.create_speech_button(full_text_segments)
         header_box.pack_end(speech_btn, False, False, 0)
         
+        # Add undo button when message includes text edit events
+        if self.callbacks.create_undo_button and self._message_has_text_edits(message_index):
+            undo_btn = self.callbacks.create_undo_button(message_index)
+            header_box.pack_end(undo_btn, False, False, 0)
+
         # Add copy button
         if self.callbacks.create_copy_button:
             copy_btn = self.callbacks.create_copy_button(message_index)
@@ -315,6 +321,13 @@ class MessageRenderer:
         self.conversation_box.show_all()
         
         self._scroll_to_widget(response_container)
+
+    def _message_has_text_edits(self, message_index: int) -> bool:
+        try:
+            message = self.window.conversation_history[message_index]
+        except Exception:
+            return False
+        return bool(message.get("text_edit_events"))
 
     def _attach_popup_to_text_view(self, text_view: Gtk.TextView, message_index: int):
         """Attach right-click popup menu to text view."""

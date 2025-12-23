@@ -157,6 +157,10 @@ class ChatController:
         self.conversation_history: List[Dict[str, Any]] = [
             create_system_message(self.system_message)
         ]
+        self.current_chat_metadata: Dict[str, Any] = {}
+        self._pending_text_edit_events: List[Dict[str, Any]] = []
+        self._text_edit_history_by_message: Dict[int, List[Dict[str, Any]]] = {}
+        self._suppress_text_edit_logging = False
         
         # Text targets for reusable text edit tools
         self._text_targets: Dict[str, TextTarget] = {}
@@ -296,15 +300,34 @@ class ChatController:
         if operation not in ("replace", "diff"):
             return f"Error: unsupported text edit operation '{operation}'."
         try:
+            original_text = entry.get_text() or ""
             new_text = text
             if operation == "diff":
-                original = entry.get_text() or ""
-                new_text = self._apply_unified_diff(original, text)
+                normalized_diff = self._normalize_diff_text(text)
+                if not self._looks_like_unified_diff(normalized_diff):
+                    print("[TextEditTool] Diff format invalid; refusing to apply.")
+                    return (
+                        "Error: diff must be unified format with ---/+++ headers and @@ hunks. "
+                        "Retry with a valid unified diff or use operation=replace with full text."
+                    )
+                new_text = self._apply_unified_diff(original_text, normalized_diff)
             entry.apply_tool_edit(new_text, summary)
             print(f"[TextEditTool] Applied {operation} edit to '{target}'.")
+            if not self._suppress_text_edit_logging:
+                self._pending_text_edit_events.append({
+                    "target": target,
+                    "operation": operation,
+                    "summary": summary or "",
+                    "previous_text": original_text,
+                })
             return summary or "Text updated."
         except Exception as e:
             print(f"[TextEditTool] Error applying edit to '{target}': {e}")
+            if operation == "diff":
+                return (
+                    f"Error applying text edit to '{target}': {e}. "
+                    "Retry with a valid unified diff or use operation=replace with full text."
+                )
             return f"Error applying text edit to '{target}': {e}"
 
     def _apply_unified_diff(self, original_text: str, diff_text: str) -> str:
@@ -331,6 +354,55 @@ class ChatController:
                 raise RuntimeError("patch did not produce output")
             with open(patched_path, "r", encoding="utf-8", errors="ignore") as handle:
                 return handle.read()
+
+    def _looks_like_unified_diff(self, diff_text: str) -> bool:
+        if not diff_text:
+            return False
+        stripped = diff_text.lstrip()
+        if stripped.startswith("diff --git"):
+            return "+++" in diff_text and "@@" in diff_text
+        if not stripped.startswith("--- "):
+            return False
+        return "+++" in diff_text and "@@" in diff_text
+
+    def _normalize_diff_text(self, diff_text: str) -> str:
+        text = (diff_text or "").strip()
+        lines = text.splitlines()
+        removed = 0
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+            removed += 1
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+            removed += 1
+        filtered = []
+        for line in lines:
+            if line.lstrip().startswith("```"):
+                removed += 1
+                continue
+            filtered.append(line)
+        text = "\n".join(filtered).strip()
+        if removed:
+            print(f"[TextEditTool] Stripped {removed} code-fence lines from diff text.")
+        return text
+
+    def undo_text_edit_for_message(self, message_index: int) -> tuple[bool, str]:
+        """Undo the last text edit associated with a message."""
+        events = self._text_edit_history_by_message.get(message_index)
+        if not events:
+            return False, "No text edit history found for this message."
+        last_event = events[-1]
+        target = last_event.get("target", "")
+        previous_text = last_event.get("previous_text", "")
+        entry = self._get_text_target(target)
+        if entry is None:
+            return False, f"Text target '{target}' is no longer available."
+        try:
+            self._suppress_text_edit_logging = True
+            entry.apply_tool_edit(previous_text, "Undo text edit")
+        finally:
+            self._suppress_text_edit_logging = False
+        return True, "Undo applied."
 
     def add_to_memory(self, text: str, role: str) -> None:
         """Add a message to memory if enabled."""
@@ -648,6 +720,9 @@ class ChatController:
         self.current_chat_id = None
         msg = system_message if system_message is not None else self.system_message
         self.conversation_history = [create_system_message(msg)]
+        self.current_chat_metadata = {}
+        self._pending_text_edit_events = []
+        self._text_edit_history_by_message = {}
         self._event_bus.publish(Event(
             type=EventType.CHAT_CREATED,
             data={'system_message': msg},
@@ -708,6 +783,12 @@ class ChatController:
             if conv_history:
                 self.conversation_history = conv_history.to_list()
                 self.current_chat_id = chat_id
+                self.current_chat_metadata = conv_history.metadata or {}
+                self._text_edit_history_by_message = {}
+                for idx, message in enumerate(self.conversation_history):
+                    events = message.get("text_edit_events")
+                    if events:
+                        self._text_edit_history_by_message[idx] = list(events)
                 return True
         except Exception as e:
             print(f"Error loading chat {chat_id}: {e}")
@@ -732,9 +813,13 @@ class ChatController:
                 chat_id = f"new_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             # Convert to ConversationHistory and save via service
-            conv_history = ConversationHistory.from_list(self.conversation_history, metadata=metadata)
+            merged_metadata = dict(self.current_chat_metadata)
+            if metadata:
+                merged_metadata.update(metadata)
+            conv_history = ConversationHistory.from_list(self.conversation_history, metadata=merged_metadata)
             actual_chat_id = self._chat_service.save_chat(chat_id, conv_history)
             self.current_chat_id = actual_chat_id
+            self.current_chat_metadata = merged_metadata
             return actual_chat_id
         except Exception as e:
             print(f"Error saving chat: {e}")
@@ -1573,8 +1658,13 @@ class ChatController:
             The index of the added message.
         """
         msg = create_assistant_message(content)
+        if self._pending_text_edit_events:
+            msg["text_edit_events"] = list(self._pending_text_edit_events)
         msg_index = len(self.conversation_history)
         self.conversation_history.append(msg)
+        if self._pending_text_edit_events:
+            self._text_edit_history_by_message[msg_index] = list(self._pending_text_edit_events)
+            self._pending_text_edit_events = []
         
         self._event_bus.publish(Event(
             type=EventType.MESSAGE_RECEIVED,
@@ -1758,8 +1848,13 @@ class ChatController:
             
             # Add to conversation history
             assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
+            if self._pending_text_edit_events:
+                assistant_message["text_edit_events"] = list(self._pending_text_edit_events)
             message_index = len(self.conversation_history)
             self.conversation_history.append(assistant_message)
+            if self._pending_text_edit_events:
+                self._text_edit_history_by_message[message_index] = list(self._pending_text_edit_events)
+                self._pending_text_edit_events = []
             
             # Add to memory if enabled
             self.add_to_memory(answer, 'assistant')

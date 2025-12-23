@@ -158,7 +158,18 @@ DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX = (
     "When a target file is selected, use target=\"file\". Do not ask the user to "
     "provide the target name. Use text_get with target=\"file\" to read the full "
     "text before editing. Prefer operation=diff with unified diff text; use "
-    "operation=replace only when needed. Provide a short summary of the change."
+    "operation=replace only when needed. Provide a short summary of the change "
+    "in the tool call. When using operation=diff, put ONLY the unified diff in "
+    "the tool's text field (no prose in the diff).\n\n"
+    "Example diff:\n"
+    "--- a/file\n"
+    "+++ b/file\n"
+    "@@ -1,2 +1,2 @@\n"
+    " Hello\n"
+    "-World\n"
+    "+ChatGTK\n"
+    "\nIf a diff fails, retry with a corrected unified diff or use operation=replace "
+    "with the full updated text."
 )
 
 DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX_LEGACY = (
