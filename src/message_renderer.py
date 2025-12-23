@@ -91,13 +91,13 @@ class MessageRenderer:
         GLib.timeout_add(50, do_scroll)
 
     def _apply_css_override(self, widget, css_string: str):
-        """Apply CSS with APPLICATION priority to override existing styles."""
+        """Apply CSS with USER priority to override existing styles."""
         style_provider = Gtk.CssProvider()
         style_provider.load_from_data(css_string.encode("utf-8"))
         Gtk.StyleContext.add_provider(
             widget.get_style_context(),
             style_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            Gtk.STYLE_PROVIDER_PRIORITY_USER
         )
 
     def update_existing_message_colors(self):

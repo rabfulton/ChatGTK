@@ -222,10 +222,17 @@ def is_chat_completion_model(model_name: str, custom_models: dict = None) -> boo
     return True
 
 
+def _get_setting_value(key: str, default: str = "", settings_manager=None) -> str:
+    if settings_manager is not None:
+        return settings_manager.get(key, default)
+    return _get_settings_repo().get(key, default)
+
+
 def append_tool_guidance(
     system_prompt: str,
     enabled_tools: Set[str],
     include_math: bool = True,
+    settings_manager=None,
 ) -> str:
     """
     Return a new system prompt with guidance for enabled tools appended.
@@ -245,10 +252,12 @@ def append_tool_guidance(
         The system prompt with relevant guidance appended.
     """
     result = system_prompt.rstrip() if system_prompt else ""
-    settings_repo = _get_settings_repo()
-
     if include_math:
-        math_appendix = settings_repo.get("SYSTEM_PROMPT_APPENDIX", "")
+        math_appendix = _get_setting_value(
+            "SYSTEM_PROMPT_APPENDIX",
+            "",
+            settings_manager=settings_manager
+        )
         if math_appendix and math_appendix not in result:
             if result:
                 result = f"{result}\n\n{math_appendix}"
@@ -258,15 +267,35 @@ def append_tool_guidance(
     for tool_name in sorted(enabled_tools):
         appendix = ""
         if tool_name == "generate_image":
-            appendix = settings_repo.get("IMAGE_TOOL_PROMPT_APPENDIX", "")
+            appendix = _get_setting_value(
+                "IMAGE_TOOL_PROMPT_APPENDIX",
+                "",
+                settings_manager=settings_manager
+            )
         elif tool_name == "control_music":
-            appendix = settings_repo.get("MUSIC_TOOL_PROMPT_APPENDIX", "")
+            appendix = _get_setting_value(
+                "MUSIC_TOOL_PROMPT_APPENDIX",
+                "",
+                settings_manager=settings_manager
+            )
         elif tool_name == "read_aloud":
-            appendix = settings_repo.get("READ_ALOUD_TOOL_PROMPT_APPENDIX", "")
+            appendix = _get_setting_value(
+                "READ_ALOUD_TOOL_PROMPT_APPENDIX",
+                "",
+                settings_manager=settings_manager
+            )
         elif tool_name == "search_memory":
-            appendix = settings_repo.get("SEARCH_TOOL_PROMPT_APPENDIX", "")
+            appendix = _get_setting_value(
+                "SEARCH_TOOL_PROMPT_APPENDIX",
+                "",
+                settings_manager=settings_manager
+            )
         elif tool_name == "retrieve_memory":
-            appendix = settings_repo.get("MEMORY_PROMPT_APPENDIX", "")
+            appendix = _get_setting_value(
+                "MEMORY_PROMPT_APPENDIX",
+                "",
+                settings_manager=settings_manager
+            )
         
         # Fallback to spec if available (though now specs default to empty)
         if not appendix:
@@ -764,4 +793,3 @@ class ToolManager:
         if self.supports_search_tools(model_name, model_provider_map, custom_models):
             ctx.search_handler = search_handler
         return ctx
-

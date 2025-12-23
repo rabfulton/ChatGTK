@@ -31,10 +31,6 @@ from utils import (
     parse_color_to_rgba,
     rgb_to_hex,
     insert_resized_image,
-    apply_settings,
-    get_object_settings,
-    save_object_settings,
-    convert_settings_for_save,
     load_api_keys,
     load_custom_models,
     save_custom_models,
@@ -90,21 +86,17 @@ class OpenAIGTKClient(Gtk.Window):
             print(f"Could not load application icon: {e}")
 
         # Initialize the controller FIRST - it manages state and business logic
-        # Must be created before apply_settings since property setters delegate to controller
+        # Must be created before settings sync since property setters delegate to controller
         self.controller = ChatController()
         self.controller.initialize_providers_from_env()
 
         # Subscribe to events for reactive UI updates
         self._init_event_subscriptions()
 
-        # Load and apply settings (for UI settings like window_width, font_size, etc.)
-        # Note: settings like system_message will be routed to controller via properties
-        # Settings are loaded via controller's settings_manager
-        loaded = self.controller.settings_manager.get_all()
-        apply_settings(self, loaded)
-        
         # Initialize window
-        self.set_default_size(self.window_width, self.window_height)
+        window_width = self.settings.get('WINDOW_WIDTH', 900)
+        window_height = self.settings.get('WINDOW_HEIGHT', 700)
+        self.set_default_size(window_width, window_height)
 
         # Tray icon / indicator (created lazily when needed)
         self.tray_icon = None
@@ -114,9 +106,14 @@ class OpenAIGTKClient(Gtk.Window):
 
         # UI-only state (not delegated to controller)
         self.message_widgets = []
+        self.image_tool_enabled = bool(self.settings.get('IMAGE_TOOL_ENABLED', True))
+        self.music_tool_enabled = bool(self.settings.get('MUSIC_TOOL_ENABLED', False))
+        self.web_search_enabled = bool(self.settings.get('WEB_SEARCH_ENABLED', False))
+        self.read_aloud_tool_enabled = bool(self.settings.get('READ_ALOUD_TOOL_ENABLED', False))
+        self.search_tool_enabled = bool(self.settings.get('SEARCH_TOOL_ENABLED', False))
 
         # Remember the current geometry if not maximized
-        self.current_geometry = (self.window_width, self.window_height)
+        self.current_geometry = (window_width, window_height)
 
         # Create main container
         main_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -135,7 +132,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_chat_selected=self.load_chat_by_filename,
             on_new_chat=lambda: self.on_new_chat_clicked(None),
             on_context_menu=self._on_sidebar_context_menu,
-            width=int(getattr(self, 'sidebar_width', 200)),
+            width=int(self.settings.get('SIDEBAR_WIDTH', 200)),
         )
         self.sidebar = self._history_sidebar.widget
         # Expose history_list for backward compatibility
@@ -159,7 +156,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.paned.pack2(vbox_main, True, False)
 
         # Track sidebar width in memory
-        self.current_sidebar_width = int(getattr(self, 'sidebar_width', 200))
+        self.current_sidebar_width = int(self.settings.get('SIDEBAR_WIDTH', 200))
         self._sidebar_initialized = False
 
         # Update memory value without saving to file
@@ -183,7 +180,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_sidebar_toggle=lambda: self.on_sidebar_toggle(None),
             on_settings=lambda: self.on_open_settings(None),
             on_tools=lambda: self.on_open_tools(None),
-            sidebar_visible=getattr(self, 'sidebar_visible', True),
+            sidebar_visible=self.settings.get('SIDEBAR_VISIBLE', True),
         )
         self.sidebar_button = self._toolbar.sidebar_button
         
@@ -207,7 +204,8 @@ class OpenAIGTKClient(Gtk.Window):
             default_models = self.controller.get_default_models_for_provider('openai')
             self.model_provider_map = {model: 'openai' for model in default_models}
             self.controller.model_provider_map = self.model_provider_map
-            self.update_model_list(default_models, self.default_model)
+            default_model = self.settings.get('DEFAULT_MODEL', '') or ''
+            self.update_model_list(default_models, default_model)
 
         # System prompt selector
         self.combo_system_prompt = Gtk.ComboBoxText()
@@ -228,8 +226,8 @@ class OpenAIGTKClient(Gtk.Window):
         self._chat_view = ChatView(
             event_bus=self.controller.event_bus,
             window=self,
-            ai_name=self.ai_name,
-            ai_color=self.ai_color,
+            ai_name=self.settings.get('AI_NAME', 'Assistant'),
+            ai_color=self.settings.get('AI_COLOR', '#0D47A1'),
             on_cancel=self._on_thinking_cancelled,
         )
         vbox_main.pack_start(self._chat_view.widget, True, True, 0)
@@ -250,7 +248,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_open_prompt_editor=lambda: self.on_open_prompt_editor(None),
         )
         # Apply user's configured font size
-        self._input_panel.apply_font_size(getattr(self, 'font_size', 12))
+        self._input_panel.apply_font_size(self.settings.get('FONT_SIZE', 12))
         vbox_main.pack_start(self._input_panel.widget, False, False, 0)
         
         # Expose widgets for backward compatibility
@@ -274,7 +272,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.show_all()
         
         # Then force sidebar visibility state
-        if not self.sidebar_visible:
+        if not self.settings.get('SIDEBAR_VISIBLE', True):
             self.sidebar.hide()
             self.sidebar.set_visible(False)  # More forceful hide
             self.sidebar.set_no_show_all(True)  # Prevent show_all from showing it
@@ -287,12 +285,13 @@ class OpenAIGTKClient(Gtk.Window):
         self.apply_sidebar_styles()
         
         # Load the last active conversation if it exists
-        if hasattr(self, 'last_active_chat') and self.last_active_chat:
+        last_active_chat = self.settings.get('LAST_ACTIVE_CHAT', '')
+        if last_active_chat:
             # Use idle_add to ensure UI is fully initialized before loading
             def load_last_active():
                 try:
                     # Check if the chat file still exists
-                    chat_filename = self.last_active_chat
+                    chat_filename = last_active_chat
                     if not chat_filename.endswith('.json'):
                         chat_filename = f"{chat_filename}.json"
                     
@@ -453,14 +452,16 @@ class OpenAIGTKClient(Gtk.Window):
             self.ws_provider.stop_streaming()
             
         # Save settings via controller's settings_manager
-        to_save = get_object_settings(self)
-        to_save['WINDOW_WIDTH'] = self.current_geometry[0]
-        to_save['WINDOW_HEIGHT'] = self.current_geometry[1]
-        to_save['SIDEBAR_WIDTH'] = self.current_sidebar_width
-        for key, value in convert_settings_for_save(to_save).items():
-            self.controller.settings_manager.set(key, value, emit_event=False)
+        self.settings.set_many(
+            {
+                'WINDOW_WIDTH': self.current_geometry[0],
+                'WINDOW_HEIGHT': self.current_geometry[1],
+                'SIDEBAR_WIDTH': self.current_sidebar_width,
+            },
+            emit_event=False,
+        )
         # Persist to disk
-        self.controller.settings_manager.save()
+        self.settings.save()
         
         # Hide tray icon on exit (only for StatusIcon backend)
         if self.tray_icon is not None and hasattr(self.tray_icon, "set_visible"):
@@ -481,7 +482,7 @@ class OpenAIGTKClient(Gtk.Window):
     def _get_shortcuts(self) -> dict:
         """Get keyboard shortcuts from settings, merged with defaults."""
         from config import DEFAULT_SHORTCUTS
-        shortcuts_json = getattr(self, 'keyboard_shortcuts', '')
+        shortcuts_json = self.settings.get('KEYBOARD_SHORTCUTS', '')
         try:
             shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
         except json.JSONDecodeError:
@@ -536,7 +537,7 @@ class OpenAIGTKClient(Gtk.Window):
             return True
         elif action.startswith('model_'):
             # Get configured model for this slot
-            model_shortcuts_json = getattr(self, 'model_shortcuts', '{}')
+            model_shortcuts_json = self.settings.get('MODEL_SHORTCUTS', '{}')
             try:
                 model_shortcuts = json.loads(model_shortcuts_json) if model_shortcuts_json else {}
             except json.JSONDecodeError:
@@ -613,7 +614,8 @@ class OpenAIGTKClient(Gtk.Window):
         # Determine active model
         active_model = current_model
         if not active_model or active_model not in models:
-            active_model = self.default_model if self.default_model in models else models[0] if models else None
+            default_model = self.settings.get('DEFAULT_MODEL', '')
+            active_model = default_model if default_model in models else models[0] if models else None
         
         # Use component to set models
         if hasattr(self, '_model_selector'):
@@ -640,14 +642,14 @@ class OpenAIGTKClient(Gtk.Window):
     def _init_message_renderer(self):
         """Initialize the MessageRenderer with current settings and callbacks."""
         settings = RenderSettings(
-            font_size=self.font_size,
-            font_family=self.font_family,
-            ai_color=self.ai_color,
-            user_color=self.user_color,
-            ai_name=self.ai_name,
-            source_theme=self.source_theme,
-            latex_color=self.latex_color,
-            latex_dpi=getattr(self, 'latex_dpi', 200),
+            font_size=self.settings.get('FONT_SIZE', 12),
+            font_family=self.settings.get('FONT_FAMILY', 'Sans'),
+            ai_color=self.settings.get('AI_COLOR', '#0D47A1'),
+            user_color=self.settings.get('USER_COLOR', '#2E7D32'),
+            ai_name=self.settings.get('AI_NAME', 'Assistant'),
+            source_theme=self.settings.get('SOURCE_THEME', 'solarized-dark'),
+            latex_color=self.settings.get('LATEX_COLOR', '#000000'),
+            latex_dpi=self.settings.get('LATEX_DPI', 200),
         )
         callbacks = RenderCallbacks(
             on_context_menu=self.create_message_context_menu,
@@ -673,19 +675,24 @@ class OpenAIGTKClient(Gtk.Window):
         """Update renderer settings after settings change."""
         if hasattr(self, 'message_renderer'):
             self.message_renderer.settings = RenderSettings(
-                font_size=self.font_size,
-                font_family=self.font_family,
-                ai_color=self.ai_color,
-                user_color=self.user_color,
-                ai_name=self.ai_name,
-                source_theme=self.source_theme,
-                latex_color=self.latex_color,
-                latex_dpi=getattr(self, 'latex_dpi', 200),
+                font_size=self.settings.get('FONT_SIZE', 12),
+                font_family=self.settings.get('FONT_FAMILY', 'Sans'),
+                ai_color=self.settings.get('AI_COLOR', '#0D47A1'),
+                user_color=self.settings.get('USER_COLOR', '#2E7D32'),
+                ai_name=self.settings.get('AI_NAME', 'Assistant'),
+                source_theme=self.settings.get('SOURCE_THEME', 'solarized-dark'),
+                latex_color=self.settings.get('LATEX_COLOR', '#000000'),
+                latex_dpi=self.settings.get('LATEX_DPI', 200),
             )
 
     # -----------------------------------------------------------------------
     # System prompts management - delegated to controller
     # -----------------------------------------------------------------------
+
+    @property
+    def settings(self):
+        """Convenience access to settings manager."""
+        return self.controller.settings_manager
 
     @property
     def current_chat_id(self):
@@ -789,8 +796,8 @@ class OpenAIGTKClient(Gtk.Window):
         Properties handle the delegation automatically.
         """
         # Ensure controller has the latest settings
-        self.controller.system_prompts_json = getattr(self, "system_prompts_json", "")
-        self.controller.active_system_prompt_id = getattr(self, "active_system_prompt_id", "")
+        self.controller.system_prompts_json = self.settings.get('SYSTEM_PROMPTS_JSON', '')
+        self.controller.active_system_prompt_id = self.settings.get('ACTIVE_SYSTEM_PROMPT_ID', '')
         
         # Let controller parse/init
         self.controller.init_system_prompts()
@@ -839,6 +846,64 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _on_settings_changed_event(self, event):
         """Handle SETTINGS_CHANGED event - update UI if needed."""
+        renderer_keys = {
+            'FONT_SIZE', 'FONT_FAMILY', 'AI_COLOR', 'USER_COLOR',
+            'AI_NAME', 'SOURCE_THEME', 'LATEX_COLOR', 'LATEX_DPI',
+        }
+        recolor_keys = {
+            'FONT_SIZE', 'FONT_FAMILY', 'AI_COLOR', 'USER_COLOR', 'AI_NAME',
+        }
+        tool_key_map = {
+            'IMAGE_TOOL_ENABLED': 'image',
+            'MUSIC_TOOL_ENABLED': 'music',
+            'READ_ALOUD_TOOL_ENABLED': 'read_aloud',
+            'SEARCH_TOOL_ENABLED': 'search',
+        }
+        tool_indicator_keys = set(tool_key_map.keys()) | {'WEB_SEARCH_ENABLED'}
+        system_prompt_keys = {'SYSTEM_PROMPTS_JSON', 'ACTIVE_SYSTEM_PROMPT_ID'}
+
+        if event.data.get('batch'):
+            changes = event.data.get('changes', {})
+            needs_renderer_update = False
+            needs_recolor = False
+            needs_system_prompt_refresh = False
+            needs_tool_indicator_update = False
+            system_message_value = None
+            for key, change in changes.items():
+                value = change.get('new')
+                attr = key.lower()
+                if hasattr(self, attr):
+                    setattr(self, attr, value)
+                if key in renderer_keys:
+                    needs_renderer_update = True
+                if key in recolor_keys:
+                    needs_recolor = True
+                if key in system_prompt_keys:
+                    needs_system_prompt_refresh = True
+                if key == 'SYSTEM_MESSAGE':
+                    system_message_value = value
+                if key in tool_key_map:
+                    self.controller.tool_service.enable_tool(
+                        tool_key_map[key],
+                        bool(value)
+                    )
+                if key in tool_indicator_keys:
+                    needs_tool_indicator_update = True
+            if needs_renderer_update:
+                def apply_renderer_updates():
+                    self._update_message_renderer_settings()
+                    if needs_recolor and hasattr(self, 'message_renderer'):
+                        self.message_renderer.update_existing_message_colors()
+                GLib.idle_add(apply_renderer_updates)
+            if needs_system_prompt_refresh:
+                GLib.idle_add(self._init_system_prompts_from_settings)
+                GLib.idle_add(self._refresh_system_prompt_combo)
+            if system_message_value is not None:
+                self.controller.update_system_message(system_message_value)
+            if needs_tool_indicator_update:
+                GLib.idle_add(self._update_tool_indicators)
+            return
+
         key = event.data.get('key', '')
         value = event.data.get('value')
         
@@ -847,12 +912,24 @@ class OpenAIGTKClient(Gtk.Window):
             attr = key.lower()
             if hasattr(self, attr):
                 setattr(self, attr, value)
-        
+
         # Handle specific settings that need UI updates
-        if key == 'FONT_SIZE':
-            GLib.idle_add(self._update_message_renderer_settings)
-        elif key == 'LATEX_DPI':
-            GLib.idle_add(self._update_message_renderer_settings)
+        if key in renderer_keys:
+            def apply_renderer_updates():
+                self._update_message_renderer_settings()
+                if key in recolor_keys and hasattr(self, 'message_renderer'):
+                    self.message_renderer.update_existing_message_colors()
+            GLib.idle_add(apply_renderer_updates)
+        elif key in system_prompt_keys:
+            GLib.idle_add(self._init_system_prompts_from_settings)
+            GLib.idle_add(self._refresh_system_prompt_combo)
+        elif key in tool_key_map:
+            self.controller.tool_service.enable_tool(tool_key_map[key], bool(value))
+            GLib.idle_add(self._update_tool_indicators)
+        elif key == 'WEB_SEARCH_ENABLED':
+            GLib.idle_add(self._update_tool_indicators)
+        elif key == 'SYSTEM_MESSAGE':
+            self.controller.update_system_message(value)
 
     def _on_error_event(self, event):
         """Handle ERROR_OCCURRED event - show error to user."""
@@ -894,9 +971,10 @@ class OpenAIGTKClient(Gtk.Window):
             formatted = format_response(content)
             GLib.idle_add(lambda: self.append_message('user', formatted, index))
             # Track last active chat when chat ID is assigned (first user message)
-            if self.current_chat_id and self.last_active_chat != self.current_chat_id:
-                self.last_active_chat = self.current_chat_id
-                save_object_settings(self)
+            last_active_chat = self.settings.get('LAST_ACTIVE_CHAT', '')
+            if self.current_chat_id and last_active_chat != self.current_chat_id:
+                self.settings.set('LAST_ACTIVE_CHAT', self.current_chat_id, emit_event=False)
+                self.settings.save()
 
     def _on_message_received_event(self, event):
         """Handle MESSAGE_RECEIVED event - display assistant message in UI."""
@@ -1056,7 +1134,7 @@ class OpenAIGTKClient(Gtk.Window):
     def on_system_prompt_changed(self, combo):
         """Handle system prompt selection changes."""
         new_id = combo.get_active_id()
-        if not new_id or new_id == getattr(self, "active_system_prompt_id", ""):
+        if not new_id or new_id == self.settings.get('ACTIVE_SYSTEM_PROMPT_ID', ''):
             return
         
         prompt = self._get_system_prompt_by_id(new_id)
@@ -1071,7 +1149,9 @@ class OpenAIGTKClient(Gtk.Window):
         self.controller.update_system_message(prompt["content"])
         
         # Persist the change
-        save_object_settings(self)
+        self.settings.set('ACTIVE_SYSTEM_PROMPT_ID', new_id, emit_event=False)
+        self.settings.set('SYSTEM_MESSAGE', prompt["content"], emit_event=False)
+        self.settings.save()
         
         # Refresh combo to put new selection first
         self._refresh_system_prompt_combo()
@@ -1216,7 +1296,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         try:
             # Use unified TTS settings (tts_voice_provider)
-            provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+            provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
             
             # Check if this is a custom TTS model
             custom_models = getattr(self, 'custom_models', {}) or {}
@@ -1261,7 +1341,7 @@ class OpenAIGTKClient(Gtk.Window):
     def apply_model_fetch_results(self, models, mapping):
         if mapping:
             self.model_provider_map = mapping
-        current_model = self._get_model_id_from_combo() or self.default_model
+        current_model = self._get_model_id_from_combo() or self.settings.get('DEFAULT_MODEL', '')
         self.update_model_list(models, current_model)
 
         # Also ensure the Image Model dropdown includes any image-capable models
@@ -1315,36 +1395,13 @@ class OpenAIGTKClient(Gtk.Window):
             ai_provider=self.controller.get_provider('openai'),
             providers=self.providers,
             api_keys=current_api_keys,
-            **{k.lower(): getattr(self, k.lower()) for k in SETTINGS_CONFIG.keys()}
+            **{k.lower(): self.settings.get(k) for k in SETTINGS_CONFIG.keys()}
         )
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             new_settings = dialog.get_settings()
-            apply_settings(self, new_settings)
-            save_object_settings(self)
-            # Reload settings manager cache so controller sees updated values
-            self.controller.settings_manager.reload()
-
-            # Update message renderer settings and refresh existing message colors
-            self._update_message_renderer_settings()
-            if hasattr(self, 'message_renderer'):
-                self.message_renderer.update_existing_message_colors()
-
-            # Re-initialize system prompts from updated settings and refresh the combo
-            self._init_system_prompts_from_settings()
-            self._refresh_system_prompt_combo()
-            
-            # Update the system message in the current conversation if it exists
-            self.controller.update_system_message(self.system_message)
-
-            # Keep tools in sync via service
-            self.controller.tool_service.enable_tool('image', bool(getattr(self, "image_tool_enabled", True)))
-            self.controller.tool_service.enable_tool('music', bool(getattr(self, "music_tool_enabled", False)))
-            self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
-            self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
-            
-            # Update toolbar indicators
-            self._update_tool_indicators()
+            self.settings.set_many(new_settings, emit_event=True, normalize_keys=True)
+            self.settings.save()
 
             # Handle API keys from the dialog
             new_keys = dialog.get_api_keys()
@@ -1438,7 +1495,7 @@ class OpenAIGTKClient(Gtk.Window):
         current_model = self._get_model_id_from_combo()
         card = get_card(current_model, self.custom_models)
         tool_use_supported = bool(card and card.supports_tools() and card.is_chat_model())
-        dialog = ToolsDialog(self, **{k.lower(): getattr(self, k.lower())
+        dialog = ToolsDialog(self, **{k.lower(): self.settings.get(k)
                                for k in SETTINGS_CONFIG.keys()},
                                tool_use_supported=tool_use_supported,
                                current_model=current_model)
@@ -1449,19 +1506,11 @@ class OpenAIGTKClient(Gtk.Window):
             for key, value in tool_settings.items():
                 setattr(self, key, value)
             # Enforce mutual exclusivity: if read_aloud_tool is enabled, disable auto-read
-            if getattr(self, "read_aloud_tool_enabled", False) and getattr(self, "read_aloud_enabled", False):
-                self.read_aloud_enabled = False
-            # Update tools via service
-            self.controller.tool_service.enable_tool('image', bool(getattr(self, "image_tool_enabled", True)))
-            self.controller.tool_service.enable_tool('music', bool(getattr(self, "music_tool_enabled", False)))
-            self.controller.tool_service.enable_tool('read_aloud', bool(getattr(self, "read_aloud_tool_enabled", False)))
-            self.controller.tool_service.enable_tool('search', bool(getattr(self, "search_tool_enabled", False)))
+            if tool_settings.get('read_aloud_tool_enabled') and self.settings.get('READ_ALOUD_ENABLED', False):
+                self.settings.set('READ_ALOUD_ENABLED', False, emit_event=False)
             # Persist all settings, including the updated tool flags.
-            save_object_settings(self)
-            # Reload settings manager cache so controller sees updated values
-            self.controller.settings_manager.reload()
-            # Update toolbar indicators
-            self._update_tool_indicators()
+            self.settings.set_many(tool_settings, emit_event=True, normalize_keys=True)
+            self.settings.save()
         dialog.destroy()
 
 
@@ -1649,8 +1698,8 @@ class OpenAIGTKClient(Gtk.Window):
                     model=target_model,
                     system_message=self.system_message,
                     temperature=model_temperature,
-                    voice=self.realtime_voice,
-                    mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
+                    voice=self.settings.get('REALTIME_VOICE', ''),
+                    mute_mic_during_playback=bool(self.settings.get('MUTE_MIC_DURING_PLAYBACK', True)),
                     realtime_prompt=self._get_realtime_prompt(),
                     api_key=api_key
                 )
@@ -1934,7 +1983,7 @@ class OpenAIGTKClient(Gtk.Window):
                         # Record audio using AudioService
                         audio_service = self.controller.audio_service
                         recording, sample_rate = audio_service.record_audio(
-                            self.microphone, self.recording_event
+                            self.settings.get('MICROPHONE', ''), self.recording_event
                         )
                         
                         if recording is not None and sample_rate is not None:
@@ -2055,7 +2104,7 @@ class OpenAIGTKClient(Gtk.Window):
                         # Record audio using AudioService
                         audio_service = self.controller.audio_service
                         recording, sample_rate = audio_service.record_audio(
-                            self.microphone, self.recording_event
+                            self.settings.get('MICROPHONE', ''), self.recording_event
                         )
 
                         if recording is not None and sample_rate is not None:
@@ -2211,7 +2260,7 @@ class OpenAIGTKClient(Gtk.Window):
                     # Initialize WebSocket provider if needed
                     if not hasattr(self, 'ws_provider'):
                         self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
-                        self.ws_provider.microphone = self.microphone  # Pass selected microphone
+                        self.ws_provider.microphone = self.settings.get('MICROPHONE', '')
                         self.ws_provider.on_user_transcript = self._on_realtime_user_transcript
                         self.ws_provider.on_assistant_transcript = self._on_realtime_assistant_transcript
                 
@@ -2228,8 +2277,8 @@ class OpenAIGTKClient(Gtk.Window):
                         model=current_model,
                         system_message=self.system_message,
                         temperature=model_temperature,
-                        voice=self.realtime_voice,
-                        mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
+                        voice=self.settings.get('REALTIME_VOICE', ''),
+                        mute_mic_during_playback=bool(self.settings.get('MUTE_MIC_DURING_PLAYBACK', True)),
                         realtime_prompt=self._get_realtime_prompt(),
                         api_key=api_key
                     ):
@@ -2242,13 +2291,13 @@ class OpenAIGTKClient(Gtk.Window):
                     
                     self.ws_provider.start_streaming(
                         callback=self.on_stream_content_received,
-                        microphone=self.microphone,
+                        microphone=self.settings.get('MICROPHONE', ''),
                         system_message=self.system_message,
                         temperature=model_temperature,
-                        mute_mic_during_playback=bool(getattr(self, "mute_mic_during_playback", True)),
+                        mute_mic_during_playback=bool(self.settings.get('MUTE_MIC_DURING_PLAYBACK', True)),
                         realtime_prompt=self._get_realtime_prompt(),
                         api_key=api_key,
-                        vad_threshold=float(getattr(self, "realtime_vad_threshold", 0.1))
+                        vad_threshold=float(self.settings.get('REALTIME_VAD_THRESHOLD', 0.1))
                     )
                     
                 except Exception as e:
@@ -2303,7 +2352,8 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_sidebar_toggle(self, button=None):
         """Toggle sidebar visibility."""
-        if self.sidebar_visible:
+        sidebar_visible = self.settings.get('SIDEBAR_VISIBLE', True)
+        if sidebar_visible:
             self.sidebar.hide()
         else:
             self.sidebar.show()
@@ -2311,12 +2361,13 @@ class OpenAIGTKClient(Gtk.Window):
             self.paned.set_position(self.current_sidebar_width)
             # Reload the current conversation to force reflow with new width
             GLib.idle_add(self._reload_current_conversation)
-        
-        self.sidebar_visible = not self.sidebar_visible
+
+        sidebar_visible = not sidebar_visible
+        self.settings.set('SIDEBAR_VISIBLE', sidebar_visible, emit_event=False)
         
         # Update toolbar button if using component
         if hasattr(self, '_toolbar'):
-            self._toolbar.set_sidebar_visible(self.sidebar_visible)
+            self._toolbar.set_sidebar_visible(sidebar_visible)
     
     def _reload_current_conversation(self):
         """Reload the current conversation to force widgets to recalculate with new width."""
@@ -2418,8 +2469,8 @@ class OpenAIGTKClient(Gtk.Window):
             history = self.conversation_history  # Read from controller
             
             # Save the last active chat to settings
-            self.last_active_chat = chat_id
-            save_object_settings(self)
+            self.settings.set('LAST_ACTIVE_CHAT', chat_id, emit_event=False)
+            self.settings.save()
             
             # Set the model if it was saved with the chat
             if history and len(history) > 0 and "model" in history[0]:
@@ -2519,13 +2570,17 @@ class OpenAIGTKClient(Gtk.Window):
             
             if chat_id:
                 # Controller already updated current_chat_id, just sync last_active_chat
-                self.last_active_chat = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
-                save_object_settings(self)
+                last_active = chat_id.replace('.json', '') if chat_id.endswith('.json') else chat_id
+                self.settings.set('LAST_ACTIVE_CHAT', last_active, emit_event=False)
+                self.settings.save()
 
     def show_thinking_animation(self):
         """Show thinking animation - delegated to ChatView component."""
         if hasattr(self, '_chat_view'):
-            self._chat_view.set_ai_style(self.ai_name, self.ai_color)
+            self._chat_view.set_ai_style(
+                self.settings.get('AI_NAME', 'Assistant'),
+                self.settings.get('AI_COLOR', '#0D47A1')
+            )
             self._chat_view.show_thinking()
 
     def hide_thinking_animation(self):
@@ -2908,7 +2963,7 @@ class OpenAIGTKClient(Gtk.Window):
         already read aloud, clicking the play button will replay the cached audio.
         """
         btn_speak = Gtk.Button()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_speak.set_size_request(button_size, button_size)
         
         icon_play = Gtk.Image.new_from_icon_name("media-playback-start", Gtk.IconSize.SMALL_TOOLBAR)
@@ -2956,7 +3011,7 @@ class OpenAIGTKClient(Gtk.Window):
                             return
                         
                         # No cached file, use TTS synthesis based on current provider
-                        provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+                        provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
                         
                         # Check if this is a custom TTS model
                         custom_models = getattr(self, 'custom_models', {}) or {}
@@ -3021,7 +3076,7 @@ class OpenAIGTKClient(Gtk.Window):
         with the next question for editing.
         """
         btn_edit = Gtk.ToggleButton()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_edit.set_size_request(button_size, button_size)
         
         icon_edit = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
@@ -3073,7 +3128,7 @@ class OpenAIGTKClient(Gtk.Window):
     def create_save_button(self, image_path: str):
         """Create a save button for generated images."""
         btn_save = Gtk.Button()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_save.set_size_request(button_size, button_size)
         
         icon_save = Gtk.Image.new_from_icon_name("document-save-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
@@ -3086,7 +3141,7 @@ class OpenAIGTKClient(Gtk.Window):
     def create_copy_button(self, message_index: int):
         """Create a copy button to copy message text to clipboard."""
         btn_copy = Gtk.Button()
-        button_size = self.font_size * 2
+        button_size = self.settings.get('FONT_SIZE', 12) * 2
         btn_copy.set_size_request(button_size, button_size)
         
         icon_copy = Gtk.Image.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
@@ -3118,9 +3173,9 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _get_tts_cache_path(self, text: str, chat_id: str) -> Path:
         """Get cache path - delegated to AudioService."""
-        provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
-        voice = getattr(self, 'tts_voice', None) or 'alloy'
-        model = "tts-1-hd" if provider == 'openai' and self.tts_hd else "tts-1"
+        provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
+        voice = self.settings.get('TTS_VOICE', None) or 'alloy'
+        model = "tts-1-hd" if provider == 'openai' and self.settings.get('TTS_HD', False) else "tts-1"
         return self.controller.audio_service._get_cache_path(
             self.controller.audio_service._clean_tts_text(text),
             chat_id, f"{provider}_{model}", voice
@@ -3139,8 +3194,8 @@ class OpenAIGTKClient(Gtk.Window):
             provider=provider,
             stop_event=stop_event,
             chat_id=chat_id,
-            voice=getattr(self, 'tts_voice', 'alloy'),
-            model='tts-1-hd' if self.tts_hd else 'tts-1',
+            voice=self.settings.get('TTS_VOICE', 'alloy'),
+            model='tts-1-hd' if self.settings.get('TTS_HD', False) else 'tts-1',
         )
         return result
 
@@ -3158,8 +3213,8 @@ class OpenAIGTKClient(Gtk.Window):
             stop_event=stop_event,
             chat_id=chat_id,
             model_id=model_id,
-            voice=getattr(self, 'tts_voice', 'alloy'),
-            prompt_template=getattr(self, 'tts_prompt_template', '') or 'Please say the following verbatim: "{text}"',
+            voice=self.settings.get('TTS_VOICE', 'alloy'),
+            prompt_template=self.settings.get('TTS_PROMPT_TEMPLATE', '') or 'Please say the following verbatim: "{text}"',
         )
 
     def _synthesize_and_play_gemini_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
@@ -3175,8 +3230,8 @@ class OpenAIGTKClient(Gtk.Window):
             provider=provider,
             stop_event=stop_event,
             chat_id=chat_id,
-            voice=getattr(self, 'tts_voice', 'Kore'),
-            prompt_template=getattr(self, 'tts_prompt_template', ''),
+            voice=self.settings.get('TTS_VOICE', 'Kore'),
+            prompt_template=self.settings.get('TTS_PROMPT_TEMPLATE', ''),
         )
 
     def _synthesize_and_play_custom_tts(self, text: str, *, chat_id: str, model_id: str, stop_event: threading.Event = None) -> bool:
@@ -3191,7 +3246,7 @@ class OpenAIGTKClient(Gtk.Window):
             return False
         
         # Determine voice
-        selected_voice = getattr(self, 'tts_voice', None) or ''
+        selected_voice = self.settings.get('TTS_VOICE', None) or ''
         cfg_voice = (cfg.get('voice') or '').strip()
         cfg_voices = cfg.get('voices', [])
         if isinstance(cfg_voices, list):
@@ -3229,7 +3284,7 @@ class OpenAIGTKClient(Gtk.Window):
         Runs in a background thread to avoid blocking the UI.
         """
         # Check if read aloud is enabled
-        if not getattr(self, 'read_aloud_enabled', False):
+        if not self.settings.get('READ_ALOUD_ENABLED', False):
             return
         
         # Use current chat_id if not specified
@@ -3244,7 +3299,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         def read_aloud_thread():
             # Use unified TTS settings (tts_voice_provider)
-            provider = getattr(self, 'tts_voice_provider', 'openai') or 'openai'
+            provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
             
             # Check if this is a custom TTS model
             custom_models = getattr(self, 'custom_models', {}) or {}
@@ -3349,8 +3404,11 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _get_realtime_prompt(self):
         """Return the realtime prompt with the AI name substituted."""
-        template = getattr(self, "realtime_prompt", "") or "Your name is {name}, speak quickly and professionally"
-        ai_name = getattr(self, "ai_name", "") or "Assistant"
+        template = self.settings.get(
+            'REALTIME_PROMPT',
+            "Your name is {name}, speak quickly and professionally"
+        )
+        ai_name = self.settings.get('AI_NAME', 'Assistant')
         return template.replace("{name}", ai_name)
 
     def _is_latex_math_image(self, img_path: str) -> bool:

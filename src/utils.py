@@ -96,43 +96,6 @@ def resolve_api_key(value):
         return os.environ.get(env_var, '')
     return value
 
-def apply_settings(obj, settings):
-    """Apply settings to object attributes (converting to lowercase)"""
-    for key, value in settings.items():
-        setattr(obj, key.lower(), value)
-
-def get_object_settings(obj):
-    """Get settings from object attributes (converting to uppercase)"""
-    # These are managed by their respective dialogs, not the main window
-    DIALOG_MANAGED = {'PROMPT_EDITOR_DIALOG_WIDTH', 'PROMPT_EDITOR_DIALOG_HEIGHT',
-                      'SETTINGS_DIALOG_WIDTH', 'SETTINGS_DIALOG_HEIGHT'}
-    settings = {}
-    for key in SETTINGS_CONFIG.keys():
-        if key in DIALOG_MANAGED:
-            continue
-        attr = key.lower()
-        if hasattr(obj, attr):
-            value = getattr(obj, attr)
-            settings[key] = SETTINGS_CONFIG[key]['type'](value) if value is not None else None
-    return settings
-
-def save_object_settings(obj):
-    """Save object settings while preserving dialog-managed settings."""
-    existing = load_settings()
-    to_save = get_object_settings(obj)
-    existing.update(to_save)
-    save_settings(convert_settings_for_save(existing))
-
-def convert_settings_for_save(settings):
-    """Convert settings to strings for saving, with special handling for booleans"""
-    converted = {}
-    for key, value in settings.items():
-        if isinstance(value, bool):
-            converted[key] = str(value).lower()  # Convert True/False to 'true'/'false'
-        else:
-            converted[key] = str(value)
-    return converted
-
 def _migrate_legacy_tts_settings(settings, explicit_keys=None):
     """
     Migrate legacy READ_ALOUD_* settings to unified TTS_* settings.

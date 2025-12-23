@@ -31,9 +31,6 @@ from services import (
 from settings import SettingsManager
 from events import EventBus, EventType, Event, get_event_bus
 from utils import (
-    apply_settings,
-    get_object_settings,
-    convert_settings_for_save,
     load_api_keys,
     load_custom_models,
     save_custom_models,
@@ -93,19 +90,19 @@ class ChatController:
         # Initialize projects repository
         from repositories import ProjectsRepository
         self._projects_repo = ProjectsRepository()
-        
-        # Initialize chat history repo with current project's history dir
-        self._chat_history_repo = chat_history_repo
-        self._init_history_repo_for_project()
-        
+
         # Initialize event bus
         self._event_bus = event_bus or get_event_bus()
-        
+
         # Initialize settings manager
         self._settings_manager = settings_manager or SettingsManager(
             repository=self._settings_repo,
             event_bus=self._event_bus,
         )
+
+        # Initialize chat history repo with current project's history dir
+        self._chat_history_repo = chat_history_repo
+        self._init_history_repo_for_project()
         
         # Initialize services with event bus
         self._chat_service = ChatService(
@@ -113,6 +110,7 @@ class ChatController:
             settings_repo=self._settings_repo,
             api_keys_repo=self._api_keys_repo,
             event_bus=self._event_bus,
+            settings_manager=self._settings_manager,
         )
         self._image_service = ImageGenerationService(
             chat_history_repo=self._chat_history_repo,
@@ -120,9 +118,23 @@ class ChatController:
         )
         self._audio_service = AudioService(event_bus=self._event_bus)
         
-        # Load settings and apply as attributes for backward compatibility
-        self._settings: Dict[str, Any] = self._settings_manager.get_all()
-        self._settings_manager.apply_to_object(self)
+        # Load settings for frequently accessed attributes
+        self.system_message = self._settings_manager.get(
+            'SYSTEM_MESSAGE',
+            'You are a helpful assistant.'
+        )
+        self.active_system_prompt_id = self._settings_manager.get(
+            'ACTIVE_SYSTEM_PROMPT_ID',
+            ''
+        )
+        self.system_prompts_json = self._settings_manager.get(
+            'SYSTEM_PROMPTS_JSON',
+            ''
+        )
+        self.hidden_default_prompts = self._settings_manager.get(
+            'HIDDEN_DEFAULT_PROMPTS',
+            '[]'
+        )
         
         # Initialize system prompts from settings
         self._init_system_prompts_from_settings()
@@ -152,6 +164,7 @@ class ChatController:
         self._tool_service = ToolService(
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
+            settings_manager=self._settings_manager,
         )
         
         # Initialize memory service (optional - only if dependencies available)
@@ -261,8 +274,8 @@ class ChatController:
     def _init_history_repo_for_project(self) -> None:
         """Initialize chat history repository for the current project."""
         from config import HISTORY_DIR
-        
-        current_project = self._settings_repo.get('CURRENT_PROJECT', '')
+
+        current_project = self._settings_manager.get('CURRENT_PROJECT', '')
         
         if current_project:
             history_dir = self._projects_repo.get_history_dir(current_project)
@@ -347,7 +360,7 @@ class ChatController:
         from config import DEFAULT_SYSTEM_PROMPTS
         
         # Get hidden default prompt IDs
-        hidden_raw = getattr(self, "hidden_default_prompts", "[]") or "[]"
+        hidden_raw = self._settings_manager.get('HIDDEN_DEFAULT_PROMPTS', '[]') or "[]"
         try:
             hidden_ids = set(json.loads(hidden_raw))
         except json.JSONDecodeError:
@@ -358,7 +371,7 @@ class ChatController:
         default_ids = {p["id"] for p in DEFAULT_SYSTEM_PROMPTS}
         
         # Add user-defined prompts (those not in defaults)
-        raw = getattr(self, "system_prompts_json", "") or ""
+        raw = self._settings_manager.get('SYSTEM_PROMPTS_JSON', '') or ""
         if raw.strip():
             try:
                 parsed = json.loads(raw)
@@ -373,7 +386,7 @@ class ChatController:
         self.system_prompts: List[Dict[str, Any]] = prompts
         
         # Determine active prompt ID
-        active_id = getattr(self, "active_system_prompt_id", "") or ""
+        active_id = self._settings_manager.get('ACTIVE_SYSTEM_PROMPT_ID', '') or ""
         valid_ids = {p["id"] for p in self.system_prompts}
         if active_id not in valid_ids:
             active_id = self.system_prompts[0]["id"] if self.system_prompts else ""
@@ -391,14 +404,18 @@ class ChatController:
         if prompt_id not in default_ids:
             return  # Not a default prompt
         
-        hidden_raw = getattr(self, "hidden_default_prompts", "[]") or "[]"
+        hidden_raw = self._settings_manager.get('HIDDEN_DEFAULT_PROMPTS', '[]') or "[]"
         try:
             hidden_ids = set(json.loads(hidden_raw))
         except json.JSONDecodeError:
             hidden_ids = set()
         
         hidden_ids.add(prompt_id)
-        self.hidden_default_prompts = json.dumps(list(hidden_ids))
+        self._settings_manager.set(
+            'HIDDEN_DEFAULT_PROMPTS',
+            json.dumps(list(hidden_ids)),
+            emit_event=False
+        )
         self._init_system_prompts_from_settings()
 
     def init_system_prompts(self) -> None:
@@ -428,8 +445,10 @@ class ChatController:
         # Update the system message in the current conversation history
         if self.conversation_history and self.conversation_history[0].get("role") == "system":
             self.conversation_history[0]["content"] = prompt["content"]
-        
-        self._save_settings()
+
+        self._settings_manager.set('ACTIVE_SYSTEM_PROMPT_ID', prompt_id, emit_event=False)
+        self._settings_manager.set('SYSTEM_MESSAGE', prompt["content"], emit_event=False)
+        self._settings_manager.save()
         return True
 
     # -----------------------------------------------------------------------
@@ -529,8 +548,15 @@ class ChatController:
 
     def update_system_message(self, content: str) -> None:
         """Update the system message in the current conversation."""
-        if self.conversation_history and self.conversation_history[0].get("role") == "system":
-            self.conversation_history[0]["content"] = content
+        if not self.conversation_history:
+            self.conversation_history = [create_system_message(content)]
+            return
+
+        if self.conversation_history[0].get("role") != "system":
+            self.conversation_history.insert(0, create_system_message(content))
+            return
+
+        self.conversation_history[0]["content"] = content
 
     def delete_message(self, index: int) -> bool:
         """Delete message at index. Returns True if successful."""
@@ -1110,7 +1136,12 @@ class ChatController:
             enabled_tools = self.tool_manager.get_enabled_tools_for_model(
                 model_name, self.model_provider_map, self.custom_models
             )
-            new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
+            new_prompt = append_tool_guidance(
+                current_prompt,
+                enabled_tools,
+                include_math=True,
+                settings_manager=self._settings_manager
+            )
         except Exception as e:
             print(f"Error while appending tool guidance: {e}")
             new_prompt = current_prompt
@@ -1461,8 +1492,9 @@ class ChatController:
         card = get_card(model, self.custom_models)
         if card and card.quirks.get('no_temperature'):
             return None
-        
-        return self._settings_manager.get('TEMPERATURE', 0.7)
+        if card and card.temperature is not None:
+            return float(card.temperature)
+        return None
 
     def ensure_chat_id(self) -> str:
         """
@@ -1815,11 +1847,6 @@ class ChatController:
         # Also update local attribute for backward compatibility
         setattr(self, key.lower(), value)
 
-    def _save_settings(self) -> None:
-        """Persist current settings to disk."""
-        # Update settings manager from object attributes
-        self._settings_manager.update_from_object(self, save=True)
-
     def update_tool_manager(self) -> None:
         """Update the ToolManager with current settings."""
         self.tool_manager = ToolManager(
@@ -1832,6 +1859,7 @@ class ChatController:
         self._tool_service = ToolService(
             tool_manager=self.tool_manager,
             event_bus=self._event_bus,
+            settings_manager=self._settings_manager,
         )
         # Re-initialize memory service if settings changed
         self._init_memory_service()

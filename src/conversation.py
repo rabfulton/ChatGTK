@@ -268,6 +268,7 @@ class ConversationHistory:
         enabled_tools: Optional[Set[str]] = None,
         model_provider_map: Optional[Dict[str, str]] = None,
         custom_models: Optional[Dict[str, Any]] = None,
+        settings_manager=None,
     ) -> List[Dict[str, Any]]:
         """
         Convert to a list of message dicts suitable for sending to a provider.
@@ -284,6 +285,8 @@ class ConversationHistory:
             Optional mapping of model names to provider names.
         custom_models : Optional[Dict[str, Any]]
             Optional dict of custom model configurations.
+        settings_manager : Optional[SettingsManager]
+            Optional settings manager for tool prompt appendices.
         
         Returns
         -------
@@ -310,7 +313,12 @@ class ConversationHistory:
         # Apply tool guidance to the system prompt
         current_prompt = messages[0].get("content", "") or ""
         try:
-            new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
+            new_prompt = append_tool_guidance(
+                current_prompt,
+                enabled_tools,
+                include_math=True,
+                settings_manager=settings_manager
+            )
         except Exception as e:
             print(f"Error while appending tool guidance: {e}")
             new_prompt = current_prompt
@@ -431,6 +439,7 @@ def prepare_messages_for_model(
     model_name: str,
     enabled_tools: Optional[Set[str]] = None,
     custom_models: Optional[Dict[str, Any]] = None,
+    settings_manager=None,
 ) -> List[Dict[str, Any]]:
     """
     Prepare a conversation history for sending to a model.
@@ -447,6 +456,8 @@ def prepare_messages_for_model(
         Set of enabled tool names.
     custom_models : Optional[Dict[str, Any]]
         Optional dict of custom model configurations.
+    settings_manager : Optional[SettingsManager]
+        Optional settings manager for tool prompt appendices.
     
     Returns
     -------
@@ -469,7 +480,12 @@ def prepare_messages_for_model(
         enabled_tools = set()
     
     try:
-        new_prompt = append_tool_guidance(current_prompt, enabled_tools, include_math=True)
+        new_prompt = append_tool_guidance(
+            current_prompt,
+            enabled_tools,
+            include_math=True,
+            settings_manager=settings_manager
+        )
     except Exception as e:
         print(f"Error while appending tool guidance: {e}")
         new_prompt = current_prompt
@@ -480,4 +496,3 @@ def prepare_messages_for_model(
     messages = [msg.copy() for msg in history]
     messages[0]["content"] = new_prompt
     return messages
-
