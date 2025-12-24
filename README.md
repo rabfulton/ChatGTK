@@ -28,6 +28,20 @@ If you are on Arch Linux or a derivative, you can install ChatGTK from the AUR:
 
 AUR package: [chatgtk_client-git](https://aur.archlinux.org/packages/chatgtk_client-git)
 
+## Quick Install (Virtual Environment)
+
+Use the one-liner installer (master branch) to create a virtual environment and desktop entry:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rabfulton/ChatGTK/master/installer.sh | bash
+```
+
+Or run it manually after cloning:
+
+```bash
+./installer.sh
+```
+
 ## Manual Installation
 
 ```bash
@@ -38,6 +52,7 @@ pip install -r requirements.txt
 Or use your package manager to install the dependencies. 
 The application when launched from the terminal will complain about which dependencies are missing. 
 You optionally require `texlive` and `dvipng` if you want mathematics to render nicely. Install `beets` and `playerctl` if you want the music control functionality.
+If you install dependencies via your distro, make sure Python packages like `requests` and `websockets` are present.
 
 ```bash
 ./chatgtk.sh

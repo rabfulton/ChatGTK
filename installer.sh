@@ -144,8 +144,12 @@ cat << 'EOM'
 ChatGTK installed.
 
 Next steps:
-  1) Set at least one API key in your shell, for example:
+  1) Set at least one API key in your environment or configure them inside the application, for example:
        export OPENAI_API_KEY="sk-..."
-  2) Launch the app:
+  2) Launch the app from the terminal or via your GUI:
        ~/.local/share/chatgtk/chatgtk-launcher.sh
+
+Notes:
+  - For LaTeX math rendering, install `texlive` and `dvipng` using your distributions package manager.
+  - For music control of your local media files, install `beets` and `playerctl`.
 EOM
