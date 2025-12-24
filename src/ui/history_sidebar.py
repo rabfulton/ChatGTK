@@ -90,6 +90,7 @@ class HistorySidebar(UIComponent):
         
         # Selection tracking
         self._current_chat_id = None
+        self._current_document_id = None
         
         # Build UI
         self.widget = self._build_ui()
@@ -100,6 +101,9 @@ class HistorySidebar(UIComponent):
         self.subscribe(EventType.CHAT_DELETED, self._on_chat_event)
         self.subscribe(EventType.CHAT_LOADED, self._on_chat_loaded)
         self.subscribe(EventType.CHAT_CREATED, self._on_chat_event)
+        self.subscribe(EventType.DOCUMENT_CREATED, self._on_document_event)
+        self.subscribe(EventType.DOCUMENT_LOADED, self._on_document_loaded)
+        self.subscribe(EventType.DOCUMENT_SAVED, self._on_document_event)
         
         # Set initial filter visibility from settings
         show_filter = False
@@ -233,7 +237,8 @@ class HistorySidebar(UIComponent):
             documents = [d for d in documents if self._filter_text.lower() in d.get('title', '').lower()]
         
         # Preserve selection
-        selected_id = self._current_chat_id
+        selected_chat_id = self._current_chat_id
+        selected_doc_id = self._current_document_id
         
         # Clear and repopulate
         for child in self.history_list.get_children():
@@ -251,8 +256,10 @@ class HistorySidebar(UIComponent):
         self.history_list.show_all()
         
         # Restore selection
-        if selected_id:
-            self.select_chat(selected_id)
+        if selected_doc_id:
+            self.select_document(selected_doc_id)
+        elif selected_chat_id:
+            self.select_chat(selected_chat_id)
     
     def _create_document_row(self, doc: Dict[str, Any]) -> Gtk.ListBoxRow:
         """Create a row for a document entry."""
@@ -374,6 +381,7 @@ class HistorySidebar(UIComponent):
     def select_chat(self, chat_id: str, scroll_to: bool = True) -> None:
         """Select a chat by ID and optionally scroll it into view."""
         self._current_chat_id = chat_id
+        self._current_document_id = None
         # Don't steal focus from filter entry
         filter_has_focus = self.filter_entry.has_focus()
         children = self.history_list.get_children()
@@ -389,6 +397,20 @@ class HistorySidebar(UIComponent):
         for row in children:
             row_id = getattr(row, 'chat_id', '')
             if row_id.replace('.json', '') == chat_id_clean:
+                self.history_list.select_row(row)
+                if scroll_to and not filter_has_focus:
+                    row.grab_focus()
+                return
+        self.history_list.unselect_all()
+
+    def select_document(self, doc_id: str, scroll_to: bool = True) -> None:
+        """Select a document by ID and optionally scroll it into view."""
+        self._current_document_id = doc_id
+        self._current_chat_id = None
+        filter_has_focus = self.filter_entry.has_focus()
+        children = self.history_list.get_children()
+        for row in children:
+            if getattr(row, 'is_document', False) and getattr(row, 'doc_id', None) == doc_id:
                 self.history_list.select_row(row)
                 if scroll_to and not filter_has_focus:
                     row.grab_focus()
@@ -411,10 +433,13 @@ class HistorySidebar(UIComponent):
         """Handle history row selection."""
         if row and hasattr(row, 'is_document') and row.is_document:
             if self._on_document_selected and hasattr(row, 'doc_id'):
+                self._current_document_id = row.doc_id
+                self._current_chat_id = None
                 self._on_document_selected(row.doc_id)
             return
         if row and hasattr(row, 'chat_id'):
             self._current_chat_id = row.chat_id
+            self._current_document_id = None
             if self._on_chat_selected:
                 self._on_chat_selected(row.chat_id)
     
@@ -490,7 +515,25 @@ class HistorySidebar(UIComponent):
         chat_id = event.data.get('chat_id', '')
         if chat_id:
             self._current_chat_id = chat_id
+            self._current_document_id = None
             self.schedule_ui_update(lambda: self.select_chat(chat_id))
+
+    def _on_document_event(self, event) -> None:
+        """Handle document events - refresh list and select document."""
+        doc_id = event.data.get('document_id', '')
+        def update():
+            self.refresh()
+            if doc_id:
+                GLib.idle_add(self.select_document, doc_id)
+        self.schedule_ui_update(update)
+
+    def _on_document_loaded(self, event) -> None:
+        """Handle document loaded - update selection."""
+        doc_id = event.data.get('document_id', '')
+        if doc_id:
+            self._current_document_id = doc_id
+            self._current_chat_id = None
+            self.schedule_ui_update(lambda: self.select_document(doc_id))
     
     def _build_project_menu(self) -> None:
         """Build the project selector dropdown menu."""
