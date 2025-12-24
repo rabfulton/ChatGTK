@@ -327,26 +327,28 @@ class OpenAIGTKClient(Gtk.Window):
                 return False
             GLib.idle_add(init_memory)
         
-        # Load the last active conversation if it exists
+        # Load the last active document or chat if it exists
+        last_active_doc = self.settings.get('LAST_ACTIVE_DOCUMENT', '')
         last_active_chat = self.settings.get('LAST_ACTIVE_CHAT', '')
-        if last_active_chat:
+        if last_active_doc or last_active_chat:
             # Use idle_add to ensure UI is fully initialized before loading
             def load_last_active():
                 try:
-                    # Check if the chat file still exists
-                    chat_filename = last_active_chat
-                    if not chat_filename.endswith('.json'):
-                        chat_filename = f"{chat_filename}.json"
-                    
-                    # Verify the file exists before trying to load
-                    from config import HISTORY_DIR
-                    chat_path = os.path.join(HISTORY_DIR, chat_filename)
-                    if os.path.exists(chat_path):
-                        self.load_chat_by_filename(chat_filename, save_current=False)
+                    if last_active_doc:
+                        if self.open_document(last_active_doc):
+                            return False
+                    if last_active_chat:
+                        chat_filename = last_active_chat
+                        if not chat_filename.endswith('.json'):
+                            chat_filename = f"{chat_filename}.json"
+                        # Verify the file exists before trying to load
+                        from config import HISTORY_DIR
+                        chat_path = os.path.join(HISTORY_DIR, chat_filename)
+                        if os.path.exists(chat_path):
+                            self.load_chat_by_filename(chat_filename, save_current=False)
                 except Exception as e:
-                    print(f"Error loading last active chat: {e}")
+                    print(f"Error loading last active item: {e}")
                 return False  # Don't repeat
-            
             GLib.idle_add(load_last_active)
 
         # Connect window event handlers
@@ -514,6 +516,14 @@ class OpenAIGTKClient(Gtk.Window):
         """Save settings and cleanup before closing."""
         if hasattr(self, 'ws_provider'):
             self.ws_provider.stop_streaming()
+
+        # Persist last active chat or document
+        if self._in_document_mode and self.controller.document_service.current_document_id:
+            self.settings.set('LAST_ACTIVE_DOCUMENT', self.controller.document_service.current_document_id, emit_event=False)
+            self.settings.set('LAST_ACTIVE_CHAT', '', emit_event=False)
+        elif self.current_chat_id:
+            self.settings.set('LAST_ACTIVE_CHAT', self.current_chat_id, emit_event=False)
+            self.settings.set('LAST_ACTIVE_DOCUMENT', '', emit_event=False)
             
         # Save settings via controller's settings_manager
         self.settings.set_many(
@@ -1048,6 +1058,11 @@ class OpenAIGTKClient(Gtk.Window):
             self._document_view.set_content(self.controller.get_document_content())
             self._update_document_undo_redo_state()
 
+    def _on_document_preview_toggled(self, enabled: bool) -> None:
+        """Handle preview mode toggle in Document Mode."""
+        if self.controller.has_document():
+            self.controller.set_document_preview_mode(enabled)
+
     def _on_document_export(self) -> None:
         """Handle export to PDF in Document Mode."""
         if not self.controller.has_document():
@@ -1092,7 +1107,7 @@ class OpenAIGTKClient(Gtk.Window):
             conversation = [{'role': 'assistant', 'content': doc.content}]
             
             try:
-                result = export_chat_to_pdf(conversation, filename, doc.title)
+                result = export_chat_to_pdf(conversation, filename, doc.title, include_roles=False)
                 success = result[0] if isinstance(result, tuple) else result
                 
                 if success:
@@ -1158,6 +1173,7 @@ class OpenAIGTKClient(Gtk.Window):
             doc = self.controller.document_service.current_document
             self._document_view.set_title(doc.title)
             self._document_view.set_content(doc.content)
+            self._document_view.set_preview_mode(self.controller.get_document_preview_mode())
             self._update_document_undo_redo_state()
             self._register_document_text_target()
 
@@ -1229,8 +1245,10 @@ class OpenAIGTKClient(Gtk.Window):
             on_redo=self._on_document_redo,
             on_export=self._on_document_export,
             on_copy=self._on_document_copy,
+            on_preview_toggled=self._on_document_preview_toggled,
             font_family=self.settings.get('FONT_FAMILY', 'Sans'),
             font_size=self.settings.get('FONT_SIZE', 12),
+            preview_text_color=self.settings.get('AI_COLOR', '#0D47A1'),
         )
         self._view_stack.add_named(self._document_view.widget, "document")
         self._document_view.widget.show_all()
@@ -2968,9 +2986,7 @@ class OpenAIGTKClient(Gtk.Window):
             # Controller now owns the state
             history = self.conversation_history  # Read from controller
             
-            # Save the last active chat to settings
-            self.settings.set('LAST_ACTIVE_CHAT', chat_id, emit_event=False)
-            self.settings.save()
+            # Save the last active chat on shutdown (not per-load)
 
             metadata = getattr(self.controller, "current_chat_metadata", {}) or {}
             target_path = metadata.get("text_edit_target_path")

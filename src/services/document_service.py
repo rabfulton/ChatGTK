@@ -239,6 +239,21 @@ class DocumentService:
         self._dirty = True
         self.save_document()
         return True
+
+    def set_preview_mode(self, enabled: bool) -> bool:
+        """Persist preview mode for the current document."""
+        if not self._current_document:
+            return False
+        self._current_document.preview_mode = bool(enabled)
+        self._dirty = True
+        self.save_document()
+        return True
+
+    def get_preview_mode(self) -> bool:
+        """Return preview mode for the current document."""
+        if not self._current_document:
+            return False
+        return bool(self._current_document.preview_mode)
     
     def delete_document(self, doc_id: str) -> bool:
         """Delete a document."""

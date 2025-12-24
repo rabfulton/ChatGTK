@@ -21,6 +21,7 @@ class Document:
     content: str
     created_at: datetime
     updated_at: datetime
+    preview_mode: bool = False
     undo_stack: List[Dict[str, Any]] = field(default_factory=list)
     redo_stack: List[Dict[str, Any]] = field(default_factory=list)
     
@@ -29,6 +30,7 @@ class Document:
             'id': self.id,
             'title': self.title,
             'content': self.content,
+            'preview_mode': self.preview_mode,
             'mode': 'document',
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
@@ -42,6 +44,7 @@ class Document:
             id=data['id'],
             title=data.get('title', 'Untitled'),
             content=data.get('content', ''),
+            preview_mode=bool(data.get('preview_mode', False)),
             created_at=datetime.fromisoformat(data['created_at']),
             updated_at=datetime.fromisoformat(data['updated_at']),
             undo_stack=data.get('undo_stack', []),
@@ -98,6 +101,7 @@ class DocumentRepository(Repository[Document]):
             id=doc_id,
             title=title,
             content=content,
+            preview_mode=False,
             created_at=now,
             updated_at=now,
         )

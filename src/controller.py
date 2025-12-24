@@ -516,6 +516,14 @@ class ChatController:
         """Get current document content."""
         return self._document_service.content
 
+    def set_document_preview_mode(self, enabled: bool) -> bool:
+        """Set preview mode for current document."""
+        return self._document_service.set_preview_mode(enabled)
+
+    def get_document_preview_mode(self) -> bool:
+        """Get preview mode for current document."""
+        return self._document_service.get_preview_mode()
+
     def has_document(self) -> bool:
         """Check if a document is currently loaded."""
         return self._document_service.has_document

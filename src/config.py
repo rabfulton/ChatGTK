@@ -298,6 +298,7 @@ SETTINGS_CONFIG = {
     'LATEX_COLOR': {'type': str, 'default': '#000000'},
     # Last active chat filename (without .json extension) to restore on startup
     'LAST_ACTIVE_CHAT': {'type': str, 'default': ''},
+    'LAST_ACTIVE_DOCUMENT': {'type': str, 'default': ''},
     # Current project ID. Empty string means default history folder (no project).
     'CURRENT_PROJECT': {'type': str, 'default': ''},
     # Model whitelists per provider – comma-separated model IDs.

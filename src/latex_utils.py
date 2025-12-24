@@ -2031,15 +2031,23 @@ def format_message_content(content: str, chat_id=None) -> str:
 
 
 
-def format_chat_message(message, chat_id=None):
+def format_chat_message(message, chat_id=None, include_role: bool = True):
     """Format a single chat message for LaTeX."""
     role = message["role"].upper()
     content = format_message_content(message["content"], chat_id)
+    if not include_role:
+        return r"""
+\noindent
+%s
+
+\bigskip
+""" % (content)
+
     color = 'usercolor' if role == 'USER' else 'assistantcolor'
-    
+
     # Ensure role is properly escaped
     role = escape_latex_text(role)
-    
+
     # Use raw string for LaTeX formatting to avoid string formatting issues
     return r"""
 \noindent{\textbf{\color{%s}%s:}}
@@ -2049,7 +2057,7 @@ def format_chat_message(message, chat_id=None):
 \bigskip
 """ % (color, role, content)
 
-def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
+def export_chat_to_pdf(conversation, filename, title=None, chat_id=None, include_roles: bool = True):
     """
     Export a chat conversation to PDF with image support.
     
@@ -2079,7 +2087,7 @@ def export_chat_to_pdf(conversation, filename, title=None, chat_id=None):
         for i, message in enumerate(conversation):
             if message['role'] != 'system':
                 try:
-                    formatted_message = format_chat_message(message, chat_id)
+                    formatted_message = format_chat_message(message, chat_id, include_role=include_roles)
                     messages_content.append(formatted_message)
                     print(f"DEBUG: Successfully formatted message {i}")
                 except Exception as e:

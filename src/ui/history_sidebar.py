@@ -244,15 +244,6 @@ class HistorySidebar(UIComponent):
             row = self._create_document_row(doc)
             self.history_list.add(row)
         
-        # Add separator if we have both documents and chats
-        if documents and histories:
-            separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            separator_row = Gtk.ListBoxRow()
-            separator_row.set_selectable(False)
-            separator_row.set_activatable(False)
-            separator_row.add(separator)
-            self.history_list.add(separator_row)
-        
         for history in histories:
             row = self._create_row(history)
             self.history_list.add(row)

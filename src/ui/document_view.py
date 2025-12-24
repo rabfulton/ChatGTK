@@ -34,8 +34,10 @@ class DocumentView(UIComponent):
         on_redo: Optional[Callable[[], None]] = None,
         on_export: Optional[Callable[[], None]] = None,
         on_copy: Optional[Callable[[], None]] = None,
+        on_preview_toggled: Optional[Callable[[bool], None]] = None,
         font_family: str = "Monospace",
         font_size: int = 12,
+        preview_text_color: str = "#000000",
     ):
         self._event_bus = event_bus
         self._on_content_changed = on_content_changed
@@ -43,11 +45,14 @@ class DocumentView(UIComponent):
         self._on_redo = on_redo
         self._on_export = on_export
         self._on_copy = on_copy
+        self._preview_toggled_callback = on_preview_toggled
         self._font_family = font_family
         self._font_size = font_size
+        self._preview_text_color = preview_text_color
         
         # Flag to prevent feedback loops during programmatic updates
         self._updating_programmatically = False
+        self._updating_preview_state = False
         self._in_preview_mode = False
         self._current_content = ""
         
@@ -131,9 +136,11 @@ class DocumentView(UIComponent):
             textview {{
                 font-family: {self._font_family};
                 font-size: {self._font_size}pt;
+                color: {self._preview_text_color};
             }}
             textview text {{
                 padding: 12px;
+                color: {self._preview_text_color};
             }}
         """
         css_provider = Gtk.CssProvider()
@@ -153,59 +160,78 @@ class DocumentView(UIComponent):
     def _build_toolbar(self) -> Gtk.Box:
         """Build the document toolbar."""
         toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        toolbar.set_margin_start(8)
-        toolbar.set_margin_end(8)
+        toolbar.set_margin_start(0)
+        toolbar.set_margin_end(0)
         toolbar.set_margin_top(4)
         toolbar.set_margin_bottom(4)
+        toolbar.set_hexpand(True)
+
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        header_box.set_hexpand(True)
+        header_box.set_margin_start(0)
+        header_box.set_margin_end(0)
+        #self._apply_header_style(header_box)
+        toolbar.pack_start(header_box, True, True, 0)
         
-        # Title label
-        self._title_label = Gtk.Label(label="Document")
-        self._title_label.set_xalign(0)
-        self._title_label.get_style_context().add_class('title')
-        toolbar.pack_start(self._title_label, True, True, 0)
-        
-        # Edit/Preview toggle
-        self._preview_toggle = Gtk.ToggleButton()
-        self._preview_toggle.set_image(Gtk.Image.new_from_icon_name("view-reveal-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
+        # Edit/Preview toggle (compact button) on the left
+        self._preview_toggle = Gtk.ToggleButton(label="Preview")
         self._preview_toggle.set_tooltip_text("Toggle Preview (Ctrl+P)")
         self._preview_toggle.connect("toggled", self._on_preview_toggled)
-        toolbar.pack_start(self._preview_toggle, False, False, 0)
+        header_box.pack_start(self._preview_toggle, False, False, 0)
+
+        # Spacer pushes controls to the right
+        header_box.pack_start(Gtk.Box(), True, True, 0)
         
         # Separator
-        toolbar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
+        #header_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
         
         # Undo button
         self._undo_btn = Gtk.Button()
         self._undo_btn.set_image(Gtk.Image.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         self._undo_btn.set_tooltip_text("Undo (Ctrl+Z)")
         self._undo_btn.connect("clicked", lambda w: self._on_undo() if self._on_undo else None)
-        toolbar.pack_start(self._undo_btn, False, False, 0)
+        header_box.pack_start(self._undo_btn, False, False, 0)
         
         # Redo button
         self._redo_btn = Gtk.Button()
         self._redo_btn.set_image(Gtk.Image.new_from_icon_name("edit-redo-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         self._redo_btn.set_tooltip_text("Redo (Ctrl+Shift+Z)")
         self._redo_btn.connect("clicked", lambda w: self._on_redo() if self._on_redo else None)
-        toolbar.pack_start(self._redo_btn, False, False, 0)
+        header_box.pack_start(self._redo_btn, False, False, 0)
         
         # Separator
-        toolbar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
+        # header_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
         
         # Copy button
         copy_btn = Gtk.Button()
         copy_btn.set_image(Gtk.Image.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         copy_btn.set_tooltip_text("Copy all")
         copy_btn.connect("clicked", lambda w: self._on_copy() if self._on_copy else None)
-        toolbar.pack_start(copy_btn, False, False, 0)
+        header_box.pack_start(copy_btn, False, False, 0)
         
         # Export button
         export_btn = Gtk.Button()
         export_btn.set_image(Gtk.Image.new_from_icon_name("document-save-as-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         export_btn.set_tooltip_text("Export to PDF")
         export_btn.connect("clicked", lambda w: self._on_export() if self._on_export else None)
-        toolbar.pack_start(export_btn, False, False, 0)
+        header_box.pack_start(export_btn, False, False, 0)
         
         return toolbar
+
+    def _apply_header_style(self, widget: Gtk.Widget) -> None:
+        """Apply message-like styling to the document toolbar header."""
+        css = """
+            box {
+                background-color: @theme_base_color;
+                padding: 8px;
+                border-radius: 0px;
+            }
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css.encode())
+        widget.get_style_context().add_provider(
+            provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
     
     def _apply_font_style(self) -> None:
         """Apply font styling to the text view."""
@@ -226,6 +252,8 @@ class DocumentView(UIComponent):
     
     def _on_preview_toggled(self, button: Gtk.ToggleButton) -> None:
         """Handle preview toggle."""
+        if self._updating_preview_state:
+            return
         self._in_preview_mode = button.get_active()
         if self._in_preview_mode:
             # Save current content and render preview
@@ -235,6 +263,8 @@ class DocumentView(UIComponent):
         else:
             self._mode_stack.set_visible_child_name("edit")
             self._text_view.grab_focus()
+        if self._preview_toggled_callback:
+            self._preview_toggled_callback(self._in_preview_mode)
     
     def _render_preview(self) -> None:
         """Render the document content as formatted output."""
@@ -388,10 +418,26 @@ class DocumentView(UIComponent):
             self._buffer.get_end_iter(),
             True
         )
+
+    def set_preview_mode(self, enabled: bool) -> None:
+        """Set preview mode programmatically."""
+        self._updating_preview_state = True
+        try:
+            enabled = bool(enabled)
+            self._preview_toggle.set_active(enabled)
+            self._in_preview_mode = enabled
+            if self._in_preview_mode:
+                self._current_content = self.get_content()
+                self._render_preview()
+                self._mode_stack.set_visible_child_name("preview")
+            else:
+                self._mode_stack.set_visible_child_name("edit")
+        finally:
+            self._updating_preview_state = False
     
     def set_title(self, title: str) -> None:
-        """Set the document title in the toolbar."""
-        self._title_label.set_text(title)
+        """Retained for compatibility (no-op)."""
+        return
     
     def set_undo_enabled(self, enabled: bool) -> None:
         """Enable/disable the undo button."""
