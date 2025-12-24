@@ -269,12 +269,17 @@ class HistorySidebar(UIComponent):
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
         
-        # Title with document icon prefix
+        # Title with document icon prefix (symbolic icon)
         title = doc.get('title', 'Untitled')
-        title_label = Gtk.Label(label=f"📄 {title}", xalign=0)
+        title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        icon = Gtk.Image.new_from_icon_name("document-new-symbolic", Gtk.IconSize.MENU)
+        title_box.pack_start(icon, False, False, 0)
+
+        title_label = Gtk.Label(label=title, xalign=0)
         title_label.get_style_context().add_class('title')
         title_label.set_line_wrap(False)
         title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        title_box.pack_start(title_label, True, True, 0)
         
         # Timestamp
         timestamp = doc.get('updated_at') or doc.get('created_at', '')
@@ -288,7 +293,7 @@ class HistorySidebar(UIComponent):
         time_label = Gtk.Label(label=str(timestamp), xalign=0)
         time_label.get_style_context().add_class('timestamp')
         
-        vbox.pack_start(title_label, True, True, 0)
+        vbox.pack_start(title_box, True, True, 0)
         vbox.pack_start(time_label, True, True, 0)
         
         row.add(vbox)
