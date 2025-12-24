@@ -5,22 +5,19 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 ## Features
 
 - Clean GTK3 interface
-- Voice to text input using Whisper API
+- Voice to text for both the asking questions or dictation
 - Syntax highlighting for code blocks
 - LaTeX formula rendering
-- Customizable settings
-- Support for system prompt switching
-- Conversation history management
-- Projects support for organizing chats into separate folders
-- Image generation using both OpenAI's and Googles models.
-- Export chats to PDF by right-clicking on a chat and selecting "Export Chat"
-- Text-to-Speech output using OpenAI's TTS and TTS-HD and audio-preview models
-- Real-time voice conversation support using gpt-4o-realtime-preview model
-- Reasoning support for OpenAI's o3 models
-- Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS.
-- Multi-provider support for OpenAI, Google Gemini 3 series models, xAI Grok, Perplexity and Anthropic Claude via separate API keys.
-- Supports custom provider settings allowing use of sevices like Openrouter.
-- Web search grounding for OpenAI and Gemini models to provide up-to-date, cited answers.
+- Document mode to perform edits and help you write
+- System prompt switching to tailor responses to the task at hand
+- Organise your conversations and documents as projects
+- Image generation by directly prompting image models or through function calling
+- Export conversations and documents to PDF
+- Text to Speech using what ever model and voice you choose
+- Real-time voice conversation support using OpenAI's realtime models
+- Reasoning level adjustment for capable models
+- Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS
+- Multi-provider support for OpenAI, Gemini, xAI, Perplexity, Anthropic and 3rd parties
 
 ## Installation from AUR
 
