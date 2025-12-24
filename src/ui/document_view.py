@@ -16,6 +16,7 @@ gi.require_version('GtkSource', '4')
 from gi.repository import Gtk, GLib, Gdk, GtkSource, Pango
 
 from .base import UIComponent
+from .markdown_toolbar import MarkdownActions, MarkdownToolbar
 from events import EventBus, EventType, Event
 
 
@@ -38,6 +39,8 @@ class DocumentView(UIComponent):
         font_family: str = "Monospace",
         font_size: int = 12,
         preview_text_color: str = "#000000",
+        source_theme: str = "solarized-dark",
+        message_renderer: Optional[Any] = None,
     ):
         self._event_bus = event_bus
         self._on_content_changed = on_content_changed
@@ -49,6 +52,8 @@ class DocumentView(UIComponent):
         self._font_family = font_family
         self._font_size = font_size
         self._preview_text_color = preview_text_color
+        self._source_theme = source_theme
+        self._message_renderer = message_renderer
         
         # Flag to prevent feedback loops during programmatic updates
         self._updating_programmatically = False
@@ -72,10 +77,6 @@ class DocumentView(UIComponent):
     def _build_ui(self) -> Gtk.Box:
         """Build the document view UI."""
         container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        
-        # Toolbar
-        toolbar = self._build_toolbar()
-        container.pack_start(toolbar, False, False, 0)
         
         # Stack for edit/preview modes
         self._mode_stack = Gtk.Stack()
@@ -101,6 +102,7 @@ class DocumentView(UIComponent):
         self._text_view.set_right_margin(12)
         self._text_view.set_top_margin(12)
         self._text_view.set_bottom_margin(12)
+        self._text_view.connect("key-press-event", self._on_key_press)
         
         self._apply_font_style()
         
@@ -111,48 +113,28 @@ class DocumentView(UIComponent):
             self._buffer.set_language(markdown_lang)
         self._text_view.set_buffer(self._buffer)
         self._buffer.connect('changed', self._on_buffer_changed)
+        self._markdown_actions = MarkdownActions(self._text_view)
         
         edit_scrolled.add(self._text_view)
         self._mode_stack.add_named(edit_scrolled, "edit")
         
-        # Preview view (rendered content) - match edit view structure
+        # Preview view (rendered content)
         preview_scrolled = Gtk.ScrolledWindow()
         preview_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         preview_scrolled.set_vexpand(True)
         preview_scrolled.set_hexpand(True)
-        
-        # Use a TextView as container to match edit view behavior
-        self._preview_text_view = Gtk.TextView()
-        self._preview_text_view.set_editable(False)
-        self._preview_text_view.set_cursor_visible(False)
-        self._preview_text_view.set_wrap_mode(Gtk.WrapMode.WORD)
-        self._preview_text_view.set_left_margin(12)
-        self._preview_text_view.set_right_margin(12)
-        self._preview_text_view.set_top_margin(12)
-        self._preview_text_view.set_bottom_margin(12)
-        
-        # Apply same font styling
-        css = f"""
-            textview {{
-                font-family: {self._font_family};
-                font-size: {self._font_size}pt;
-                color: {self._preview_text_color};
-            }}
-            textview text {{
-                padding: 12px;
-                color: {self._preview_text_color};
-            }}
-        """
-        css_provider = Gtk.CssProvider()
-        css_provider.load_from_data(css.encode())
-        self._preview_text_view.get_style_context().add_provider(
-            css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        
-        self._preview_buffer = self._preview_text_view.get_buffer()
-        preview_scrolled.add(self._preview_text_view)
+
+        self._preview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._preview_box.set_margin_start(0)
+        self._preview_box.set_margin_end(5)
+        self._preview_box.set_margin_top(0)
+        self._preview_box.set_margin_bottom(5)
+        preview_scrolled.add(self._preview_box)
         self._mode_stack.add_named(preview_scrolled, "preview")
         
+        # Toolbar (built after text view so actions can bind to it)
+        toolbar = self._build_toolbar()
+        container.pack_start(toolbar, False, False, 0)
         container.pack_start(self._mode_stack, True, True, 0)
         
         return container
@@ -179,8 +161,19 @@ class DocumentView(UIComponent):
         self._preview_toggle.connect("toggled", self._on_preview_toggled)
         header_box.pack_start(self._preview_toggle, False, False, 0)
 
-        # Spacer pushes controls to the right
-        header_box.pack_start(Gtk.Box(), True, True, 0)
+        # Editing tools centered in the toolbar
+        self._markdown_toolbar = MarkdownToolbar(
+            self._markdown_actions,
+            show_help=False,
+            use_spacer=False,
+        )
+        self._markdown_toolbar.widget.set_hexpand(True)
+        self._markdown_toolbar.widget.set_halign(Gtk.Align.CENTER)
+        header_box.pack_start(self._markdown_toolbar.widget, True, True, 0)
+
+        # Right-side controls
+        right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        header_box.pack_start(right_box, False, False, 0)
         
         # Separator
         #header_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
@@ -190,14 +183,14 @@ class DocumentView(UIComponent):
         self._undo_btn.set_image(Gtk.Image.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         self._undo_btn.set_tooltip_text("Undo (Ctrl+Z)")
         self._undo_btn.connect("clicked", lambda w: self._on_undo() if self._on_undo else None)
-        header_box.pack_start(self._undo_btn, False, False, 0)
+        right_box.pack_start(self._undo_btn, False, False, 0)
         
         # Redo button
         self._redo_btn = Gtk.Button()
         self._redo_btn.set_image(Gtk.Image.new_from_icon_name("edit-redo-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         self._redo_btn.set_tooltip_text("Redo (Ctrl+Shift+Z)")
         self._redo_btn.connect("clicked", lambda w: self._on_redo() if self._on_redo else None)
-        header_box.pack_start(self._redo_btn, False, False, 0)
+        right_box.pack_start(self._redo_btn, False, False, 0)
         
         # Separator
         # header_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
@@ -207,14 +200,14 @@ class DocumentView(UIComponent):
         copy_btn.set_image(Gtk.Image.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         copy_btn.set_tooltip_text("Copy all")
         copy_btn.connect("clicked", lambda w: self._on_copy() if self._on_copy else None)
-        header_box.pack_start(copy_btn, False, False, 0)
+        right_box.pack_start(copy_btn, False, False, 0)
         
         # Export button
         export_btn = Gtk.Button()
         export_btn.set_image(Gtk.Image.new_from_icon_name("document-save-as-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         export_btn.set_tooltip_text("Export to PDF")
         export_btn.connect("clicked", lambda w: self._on_export() if self._on_export else None)
-        header_box.pack_start(export_btn, False, False, 0)
+        right_box.pack_start(export_btn, False, False, 0)
         
         return toolbar
 
@@ -268,82 +261,55 @@ class DocumentView(UIComponent):
     
     def _render_preview(self) -> None:
         """Render the document content as formatted output."""
-        # Clear buffer
-        self._preview_buffer.set_text("")
-        
-        # Import rendering utilities
+        for child in self._preview_box.get_children():
+            self._preview_box.remove(child)
+
         try:
-            from latex_utils import process_tex_markup, insert_tex_image
-            from markup_utils import process_text_formatting, process_inline_markup, format_response
+            from markup_utils import format_response
         except ImportError as e:
-            self._preview_buffer.set_text(f"Preview unavailable: {e}")
+            label = Gtk.Label(label=f"Preview unavailable: {e}")
+            label.set_xalign(0)
+            self._preview_box.pack_start(label, False, False, 0)
+            self._preview_box.show_all()
             return
-        
+
         content = self._current_content
         if not content.strip():
-            self._preview_buffer.set_text("(empty document)")
+            label = Gtk.Label(label="(empty document)")
+            label.set_xalign(0)
+            self._preview_box.pack_start(label, False, False, 0)
+            self._preview_box.show_all()
             return
-        
-        # Pre-process content
+
+        if not self._message_renderer:
+            label = Gtk.Label(label="Preview renderer unavailable.")
+            label.set_xalign(0)
+            self._preview_box.pack_start(label, False, False, 0)
+            self._preview_box.show_all()
+            return
+
         processed = format_response(content)
-        
-        # Split into segments (code blocks, tables, text)
-        pattern = r'(--- Code Block Start \(.*?\) ---\n.*?\n--- Code Block End ---|--- Table Start ---\n.*?\n--- Table End ---|---HORIZONTAL-LINE---)'
-        segments = re.split(pattern, processed, flags=re.DOTALL)
-        
-        for seg in segments:
-            if seg.startswith('--- Code Block Start ('):
-                # Code block - insert as monospace text
-                code_content = re.sub(r'^--- Code Block Start \(.*?\) ---', '', seg)
-                code_content = re.sub(r'--- Code Block End ---$', '', code_content).strip('\n')
-                end_iter = self._preview_buffer.get_end_iter()
-                self._preview_buffer.insert(end_iter, code_content + "\n\n")
-                
-            elif seg.startswith('--- Table Start ---'):
-                table_content = re.sub(r'^--- Table Start ---\n?', '', seg)
-                table_content = re.sub(r'\n?--- Table End ---$', '', table_content).strip()
-                end_iter = self._preview_buffer.get_end_iter()
-                self._preview_buffer.insert(end_iter, table_content + "\n\n")
-                
-            elif seg.strip() == '---HORIZONTAL-LINE---':
-                end_iter = self._preview_buffer.get_end_iter()
-                self._preview_buffer.insert(end_iter, "─" * 40 + "\n\n")
-                
-            else:
-                seg = seg.strip('\n')
-                if seg.strip():
-                    # Process LaTeX and formatting
-                    processed_text = process_tex_markup(seg, "#888888", None, None, 150)
-                    
-                    if "<img" in processed_text:
-                        # Has LaTeX images
-                        parts = re.split(r'(<img src="[^"]+"/>)', processed_text)
-                        for part in parts:
-                            if part.startswith('<img src="'):
-                                img_path = re.search(r'src="([^"]+)"', part).group(1)
-                                end_iter = self._preview_buffer.get_end_iter()
-                                insert_tex_image(self._preview_buffer, end_iter, img_path, self._preview_text_view, None, is_math_image=True)
-                            else:
-                                text = process_text_formatting(part, self._font_size)
-                                self._insert_markup(self._preview_buffer, text)
-                    else:
-                        processed_text = process_inline_markup(processed_text, self._font_size)
-                        self._insert_markup(self._preview_buffer, processed_text)
-                    
-                    end_iter = self._preview_buffer.get_end_iter()
-                    self._preview_buffer.insert(end_iter, "\n")
-    
-    def _insert_markup(self, buffer: Gtk.TextBuffer, markup: str) -> None:
-        """Insert pango markup into buffer."""
-        try:
-            end_iter = buffer.get_end_iter()
-            buffer.insert_markup(end_iter, markup, -1)
-        except Exception:
-            # Fallback to plain text
-            end_iter = buffer.get_end_iter()
-            # Strip markup tags
-            plain = re.sub(r'<[^>]+>', '', markup)
-            buffer.insert(end_iter, plain)
+        content_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        css_container = """
+            box {
+                background-color: @theme_base_color;
+                padding: 12px;
+                border-radius: 12px;
+            }
+        """
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(css_container.encode())
+        content_container.get_style_context().add_provider(
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self._preview_box.pack_start(content_container, False, False, 0)
+        self._message_renderer.render_rich_content(
+            content_container,
+            processed,
+            self._preview_text_color,
+        )
+        self._preview_box.show_all()
     
     def _apply_css(self, widget: Gtk.Widget, css: str) -> None:
         """Apply CSS to a widget."""
@@ -358,6 +324,52 @@ class DocumentView(UIComponent):
         if self._on_content_changed:
             content = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
             self._on_content_changed(content)
+
+    def _on_key_press(self, widget, event) -> bool:
+        """Handle key presses for document editor behaviors."""
+        if self._in_preview_mode:
+            return False
+        return self._maybe_continue_list(event)
+
+    def _maybe_continue_list(self, event) -> bool:
+        """Insert the next list marker on Return when in a list line."""
+        if event.keyval not in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            return False
+        if event.state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK):
+            return False
+
+        buf = self._text_view.get_buffer()
+        if buf.get_has_selection():
+            return False
+
+        insert_iter = buf.get_iter_at_mark(buf.get_insert())
+        line_start = insert_iter.copy()
+        line_start.set_line_offset(0)
+        line_end = insert_iter.copy()
+        line_end.forward_to_line_end()
+        line_text = buf.get_text(line_start, line_end, True)
+
+        bullet_match = re.match(r'^(\s*)([-*+])\s+', line_text)
+        number_match = re.match(r'^(\s*)(\d+)([.)])\s+', line_text)
+        prefix = None
+
+        if bullet_match:
+            indent, bullet = bullet_match.groups()
+            prefix = f"{indent}{bullet} "
+        elif number_match:
+            indent, number, delimiter = number_match.groups()
+            prefix = f"{indent}{int(number) + 1}{delimiter} "
+
+        if not prefix:
+            return False
+
+        if line_text[len(prefix):].strip() == "":
+            buf.delete(line_start, line_end)
+            buf.place_cursor(line_start)
+            return True
+
+        buf.insert_at_cursor(f"\n{prefix}")
+        return True
     
     def _on_document_updated(self, event: Event) -> None:
         """Handle document updated event - show summary popover."""

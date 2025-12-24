@@ -61,7 +61,7 @@ from conversation import (
 )
 from controller import ChatController, TextTarget
 from events import EventType, Event
-from message_renderer import MessageRenderer, RenderSettings, RenderCallbacks, create_source_view
+from message_renderer import MessageRenderer, RenderSettings, RenderCallbacks
 
 gi.require_version("Gtk", "3.0")
 # For syntax highlighting:
@@ -1251,6 +1251,7 @@ class OpenAIGTKClient(Gtk.Window):
             font_family=self.settings.get('FONT_FAMILY', 'Sans'),
             font_size=self.settings.get('FONT_SIZE', 12),
             preview_text_color=self.settings.get('AI_COLOR', '#0D47A1'),
+            message_renderer=self.message_renderer,
         )
         self._view_stack.add_named(self._document_view.widget, "document")
         self._document_view.widget.show_all()

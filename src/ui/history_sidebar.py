@@ -389,12 +389,20 @@ class HistorySidebar(UIComponent):
         self._current_document_id = None
         # Don't steal focus from filter entry
         filter_has_focus = self.filter_entry.has_focus()
+        focus_widget = None
+        toplevel = self.widget.get_toplevel()
+        if isinstance(toplevel, Gtk.Window):
+            focus_widget = toplevel.get_focus()
+        sidebar_has_focus = (
+            focus_widget is not None and
+            (focus_widget == self.filter_entry or focus_widget.is_ancestor(self.history_list))
+        )
         children = self.history_list.get_children()
         for row in children:
             row_id = getattr(row, 'chat_id', None)
             if row_id == chat_id:
                 self.history_list.select_row(row)
-                if scroll_to and not filter_has_focus:
+                if scroll_to and not filter_has_focus and sidebar_has_focus:
                     row.grab_focus()
                 return
         # No exact match - try without .json extension
@@ -403,7 +411,7 @@ class HistorySidebar(UIComponent):
             row_id = getattr(row, 'chat_id', '')
             if row_id.replace('.json', '') == chat_id_clean:
                 self.history_list.select_row(row)
-                if scroll_to and not filter_has_focus:
+                if scroll_to and not filter_has_focus and sidebar_has_focus:
                     row.grab_focus()
                 return
         self.history_list.unselect_all()
@@ -413,11 +421,19 @@ class HistorySidebar(UIComponent):
         self._current_document_id = doc_id
         self._current_chat_id = None
         filter_has_focus = self.filter_entry.has_focus()
+        focus_widget = None
+        toplevel = self.widget.get_toplevel()
+        if isinstance(toplevel, Gtk.Window):
+            focus_widget = toplevel.get_focus()
+        sidebar_has_focus = (
+            focus_widget is not None and
+            (focus_widget == self.filter_entry or focus_widget.is_ancestor(self.history_list))
+        )
         children = self.history_list.get_children()
         for row in children:
             if getattr(row, 'is_document', False) and getattr(row, 'doc_id', None) == doc_id:
                 self.history_list.select_row(row)
-                if scroll_to and not filter_has_focus:
+                if scroll_to and not filter_has_focus and sidebar_has_focus:
                     row.grab_focus()
                 return
         self.history_list.unselect_all()

@@ -47,6 +47,7 @@ from config import (
     DEFAULT_SHORTCUTS,
 )
 from ai_providers import CustomProvider
+from ui.markdown_toolbar import MarkdownActions, MarkdownToolbar
 
 
 # ---------------------------------------------------------------------------
@@ -5043,15 +5044,9 @@ class PromptEditorDialog(Gtk.Dialog):
         vbox.set_margin_end(12)
         content.pack_start(vbox, True, True, 0)
 
-        # Toolbar
-        self.toolbar = self._create_toolbar()
-        vbox.pack_start(self.toolbar, False, False, 0)
-
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
-        vbox.pack_start(scroll, True, True, 0)
-
 
         self.textview = Gtk.TextView()
         self.textview.set_wrap_mode(Gtk.WrapMode.WORD)
@@ -5093,6 +5088,12 @@ class PromptEditorDialog(Gtk.Dialog):
         self._update_placeholder_visibility()
 
         scroll.add(overlay)
+
+        # Toolbar (created after textview so actions can bind to it)
+        self._markdown_actions = MarkdownActions(self.textview)
+        self.toolbar = self._create_toolbar()
+        vbox.pack_start(self.toolbar, False, False, 0)
+        vbox.pack_start(scroll, True, True, 0)
 
         # Bottom row with voice button on left and dialog buttons on right
         bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -5257,116 +5258,12 @@ class PromptEditorDialog(Gtk.Dialog):
 
     def _create_toolbar(self) -> Gtk.Box:
         """Create and return the markdown formatting toolbar."""
-        toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-        toolbar.get_style_context().add_class("toolbar")
-
-        # --- Phase 1: Core Formatting ---
-        
-        # Bold
-        btn_bold = Gtk.Button()
-        btn_bold.set_tooltip_text("Bold (Ctrl+B)")
-        btn_bold.add(Gtk.Image.new_from_icon_name("format-text-bold-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_bold.connect("clicked", self._on_bold_clicked)
-        toolbar.pack_start(btn_bold, False, False, 0)
-
-        # Italic
-        btn_italic = Gtk.Button()
-        btn_italic.set_tooltip_text("Italic (Ctrl+I)")
-        btn_italic.add(Gtk.Image.new_from_icon_name("format-text-italic-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_italic.connect("clicked", self._on_italic_clicked)
-        toolbar.pack_start(btn_italic, False, False, 0)
-
-        # Inline Code
-        btn_code = Gtk.Button()
-        btn_code.set_tooltip_text("Inline Code (Ctrl+`)")
-        btn_code.add(Gtk.Image.new_from_icon_name("applications-development-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_code.connect("clicked", self._on_inline_code_clicked)
-        toolbar.pack_start(btn_code, False, False, 0)
-
-        # Separator
-        sep1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep1.set_margin_start(4)
-        sep1.set_margin_end(4)
-        toolbar.pack_start(sep1, False, False, 0)
-
-        # --- Phase 2: Block Elements ---
-        
-        # Heading 1
-        btn_h1 = Gtk.Button(label="H1")
-        btn_h1.set_tooltip_text("Heading 1 (Ctrl+1)")
-        btn_h1.connect("clicked", lambda w: self._on_heading_clicked(1))
-        toolbar.pack_start(btn_h1, False, False, 0)
-        
-        # Heading 2
-        btn_h2 = Gtk.Button(label="H2")
-        btn_h2.set_tooltip_text("Heading 2 (Ctrl+2)")
-        btn_h2.connect("clicked", lambda w: self._on_heading_clicked(2))
-        toolbar.pack_start(btn_h2, False, False, 0)
-        
-        # Heading 3
-        btn_h3 = Gtk.Button(label="H3")
-        btn_h3.set_tooltip_text("Heading 3 (Ctrl+3)")
-        btn_h3.connect("clicked", lambda w: self._on_heading_clicked(3))
-        toolbar.pack_start(btn_h3, False, False, 0)
-
-        sep2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep2.set_margin_start(4)
-        sep2.set_margin_end(4)
-        toolbar.pack_start(sep2, False, False, 0)
-
-        # Bullet List
-        btn_ul = Gtk.Button()
-        btn_ul.set_tooltip_text("Bullet List (Ctrl+Shift+8)")
-        btn_ul.add(Gtk.Image.new_from_icon_name("view-list-bullet-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_ul.connect("clicked", lambda w: self._on_list_clicked(ordered=False))
-        toolbar.pack_start(btn_ul, False, False, 0)
-
-        # Numbered List
-        btn_ol = Gtk.Button()
-        btn_ol.set_tooltip_text("numbered List (Ctrl+Shift+7)")
-        btn_ol.add(Gtk.Image.new_from_icon_name("view-list-ordered-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_ol.connect("clicked", lambda w: self._on_list_clicked(ordered=True))
-        toolbar.pack_start(btn_ol, False, False, 0)
-
-        sep3 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep3.set_margin_start(4)
-        sep3.set_margin_end(4)
-        toolbar.pack_start(sep3, False, False, 0)
-
-        # Code Block
-        btn_codeblock = Gtk.Button()
-        btn_codeblock.set_tooltip_text("Code Block (Ctrl+Shift+C)")
-        btn_codeblock.add(Gtk.Image.new_from_icon_name("text-x-script-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_codeblock.connect("clicked", self._on_code_block_clicked)
-        toolbar.pack_start(btn_codeblock, False, False, 0)
-
-        # Quote
-        btn_quote = Gtk.Button()
-        btn_quote.set_tooltip_text("Quote (Ctrl+Shift+.)")
-        btn_quote.add(Gtk.Image.new_from_icon_name("format-indent-more-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_quote.connect("clicked", self._on_quote_clicked)
-        toolbar.pack_start(btn_quote, False, False, 0)
-
-        # Spacer to push Help button to the right
-        spacer = Gtk.Box()
-        spacer.set_hexpand(True)
-        toolbar.pack_start(spacer, True, True, 0)
-
-        # Emoji Button
-        btn_emoji = Gtk.Button()
-        btn_emoji.set_tooltip_text("Insert Emoji (Ctrl+.)")
-        btn_emoji.add(Gtk.Image.new_from_icon_name("face-smile-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_emoji.connect("clicked", self._on_emoji_clicked)
-        toolbar.pack_start(btn_emoji, False, False, 0)
-
-        # Help Button
-        btn_help = Gtk.Button()
-        btn_help.set_tooltip_text("Keyboard Shortcuts")
-        btn_help.add(Gtk.Image.new_from_icon_name("help-about-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        btn_help.connect("clicked", self._on_help_clicked)
-        toolbar.pack_start(btn_help, False, False, 0)
-
-        return toolbar
+        self._markdown_toolbar = MarkdownToolbar(
+            self._markdown_actions,
+            on_help=lambda: self._on_help_clicked(None),
+            show_help=True,
+        )
+        return self._markdown_toolbar.widget
 
     def _on_help_clicked(self, widget):
         """Show the shortcuts help dialog."""
@@ -5376,129 +5273,19 @@ class PromptEditorDialog(Gtk.Dialog):
 
     def _on_emoji_clicked(self, widget):
         """Show GTK emoji chooser and insert selected emoji."""
-        self.textview.emit("insert-emoji")
+        self._markdown_actions.insert_emoji()
 
     def _wrap_selection(self, prefix: str, suffix: str):
         """Wrap the current selection with prefix/suffix or insert template."""
-        buf = self.textview.get_buffer()
-        if buf.get_has_selection():
-            start, end = buf.get_selection_bounds()
-            text = buf.get_text(start, end, True)
-            
-            # Check if already wrapped (basic toggle)
-            if text.startswith(prefix) and text.endswith(suffix) and len(text) >= len(prefix)+len(suffix):
-                # Unwrap
-                new_text = text[len(prefix):len(text)-len(suffix)]
-                buf.delete(start, end)
-                buf.insert(start, new_text)
-            else:
-                # Wrap
-                buf.delete(start, end)
-                buf.insert(start, f"{prefix}{text}{suffix}")
-        else:
-            # Insert template and position cursor
-            buf.insert_at_cursor(f"{prefix}{suffix}")
-            # Move cursor between prefix and suffix
-            cursor = buf.get_iter_at_mark(buf.get_insert())
-            cursor.backward_chars(len(suffix))
-            buf.place_cursor(cursor)
-        
-        self.textview.grab_focus()
+        self._markdown_actions.wrap_selection(prefix, suffix)
 
     def _prefix_lines(self, prefix: str):
         """Add (or remove) prefix to start of selected lines or current line."""
-        buf = self.textview.get_buffer()
-        if buf.get_has_selection():
-            start, end = buf.get_selection_bounds()
-            # To ensure we cover the whole lines of selection
-            start.set_line_offset(0)
-            if not end.ends_line():
-                end.forward_to_line_end()
-        else:
-            start = buf.get_iter_at_mark(buf.get_insert())
-            start.set_line_offset(0)
-            end = start.copy()
-            end.forward_to_line_end()
-        
-        text = buf.get_text(start, end, True)
-        lines = text.split('\n')
-        
-        # Logic to toggle: if all lines start with prefix, remove it. Else add it.
-        # Exception: Empty lines are usually skipped unless it's a single line operation.
-        
-        # Check if we should skip empty lines (multi-line selection) or keep them (single line)
-        is_single_line = len(lines) == 1
-        
-        # Check if "all relevant lines" have prefix
-        relevant_lines = [l for l in lines if l] if not is_single_line else lines
-        if not relevant_lines and not is_single_line:
-             # Case where selection is just empty lines? 
-             pass
-             
-        if relevant_lines:
-            all_have_prefix = all(line.startswith(prefix) for line in relevant_lines)
-        else:
-            # If no content, assume we want to add prefix
-            all_have_prefix = False
-
-        new_lines = []
-        for line in lines:
-            if not line and not is_single_line: 
-                # Skip empty lines in multi-line selection
-                new_lines.append(line)
-                continue
-            
-            if all_have_prefix:
-                # Remove prefix
-                if line.startswith(prefix):
-                    new_lines.append(line[len(prefix):])
-                else:
-                    new_lines.append(line)
-            else:
-                # Add prefix
-                new_lines.append(f"{prefix}{line}")
-                
-        result_text = '\n'.join(new_lines)
-        buf.delete(start, end)
-        buf.insert(start, result_text)
-        self.textview.grab_focus()
+        self._markdown_actions.prefix_lines(prefix)
 
     def _make_numbered_list(self):
         """Convert selected lines to a numbered list (1. 2. 3...)"""
-        buf = self.textview.get_buffer()
-        if buf.get_has_selection():
-            start, end = buf.get_selection_bounds()
-            start.set_line_offset(0)
-            if not end.ends_line():
-                end.forward_to_line_end()
-        else:
-            # Single line
-            start = buf.get_iter_at_mark(buf.get_insert())
-            start.set_line_offset(0)
-            end = start.copy()
-            end.forward_to_line_end()
-            
-        text = buf.get_text(start, end, True)
-        lines = text.split('\n')
-        
-        new_lines = []
-        count = 1
-        for line in lines:
-            # Skip empty lines in multi-line (optional, but good for lists)
-            if not line and len(lines) > 1:
-                new_lines.append(line)
-                continue
-            
-            # Remove existing number prefix if present (e.g. "1. ", "- ") logic is complex
-            # For now, just prepend. Or simpler: simple regex cleanup? 
-            # Let's just prefix with number.
-            new_lines.append(f"{count}. {line}")
-            count += 1
-            
-        result_text = '\n'.join(new_lines)
-        buf.delete(start, end)
-        buf.insert(start, result_text)
-        self.textview.grab_focus()
+        self._markdown_actions.make_numbered_list()
 
     def _on_bold_clicked(self, widget):
         self._wrap_selection("**", "**")
@@ -5610,6 +5397,11 @@ class PromptEditorDialog(Gtk.Dialog):
 
         if not prefix:
             return False
+
+        if line_text[len(prefix):].strip() == "":
+            buf.delete(line_start, line_end)
+            buf.place_cursor(line_start)
+            return True
 
         buf.insert_at_cursor(f"\n{prefix}")
         return True

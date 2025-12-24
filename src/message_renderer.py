@@ -345,8 +345,24 @@ class MessageRenderer:
 
         text_view.connect("populate-popup", on_text_view_populate_popup)
 
-    def _render_message_content(self, message_text: str, message_index: int, 
-                              container: Gtk.Box, text_color: str) -> List[str]:
+    def render_rich_content(self, container: Gtk.Box, message_text: str, text_color: str) -> List[str]:
+        """Render rich text into a container without message-specific UI."""
+        return self._render_message_content(
+            message_text=message_text,
+            message_index=None,
+            container=container,
+            text_color=text_color,
+            allow_context_menu=False,
+        )
+
+    def _render_message_content(
+        self,
+        message_text: str,
+        message_index: Optional[int],
+        container: Gtk.Box,
+        text_color: str,
+        allow_context_menu: bool = True,
+    ) -> List[str]:
         """Render message text into a container, supporting code blocks, tables, etc."""
         full_text = [] # To accumulate text for speech synthesis
         
@@ -433,7 +449,8 @@ class MessageRenderer:
                     
                     if "<img" in processed:
                         text_view = self._create_text_view("", text_color)
-                        self._attach_popup_to_text_view(text_view, message_index)
+                        if allow_context_menu and message_index is not None:
+                            self._attach_popup_to_text_view(text_view, message_index)
                         buffer = text_view.get_buffer()
                         parts = re.split(r'(<img src="[^"]+"/>)', processed)
                         for part in parts:
@@ -452,7 +469,8 @@ class MessageRenderer:
                     else:
                         processed = process_inline_markup(processed, self.settings.font_size)
                         text_view = self._create_text_view(processed, text_color)
-                        self._attach_popup_to_text_view(text_view, message_index)
+                        if allow_context_menu and message_index is not None:
+                            self._attach_popup_to_text_view(text_view, message_index)
                         container.pack_start(text_view, False, False, 0)
                     full_text.append(seg)
         
