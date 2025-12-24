@@ -5267,7 +5267,7 @@ class PromptEditorDialog(Gtk.Dialog):
 
     def _on_help_clicked(self, widget):
         """Show the shortcuts help dialog."""
-        dialog = ShortcutsHelpDialog(self)
+        dialog = ShortcutsHelpDialog(self, self._get_current_shortcuts())
         dialog.run()
         dialog.destroy()
 
@@ -5366,6 +5366,18 @@ class PromptEditorDialog(Gtk.Dialog):
         
         return False
 
+    def _get_current_shortcuts(self) -> dict:
+        """Return keyboard shortcuts merged with defaults."""
+        shortcuts_json = _get_setting_value(self._parent, 'KEYBOARD_SHORTCUTS', '')
+        try:
+            shortcuts = json.loads(shortcuts_json) if shortcuts_json else {}
+        except json.JSONDecodeError:
+            shortcuts = {}
+        for action, default_key in DEFAULT_SHORTCUTS.items():
+            if action not in shortcuts:
+                shortcuts[action] = default_key
+        return shortcuts
+
     def _maybe_continue_list(self, event) -> bool:
         """Insert the next list marker on Return when in a list line."""
         if event.keyval not in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
@@ -5410,7 +5422,7 @@ class PromptEditorDialog(Gtk.Dialog):
 class ShortcutsHelpDialog(Gtk.Dialog):
     """Dialog showing keyboard shortcuts for the Prompt Editor."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, shortcuts: dict):
         super().__init__(title="Keyboard Shortcuts", transient_for=parent, flags=0)
         self.set_modal(True)
         self.add_button("Close", Gtk.ResponseType.CLOSE)
@@ -5435,20 +5447,21 @@ class ShortcutsHelpDialog(Gtk.Dialog):
         grid.set_row_spacing(8)
         box.pack_start(grid, True, True, 0)
 
-        shortcuts = [
-            ("Bold", "Ctrl + B"),
-            ("Italic", "Ctrl + I"),
-            ("Inline Code", "Ctrl + `"),
-            ("Heading 1", "Ctrl + 1"),
-            ("Heading 2", "Ctrl + 2"),
-            ("Heading 3", "Ctrl + 3"),
-            ("Bullet List", "Ctrl + * (Shift+8)"),
-            ("Numbered List", "Ctrl + &amp; (Shift+7)"),
-            ("Code Block", "Ctrl + Shift + C"),
-            ("Quote", "Ctrl + > (Shift+.)"),
+        shortcuts = shortcuts or {}
+        rows = [
+            ("Bold", shortcuts.get("editor_bold", "")),
+            ("Italic", shortcuts.get("editor_italic", "")),
+            ("Inline Code", shortcuts.get("editor_code", "")),
+            ("Heading 1", shortcuts.get("editor_h1", "")),
+            ("Heading 2", shortcuts.get("editor_h2", "")),
+            ("Heading 3", shortcuts.get("editor_h3", "")),
+            ("Bullet List", shortcuts.get("editor_bullet_list", "")),
+            ("Numbered List", shortcuts.get("editor_numbered_list", "")),
+            ("Code Block", shortcuts.get("editor_code_block", "")),
+            ("Quote", shortcuts.get("editor_quote", "")),
         ]
 
-        for i, (name, keys) in enumerate(shortcuts):
+        for i, (name, keys) in enumerate(rows):
             name_label = Gtk.Label(label=name)
             name_label.set_xalign(0)
             name_label.get_style_context().add_class("dim-label")
@@ -5456,12 +5469,34 @@ class ShortcutsHelpDialog(Gtk.Dialog):
             keys_label = Gtk.Label(label=keys)
             keys_label.set_xalign(1)
             # Make keys mono
-            keys_label.set_markup(f"<tt>{keys}</tt>")
+            formatted = self._format_shortcut(keys)
+            keys_label.set_markup(f"<tt>{GLib.markup_escape_text(formatted)}</tt>")
 
             grid.attach(name_label, 0, i, 1, 1)
             grid.attach(keys_label, 1, i, 1, 1)
 
+        inset = Gtk.Frame()
+        inset.set_shadow_type(Gtk.ShadowType.IN)
+        inset_label = Gtk.Label(
+            label='This is a Markdown editor. Ask your assistant about "markdown" for more information.'
+        )
+        inset_label.set_xalign(0)
+        inset_label.set_line_wrap(True)
+        inset_label.set_margin_start(10)
+        inset_label.set_margin_end(10)
+        inset_label.set_margin_top(8)
+        inset_label.set_margin_bottom(8)
+        inset_label.get_style_context().add_class("dim-label")
+        inset.add(inset_label)
+        box.pack_start(inset, False, False, 0)
+
         self.show_all()
+
+    def _format_shortcut(self, shortcut: str) -> str:
+        """Format shortcut string for display."""
+        if not shortcut:
+            return "(none)"
+        return shortcut.replace('<', '').replace('>', '+').rstrip('+')
 
 
 # ---------------------------------------------------------------------------
