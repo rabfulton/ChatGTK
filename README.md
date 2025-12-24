@@ -200,7 +200,7 @@ Document Mode provides a focused editing environment for creating and refining l
   - Review changes in preview mode
   - Undo AI edits if needed, or continue iterating
 
-## Tools Support (images, music, web search & read aloud)
+## Tools Support
 
 - **Image tool (`generate_image`)**
   - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
@@ -243,7 +243,6 @@ Document Mode provides a focused editing environment for creating and refining l
     - **Result Limit**: maximum number of results to return (1-5).
     - **Show Results in Chat**: when enabled, search results appear in the chat window; when disabled, results are only sent to the model silently.
   - The current conversation is automatically excluded from search results to avoid circular references.
-  - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
   - Example usage: "Do you remember what we discussed about Python decorators?" or "Search my notes for information about project deadlines".
 
 - **Text edit tools (`text_get`, `apply_text_edit`)**
