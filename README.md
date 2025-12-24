@@ -154,6 +154,36 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - **Self-hosted models**: Use local or remote self-hosted models with OpenAI-compatible APIs
   - **Alternative providers**: Access models from services like Together AI, Anyscale, or other compatible providers
 
+## Document Mode
+
+Document Mode provides a focused editing environment for creating and refining long-form content with AI assistance. Instead of a back-and-forth chat, you work on a single document that the AI can read and edit directly.
+
+- **Creating Documents**
+  - Click the document icon (📄) in the sidebar to create a new document
+  - Documents are saved per-project, just like chats
+  - Right-click documents in the sidebar to rename or delete them
+
+- **Edit and Preview Modes**
+  - **Edit mode**: Raw markdown editing with syntax highlighting
+  - **Preview mode**: Click the Preview button to see rendered content with formatted text, LaTeX equations, and code highlighting
+  - Toggle between modes while working
+
+- **AI-Assisted Editing**
+  - Use the Prompt box to let the AI modify your document directly
+  - The AI can read the current document content and apply targeted edits
+  - Each AI edit can be undone using the undo button in the toolbar
+  - Manual edits (your typing) are auto-saved but don't create undo points
+
+- **Export**
+  - Export documents to PDF with full formatting (LaTeX, code highlighting, etc.)
+  - Uses the same rendering as chat exports
+
+- **Workflow**
+  - Create a document and write initial content or ask AI to create an outline of what you want
+  - Ask the AI to expand, refine, restructure, or edit specific sections
+  - Review changes in preview mode
+  - Undo AI edits if needed, or continue iterating
+
 ## Tools Support (images, music, web search & read aloud)
 
 - **Image tool (`generate_image`)**

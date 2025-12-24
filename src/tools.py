@@ -847,6 +847,15 @@ class ToolManager:
             return False
         return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
 
+    def supports_tool_calling(
+        self,
+        model_name: str,
+        model_provider_map: Optional[Dict[str, str]] = None,
+        custom_models: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> bool:
+        """Return True if the given model supports tool calling."""
+        return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
+
     def get_enabled_tools_for_model(
         self,
         model_name: str,

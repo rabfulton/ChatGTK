@@ -80,6 +80,11 @@ class ToolService:
         }
         self._event_bus = event_bus
         self._settings_manager = settings_manager
+        self._document_mode_tools_only = False
+
+    def set_document_mode_tools_only(self, enabled: bool) -> None:
+        """Limit available tools to text edit tools only (Document Mode)."""
+        self._document_mode_tools_only = bool(enabled)
     
     def _emit(self, event_type: EventType, **data) -> None:
         """Emit an event if event bus is configured."""
@@ -162,6 +167,13 @@ class ToolService:
         # Check if model supports tools
         if not is_chat_completion_model(model):
             return available
+
+        if self._document_mode_tools_only:
+            if self._tool_manager.supports_tool_calling(model) and self._handlers.get('text_get'):
+                available.append('text_get')
+            if self._tool_manager.supports_tool_calling(model) and self._handlers.get('text_edit'):
+                available.append('apply_text_edit')
+            return available
         
         # Check each tool's availability
         if self._tool_manager.image_tool_enabled and self._handlers.get('image'):
@@ -205,6 +217,12 @@ class ToolService:
         
         # Get enabled tools
         enabled_tools = set()
+        if self._document_mode_tools_only:
+            if self._tool_manager.supports_tool_calling(model) and self._handlers.get('text_get'):
+                enabled_tools.add('text_get')
+            if self._tool_manager.supports_tool_calling(model) and self._handlers.get('text_edit'):
+                enabled_tools.add('apply_text_edit')
+            return build_tools_for_provider(enabled_tools, provider) if enabled_tools else []
         if self._tool_manager.image_tool_enabled:
             enabled_tools.add('image')
         if self._tool_manager.music_tool_enabled:
@@ -386,16 +404,35 @@ class ToolService:
 
     def supports_image_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
         """Check if a model supports image tools."""
+        if self._document_mode_tools_only:
+            return False
         return self._tool_manager.supports_image_tools(model_name, model_provider_map, custom_models)
 
     def supports_music_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
         """Check if a model supports music tools."""
+        if self._document_mode_tools_only:
+            return False
         return self._tool_manager.supports_music_tools(model_name, model_provider_map, custom_models)
 
     def supports_read_aloud_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
         """Check if a model supports read aloud tools."""
+        if self._document_mode_tools_only:
+            return False
         return self._tool_manager.supports_read_aloud_tools(model_name, model_provider_map, custom_models)
 
     def supports_search_tools(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
         """Check if a model supports search tools."""
+        if self._document_mode_tools_only:
+            return False
         return self._tool_manager.supports_search_tools(model_name, model_provider_map, custom_models)
+
+    def supports_text_edit_tools(
+        self,
+        model_name: str,
+        model_provider_map: Optional[Dict] = None,
+        custom_models: Optional[Dict] = None,
+    ) -> bool:
+        """Check if a model supports text edit tools."""
+        if self._document_mode_tools_only:
+            return self._tool_manager.supports_tool_calling(model_name, model_provider_map, custom_models)
+        return self._tool_manager.supports_text_edit_tools(model_name, model_provider_map, custom_models)

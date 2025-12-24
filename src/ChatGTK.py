@@ -1166,6 +1166,7 @@ class OpenAIGTKClient(Gtk.Window):
         """Switch to Document Mode view."""
         self._ensure_document_view()
         self._in_document_mode = True
+        self.controller.tool_service.set_document_mode_tools_only(True)
         self._view_stack.set_visible_child_name("document")
         # Set popover anchor to input panel
         self._document_view.set_popover_anchor(self._input_panel.widget)
@@ -1180,6 +1181,7 @@ class OpenAIGTKClient(Gtk.Window):
     def _switch_to_chat_view(self) -> None:
         """Switch to Chat view."""
         self._in_document_mode = False
+        self.controller.tool_service.set_document_mode_tools_only(False)
         self._view_stack.set_visible_child_name("chat")
         # Unregister document target
         self.controller.unregister_text_target("document")
@@ -1609,7 +1611,7 @@ class OpenAIGTKClient(Gtk.Window):
             handlers["search_tool_handler"] = lambda keyword, source=None: \
                 self.controller.handle_search_tool(keyword, source)
 
-        if self.controller.tool_manager.text_edit_tool_enabled and self.controller.has_text_targets():
+        if ts.supports_text_edit_tools(model, self.model_provider_map, self.custom_models) and self.controller.has_text_targets():
             handlers["text_get_handler"] = lambda target: self.controller.handle_text_get(target)
             handlers["text_edit_handler"] = lambda target, operation, text, summary=None, search=None: \
                 self.controller.handle_apply_text_edit(target, operation, text, summary, search)

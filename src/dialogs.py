@@ -8,6 +8,7 @@ This module contains:
 """
 
 import json
+import re
 import os
 import subprocess
 import tempfile
@@ -2996,9 +2997,12 @@ class SettingsDialog(Gtk.Dialog):
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
 
-        list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        grid = Gtk.Grid()
+        grid.set_column_spacing(8)
+        grid.set_row_spacing(6)
         self._shortcut_buttons = {}
         self._model_combos = {}
+        row_index = 0
 
         # Group shortcuts by category
         categories = [
@@ -3039,26 +3043,25 @@ class SettingsDialog(Gtk.Dialog):
             header = Gtk.Label(xalign=0)
             header.set_markup(f"<b>{cat_name}</b>")
             header.set_margin_top(8)
-            list_box.pack_start(header, False, False, 0)
+            grid.attach(header, 0, row_index, 4, 1)
+            row_index += 1
 
             for action in actions:
-                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                
                 label = Gtk.Label(label=action_labels.get(action, action), xalign=0)
                 label.set_size_request(120, -1)
-                row.pack_start(label, False, False, 0)
+                grid.attach(label, 0, row_index, 1, 1)
 
                 btn = Gtk.Button(label=self._format_shortcut(self._shortcuts.get(action, '')))
                 btn.set_size_request(120, -1)
                 btn.connect("clicked", self._on_shortcut_button_clicked, action)
                 self._shortcut_buttons[action] = btn
-                row.pack_start(btn, False, False, 0)
+                grid.attach(btn, 1, row_index, 1, 1)
 
                 # Clear button
                 clear_btn = Gtk.Button.new_from_icon_name("edit-clear-symbolic", Gtk.IconSize.BUTTON)
                 clear_btn.set_tooltip_text("Clear shortcut")
                 clear_btn.connect("clicked", self._on_clear_shortcut, action)
-                row.pack_start(clear_btn, False, False, 0)
+                grid.attach(clear_btn, 2, row_index, 1, 1)
 
                 # Add model dropdown for model switching shortcuts
                 if action.startswith('model_'):
@@ -3074,11 +3077,14 @@ class SettingsDialog(Gtk.Dialog):
                         combo.set_active(0)
                     combo.set_size_request(200, -1)
                     self._model_combos[action] = combo
-                    row.pack_start(combo, False, False, 0)
+                    grid.attach(combo, 3, row_index, 1, 1)
+                else:
+                    spacer = Gtk.Label()
+                    spacer.set_size_request(200, -1)
+                    grid.attach(spacer, 3, row_index, 1, 1)
+                row_index += 1
 
-                list_box.pack_start(row, False, False, 0)
-
-        scroll.add(list_box)
+        scroll.add(grid)
         vbox.pack_start(scroll, True, True, 0)
 
         # Reset to defaults button
@@ -5522,6 +5528,9 @@ class PromptEditorDialog(Gtk.Dialog):
 
     def _on_key_press(self, widget, event):
         """Handle keyboard shortcuts using configurable bindings."""
+        if self._maybe_continue_list(event):
+            return True
+
         # Load shortcuts via repository
         shortcuts_json = _get_setting_value(self._parent, 'KEYBOARD_SHORTCUTS', '')
         try:
@@ -5569,6 +5578,41 @@ class PromptEditorDialog(Gtk.Dialog):
                     return True
         
         return False
+
+    def _maybe_continue_list(self, event) -> bool:
+        """Insert the next list marker on Return when in a list line."""
+        if event.keyval not in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            return False
+        if event.state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK):
+            return False
+
+        buf = self.textview.get_buffer()
+        if buf.get_has_selection():
+            return False
+
+        insert_iter = buf.get_iter_at_mark(buf.get_insert())
+        line_start = insert_iter.copy()
+        line_start.set_line_offset(0)
+        line_end = insert_iter.copy()
+        line_end.forward_to_line_end()
+        line_text = buf.get_text(line_start, line_end, True)
+
+        bullet_match = re.match(r'^(\s*)([-*+])\s+', line_text)
+        number_match = re.match(r'^(\s*)(\d+)([.)])\s+', line_text)
+        prefix = None
+
+        if bullet_match:
+            indent, bullet = bullet_match.groups()
+            prefix = f"{indent}{bullet} "
+        elif number_match:
+            indent, number, delimiter = number_match.groups()
+            prefix = f"{indent}{int(number) + 1}{delimiter} "
+
+        if not prefix:
+            return False
+
+        buf.insert_at_cursor(f"\n{prefix}")
+        return True
 
 
 class ShortcutsHelpDialog(Gtk.Dialog):
