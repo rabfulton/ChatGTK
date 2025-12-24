@@ -217,7 +217,7 @@ class HistorySidebar(UIComponent):
         """Refresh the history list from controller."""
         if not self._controller:
             return
-        
+
         # Get histories (chats)
         histories = self._controller.list_chats()
         

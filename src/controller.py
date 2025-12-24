@@ -198,7 +198,6 @@ class ChatController:
         
         # Initialize memory service (optional - only if dependencies available)
         self._memory_service = None
-        self._init_memory_service()
 
     # -----------------------------------------------------------------------
     # Memory service management
@@ -206,8 +205,11 @@ class ChatController:
 
     def _init_memory_service(self) -> None:
         """Initialize the memory service if dependencies are available and enabled."""
+        if not self._settings_manager.get('MEMORY_ENABLED', False):
+            return
+
         from memory import MEMORY_AVAILABLE
-        
+
         if not MEMORY_AVAILABLE:
             return
         
@@ -218,9 +220,6 @@ class ChatController:
             except Exception:
                 pass
             self._memory_service = None
-        
-        if not self._settings_manager.get('MEMORY_ENABLED', False):
-            return
         
         try:
             from memory import MemoryService
@@ -252,6 +251,10 @@ class ChatController:
             import traceback
             traceback.print_exc()
             self._memory_service = None
+
+    def init_memory_service_if_enabled(self) -> None:
+        """Initialize memory service (safe no-op if disabled)."""
+        self._init_memory_service()
 
     def _migrate_text_edit_prompt_appendix(self) -> None:
         current = self._settings_manager.get('TEXT_EDIT_TOOL_PROMPT_APPENDIX', '')

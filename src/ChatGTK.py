@@ -75,6 +75,8 @@ from gi.repository import Gtk, GLib, Pango, GtkSource, Gdk
 
 class OpenAIGTKClient(Gtk.Window):
     def __init__(self):
+        self._startup_t0 = time.perf_counter()
+
         super().__init__(title="ChatGTK Client")
 
         # Set window icon
@@ -88,7 +90,8 @@ class OpenAIGTKClient(Gtk.Window):
         # Initialize the controller FIRST - it manages state and business logic
         # Must be created before settings sync since property setters delegate to controller
         self.controller = ChatController()
-        self.controller.initialize_providers_from_env()
+        # Defer provider initialization to keep startup responsive
+        GLib.idle_add(self._init_providers_deferred)
 
         # Subscribe to events for reactive UI updates
         self._init_event_subscriptions()
@@ -225,7 +228,7 @@ class OpenAIGTKClient(Gtk.Window):
         vbox_main.pack_start(self._toolbar.widget, False, False, 0)
 
         # Chat view component for message display
-        from ui import ChatView, DocumentView
+        from ui import ChatView
         self._chat_view = ChatView(
             event_bus=self.controller.event_bus,
             window=self,
@@ -234,17 +237,9 @@ class OpenAIGTKClient(Gtk.Window):
             on_cancel=self._on_thinking_cancelled,
         )
         
-        # Document view component for Document Mode
-        self._document_view = DocumentView(
-            event_bus=self.controller.event_bus,
-            on_content_changed=self._on_document_content_changed,
-            on_undo=self._on_document_undo,
-            on_redo=self._on_document_redo,
-            on_export=self._on_document_export,
-            on_copy=self._on_document_copy,
-            font_family=self.settings.get('FONT_FAMILY', 'Sans'),
-            font_size=self.settings.get('FONT_SIZE', 12),
-        )
+        # Document view component for Document Mode (lazy init)
+        self._document_view = None
+        self._document_view_initialized = False
         
         # Track current view mode
         self._in_document_mode = False
@@ -254,7 +249,7 @@ class OpenAIGTKClient(Gtk.Window):
         self._view_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._view_stack.set_transition_duration(150)
         self._view_stack.add_named(self._chat_view.widget, "chat")
-        self._view_stack.add_named(self._document_view.widget, "document")
+        # Document view is created lazily
         self._view_stack.set_visible_child_name("chat")
         
         vbox_main.pack_start(self._view_stack, True, True, 0)
@@ -294,9 +289,9 @@ class OpenAIGTKClient(Gtk.Window):
         self._pending_text_edit_target_path = None
         self._refresh_attach_button_label()
 
-        # Check LaTeX installation
-        if not is_latex_installed():
-            print("Warning: LaTeX installation not found. Formula rendering will be disabled.")
+        # Defer LaTeX check until math rendering is needed
+        self._latex_checked = False
+        self._latex_available = None
 
         # Show all widgets first
         self.show_all()
@@ -310,9 +305,21 @@ class OpenAIGTKClient(Gtk.Window):
             self.sidebar.set_no_show_all(False)
             self.sidebar.set_visible(True)
         
-        # Load chat histories
-        self.refresh_history_list()
-        self.apply_sidebar_styles()
+        # Load chat histories (deferred)
+        def refresh_history():
+            self.refresh_history_list()
+            self.apply_sidebar_styles()
+            elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
+            print(f"[Startup] ready in {elapsed_ms:.1f}ms")
+            return False
+        GLib.idle_add(refresh_history)
+
+        # Defer memory service init to keep startup responsive
+        if self.settings.get('MEMORY_ENABLED', False):
+            def init_memory():
+                self.controller.init_memory_service_if_enabled()
+                return False
+            GLib.idle_add(init_memory)
         
         # Load the last active conversation if it exists
         last_active_chat = self.settings.get('LAST_ACTIVE_CHAT', '')
@@ -342,6 +349,11 @@ class OpenAIGTKClient(Gtk.Window):
         self.connect("window-state-event", self.on_window_state_event)
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self._on_global_key_press)
+
+    def _init_providers_deferred(self) -> bool:
+        """Initialize providers after UI is shown."""
+        self.controller.initialize_providers_from_env()
+        return False
 
     def _build_tray_menu(self):
         """
@@ -1115,6 +1127,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _switch_to_document_view(self) -> None:
         """Switch to Document Mode view."""
+        self._ensure_document_view()
         self._in_document_mode = True
         self._view_stack.set_visible_child_name("document")
         # Set popover anchor to input panel
@@ -1131,11 +1144,11 @@ class OpenAIGTKClient(Gtk.Window):
         self._in_document_mode = False
         self._view_stack.set_visible_child_name("chat")
         # Unregister document target
-        if "document" in self.controller._text_targets:
-            del self.controller._text_targets["document"]
+        self.controller.unregister_text_target("document")
 
     def open_document(self, doc_id: str) -> bool:
         """Open a document in Document Mode."""
+        self._ensure_document_view()
         if self.controller.load_document(doc_id):
             self._switch_to_document_view()
             return True
@@ -1178,8 +1191,37 @@ class OpenAIGTKClient(Gtk.Window):
         
         if response == Gtk.ResponseType.OK:
             self.controller.new_document(title=title)
+            self._ensure_document_view()
             self._switch_to_document_view()
             self._history_sidebar.refresh()
+
+    def _ensure_document_view(self) -> None:
+        """Initialize the document view lazily."""
+        if self._document_view_initialized:
+            return
+        from ui import DocumentView
+        self._document_view = DocumentView(
+            event_bus=self.controller.event_bus,
+            on_content_changed=self._on_document_content_changed,
+            on_undo=self._on_document_undo,
+            on_redo=self._on_document_redo,
+            on_export=self._on_document_export,
+            on_copy=self._on_document_copy,
+            font_family=self.settings.get('FONT_FAMILY', 'Sans'),
+            font_size=self.settings.get('FONT_SIZE', 12),
+        )
+        self._view_stack.add_named(self._document_view.widget, "document")
+        self._document_view_initialized = True
+
+    def _ensure_latex_available(self) -> bool:
+        """Check LaTeX availability once (deferred)."""
+        if self._latex_checked:
+            return bool(self._latex_available)
+        self._latex_available = is_latex_installed()
+        self._latex_checked = True
+        if not self._latex_available:
+            print("Warning: LaTeX installation not found. Formula rendering will be disabled.")
+        return bool(self._latex_available)
 
     # -----------------------------------------------------------------------
     # Event emission helpers

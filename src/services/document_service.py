@@ -80,13 +80,9 @@ class DocumentService:
         if self._current_document and self._current_document.id == doc_id:
             if title is not None:
                 self._current_document.title = title
+            if content is not None:
+                self._current_document.content = content
         return True
-    
-    def delete_document(self, doc_id: str) -> bool:
-        """Delete a document."""
-        if self._current_document and self._current_document.id == doc_id:
-            self.close_document()
-        return self._repository.delete(doc_id)
     
     @property
     def can_undo(self) -> bool:

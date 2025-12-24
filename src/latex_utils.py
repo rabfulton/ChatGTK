@@ -374,6 +374,17 @@ def process_tex_markup(text, text_color, chat_id, source_theme='solarized-dark',
         dpi (float): DPI value for formula rendering
     """
     
+    global _LATEX_WARNING_EMITTED
+
+    if not re.search(r'\\\[|\\\(', text):
+        return text
+
+    if not is_latex_installed():
+        if not _LATEX_WARNING_EMITTED:
+            print("Warning: LaTeX installation not found. Formula rendering will be disabled.")
+            _LATEX_WARNING_EMITTED = True
+        return text
+
     def _sanitize_math_content(math_content: str) -> str:
         """
         Remove markdown bold markers that may accidentally appear inside math
@@ -609,28 +620,31 @@ def cleanup_temp_files(pattern="math_*_*.png"):
         except Exception as e:
             print(f"Error removing temporary file {file}: {e}")
 
+_LATEX_CHECK_RESULT = None
+_LATEX_WARNING_EMITTED = False
+
+
 def is_latex_installed():
-    """Check if required LaTeX packages are installed."""
+    """Check if required LaTeX packages are installed (cached)."""
+    global _LATEX_CHECK_RESULT
+    if _LATEX_CHECK_RESULT is not None:
+        return _LATEX_CHECK_RESULT
     try:
         # Check for latex
-        result = subprocess.run(['latex', '--version'], 
-                              capture_output=True, text=True)
+        result = subprocess.run(['latex', '--version'],
+                                capture_output=True, text=True)
         if result.returncode != 0:
-            return False
-        
-        # Check for dvipng
-        result = subprocess.run(['dvipng', '--version'], 
-                              capture_output=True, text=True)
-        if result.returncode != 0:
-            return False
-        
-        return True
-    except Exception:
-        return False
+            _LATEX_CHECK_RESULT = False
+            return _LATEX_CHECK_RESULT
 
-# Add initialization check at module level
-if not is_latex_installed():
-    print("Warning: LaTeX or dvipng not found. Formula rendering will not work.")
+        # Check for dvipng
+        result = subprocess.run(['dvipng', '--version'],
+                                capture_output=True, text=True)
+        _LATEX_CHECK_RESULT = result.returncode == 0
+        return _LATEX_CHECK_RESULT
+    except Exception:
+        _LATEX_CHECK_RESULT = False
+        return _LATEX_CHECK_RESULT
 
 
 # =============================================================================

@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
 from .base import Repository
+from .history_index import load_history_index, save_history_index, HISTORY_INDEX_FILENAME
 from conversation import ConversationHistory, Message
 from config import HISTORY_DIR
 
@@ -146,15 +147,25 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
             if metadata:
                 meta.update(metadata)
             
+            timestamp = datetime.now()
             data = {
                 'messages': messages,
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': timestamp.isoformat(),
             }
             if meta:
                 data['metadata'] = meta
             
             with open(chat_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+
+            # Update history index for fast listing
+            self._update_history_index(
+                chat_id=chat_id,
+                title=meta.get('title') or self._generate_title(messages, chat_id),
+                timestamp=timestamp,
+                message_count=len(messages),
+                is_document=False,
+            )
                 
         except IOError as e:
             print(f"Error saving chat {chat_id}: {e}")
@@ -188,11 +199,47 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
                 import shutil
                 shutil.rmtree(chat_dir)
             
+            # Update history index
+            self._remove_from_history_index(chat_id)
             return True
             
         except IOError as e:
             print(f"Error deleting chat {chat_id}: {e}")
             return False
+
+    def _update_history_index(
+        self,
+        chat_id: str,
+        title: str,
+        timestamp: datetime,
+        message_count: int,
+        is_document: bool,
+    ) -> None:
+        """Update the cached history index entry for this chat."""
+        index = load_history_index(self.history_dir)
+        entries = index.get("entries", {})
+        path = self._get_chat_path(chat_id)
+        try:
+            file_mtime = path.stat().st_mtime
+        except OSError:
+            return
+        entries[chat_id] = {
+            "title": title,
+            "timestamp": timestamp.isoformat(),
+            "sort_ts": timestamp.isoformat(),
+            "message_count": message_count,
+            "file_mtime": file_mtime,
+            "is_document": is_document,
+        }
+        save_history_index(self.history_dir, index)
+
+    def _remove_from_history_index(self, chat_id: str) -> None:
+        """Remove a chat from the cached history index."""
+        index = load_history_index(self.history_dir)
+        entries = index.get("entries", {})
+        if chat_id in entries:
+            del entries[chat_id]
+            save_history_index(self.history_dir, index)
     
     def list_all(self) -> List[ChatMetadata]:
         """
@@ -203,39 +250,91 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
         List[ChatMetadata]
             A list of metadata for all chats, sorted by timestamp (newest first).
         """
-        chats = []
-        
+        chats: List[ChatMetadata] = []
+        index = load_history_index(self.history_dir)
+        entries = index.get("entries", {})
+        changed = False
+        seen_ids = set()
+
         for chat_file in self.history_dir.glob("*.json"):
+            if chat_file.name == HISTORY_INDEX_FILENAME or chat_file.name.startswith("."):
+                continue
             chat_id = chat_file.stem
-            
+            seen_ids.add(chat_id)
+
+            try:
+                file_mtime = chat_file.stat().st_mtime
+            except OSError:
+                continue
+
+            entry = entries.get(chat_id)
+            if entry and entry.get("file_mtime") == file_mtime:
+                if entry.get("is_document"):
+                    continue
+                timestamp = _parse_iso(entry.get("timestamp")) or _parse_iso(entry.get("sort_ts"))
+                if not timestamp:
+                    timestamp = datetime.fromtimestamp(file_mtime)
+                chats.append(ChatMetadata(
+                    chat_id=chat_id,
+                    title=entry.get("title", chat_id),
+                    timestamp=timestamp,
+                    message_count=entry.get("message_count", 0),
+                ))
+                continue
+
             try:
                 with open(chat_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                
-                messages = data.get('messages', [])
-                metadata = data.get('metadata', {})
-                timestamp_str = data.get('timestamp', '')
-                
-                # Parse timestamp
-                try:
-                    timestamp = datetime.fromisoformat(timestamp_str)
-                except (ValueError, TypeError):
-                    timestamp = datetime.fromtimestamp(chat_file.stat().st_mtime)
-                
-                # Use metadata title if set, otherwise generate from messages
-                title = metadata.get('title') or self._generate_title(messages, chat_id)
-                
-                chats.append(ChatMetadata(
-                    chat_id=chat_id,
-                    title=title,
-                    timestamp=timestamp,
-                    message_count=len(messages),
-                ))
-                
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Error reading chat metadata for {chat_id}: {e}")
                 continue
-        
+
+            if data.get("mode") == "document":
+                entries[chat_id] = {
+                    "title": data.get("title", "Untitled"),
+                    "updated_at": data.get("updated_at", ""),
+                    "sort_ts": data.get("updated_at", ""),
+                    "file_mtime": file_mtime,
+                    "is_document": True,
+                }
+                changed = True
+                continue
+
+            messages = data.get('messages', [])
+            metadata = data.get('metadata', {})
+            timestamp_str = data.get('timestamp', '')
+
+            timestamp = _parse_iso(timestamp_str)
+            if not timestamp:
+                timestamp = datetime.fromtimestamp(file_mtime)
+            title = metadata.get('title') or self._generate_title(messages, chat_id)
+
+            entries[chat_id] = {
+                "title": title,
+                "timestamp": timestamp.isoformat(),
+                "sort_ts": timestamp.isoformat(),
+                "message_count": len(messages),
+                "file_mtime": file_mtime,
+                "is_document": False,
+            }
+            changed = True
+
+            chats.append(ChatMetadata(
+                chat_id=chat_id,
+                title=title,
+                timestamp=timestamp,
+                message_count=len(messages),
+            ))
+
+        # Remove stale entries
+        for chat_id in list(entries.keys()):
+            if chat_id not in seen_ids:
+                del entries[chat_id]
+                changed = True
+
+        if changed:
+            save_history_index(self.history_dir, index)
+
         # Sort by timestamp, newest first
         chats.sort(key=lambda c: c.timestamp, reverse=True)
         return chats
@@ -267,6 +366,16 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
                     return content
         
         return fallback
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO timestamp string to datetime."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
     
     def search(self, query: str, limit: int = 10, exclude_chat_id: str = None, context_window: int = 200) -> List[SearchResult]:
         """

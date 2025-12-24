@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 
 from .base import Repository
+from .history_index import load_history_index, save_history_index, HISTORY_INDEX_FILENAME
 from config import HISTORY_DIR
 
 
@@ -124,6 +125,7 @@ class DocumentRepository(Repository[Document]):
         path = self._get_path(doc.id)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(doc.to_dict(), f, indent=2)
+        self._update_history_index(doc, path)
         return doc.id
     
     def delete(self, doc_id: str) -> bool:
@@ -131,28 +133,99 @@ class DocumentRepository(Repository[Document]):
         path = self._get_path(doc_id)
         if path.exists():
             path.unlink()
+            self._remove_from_history_index(doc_id)
             return True
         return False
     
     def list_all(self) -> List[DocumentMetadata]:
         """List all documents with metadata."""
+        documents: List[DocumentMetadata] = []
+        index = load_history_index(self.history_dir)
+        entries = index.get("entries", {})
+
+        for doc_id, entry in entries.items():
+            if not entry.get("is_document"):
+                continue
+            updated_at = _parse_iso(entry.get("updated_at")) or _parse_iso(entry.get("sort_ts"))
+            if not updated_at:
+                continue
+            documents.append(DocumentMetadata(
+                id=doc_id,
+                title=entry.get("title", "Untitled"),
+                updated_at=updated_at,
+            ))
+
+        if documents:
+            documents.sort(key=lambda d: d.updated_at, reverse=True)
+            return documents
+
+        # Fallback: scan files if index is missing or empty
         documents = []
+        index_changed = False
         for path in self.history_dir.glob('*.json'):
+            if path.name == HISTORY_INDEX_FILENAME or path.name.startswith("."):
+                continue
             if self._is_document_file(path):
                 try:
                     with open(path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
+                    doc_id = data['id']
+                    updated_at = datetime.fromisoformat(data['updated_at'])
                     documents.append(DocumentMetadata(
-                        id=data['id'],
+                        id=doc_id,
                         title=data.get('title', 'Untitled'),
-                        updated_at=datetime.fromisoformat(data['updated_at']),
+                        updated_at=updated_at,
                     ))
+                    entries[doc_id] = {
+                        "title": data.get('title', 'Untitled'),
+                        "updated_at": updated_at.isoformat(),
+                        "sort_ts": updated_at.isoformat(),
+                        "file_mtime": path.stat().st_mtime,
+                        "is_document": True,
+                    }
+                    index_changed = True
                 except:
                     continue
-        # Sort by updated_at descending
         documents.sort(key=lambda d: d.updated_at, reverse=True)
+        if index_changed:
+            save_history_index(self.history_dir, index)
         return documents
     
     def exists(self, doc_id: str) -> bool:
         """Check if a document exists."""
         return self._get_path(doc_id).exists()
+
+    def _update_history_index(self, doc: Document, path: Path) -> None:
+        """Update the shared history index entry for this document."""
+        index = load_history_index(self.history_dir)
+        entries = index.get("entries", {})
+        try:
+            file_mtime = path.stat().st_mtime
+        except OSError:
+            return
+        entries[doc.id] = {
+            "title": doc.title,
+            "updated_at": doc.updated_at.isoformat(),
+            "sort_ts": doc.updated_at.isoformat(),
+            "file_mtime": file_mtime,
+            "is_document": True,
+        }
+        save_history_index(self.history_dir, index)
+
+    def _remove_from_history_index(self, doc_id: str) -> None:
+        """Remove a document from the shared history index."""
+        index = load_history_index(self.history_dir)
+        entries = index.get("entries", {})
+        if doc_id in entries:
+            del entries[doc_id]
+            save_history_index(self.history_dir, index)
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO timestamp string to datetime."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
