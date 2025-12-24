@@ -41,6 +41,7 @@ class DocumentView(UIComponent):
         preview_text_color: str = "#000000",
         source_theme: str = "solarized-dark",
         message_renderer: Optional[Any] = None,
+        get_shortcuts: Optional[Callable[[], Dict[str, str]]] = None,
     ):
         self._event_bus = event_bus
         self._on_content_changed = on_content_changed
@@ -54,6 +55,7 @@ class DocumentView(UIComponent):
         self._preview_text_color = preview_text_color
         self._source_theme = source_theme
         self._message_renderer = message_renderer
+        self._get_shortcuts = get_shortcuts
         
         # Flag to prevent feedback loops during programmatic updates
         self._updating_programmatically = False
@@ -329,7 +331,51 @@ class DocumentView(UIComponent):
         """Handle key presses for document editor behaviors."""
         if self._in_preview_mode:
             return False
-        return self._maybe_continue_list(event)
+        if self._maybe_continue_list(event):
+            return True
+        return self._handle_markdown_shortcuts(event)
+
+    def _handle_markdown_shortcuts(self, event) -> bool:
+        """Handle markdown formatting shortcuts."""
+        if not self._get_shortcuts:
+            return False
+
+        shortcuts = self._get_shortcuts() or {}
+
+        parts = []
+        if event.state & Gdk.ModifierType.CONTROL_MASK:
+            parts.append('<Ctrl>')
+        if event.state & Gdk.ModifierType.SHIFT_MASK:
+            parts.append('<Shift>')
+        if event.state & Gdk.ModifierType.MOD1_MASK:
+            parts.append('<Alt>')
+        key_name = Gdk.keyval_name(event.keyval)
+        if key_name:
+            parts.append(key_name)
+        current_combo = ''.join(parts)
+
+        action_handlers = {
+            'editor_bold': lambda: self._markdown_actions.wrap_selection("**", "**"),
+            'editor_italic': lambda: self._markdown_actions.wrap_selection("*", "*"),
+            'editor_code': lambda: self._markdown_actions.wrap_selection("`", "`"),
+            'editor_h1': lambda: self._markdown_actions.prefix_lines("# "),
+            'editor_h2': lambda: self._markdown_actions.prefix_lines("## "),
+            'editor_h3': lambda: self._markdown_actions.prefix_lines("### "),
+            'editor_bullet_list': lambda: self._markdown_actions.prefix_lines("- "),
+            'editor_numbered_list': self._markdown_actions.make_numbered_list,
+            'editor_code_block': lambda: self._markdown_actions.wrap_selection("```\n", "\n```"),
+            'editor_quote': lambda: self._markdown_actions.prefix_lines("> "),
+            'editor_emoji': self._markdown_actions.insert_emoji,
+        }
+
+        for action, shortcut in shortcuts.items():
+            if shortcut and shortcut.lower() == current_combo.lower():
+                handler = action_handlers.get(action)
+                if handler:
+                    handler()
+                    return True
+
+        return False
 
     def _maybe_continue_list(self, event) -> bool:
         """Insert the next list marker on Return when in a list line."""

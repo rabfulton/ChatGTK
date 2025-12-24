@@ -1252,6 +1252,7 @@ class OpenAIGTKClient(Gtk.Window):
             font_size=self.settings.get('FONT_SIZE', 12),
             preview_text_color=self.settings.get('AI_COLOR', '#0D47A1'),
             message_renderer=self.message_renderer,
+            get_shortcuts=self._get_shortcuts,
         )
         self._view_stack.add_named(self._document_view.widget, "document")
         self._document_view.widget.show_all()

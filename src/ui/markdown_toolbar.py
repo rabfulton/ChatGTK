@@ -47,9 +47,18 @@ class MarkdownActions:
             start = buf.get_iter_at_mark(buf.get_insert())
             start.set_line_offset(0)
             end = start.copy()
-            end.forward_to_line_end()
+            if not end.ends_line():
+                end.forward_to_line_end()
 
         text = buf.get_text(start, end, True)
+        if not buf.get_has_selection() and text.strip() == "":
+            buf.delete(start, end)
+            buf.insert(start, prefix)
+            # Get cursor position after insert
+            cursor = buf.get_iter_at_mark(buf.get_insert())
+            buf.place_cursor(cursor)
+            self._textview.grab_focus()
+            return
         lines = text.split('\n')
         is_single_line = len(lines) == 1
         relevant_lines = [l for l in lines if l] if not is_single_line else lines
@@ -89,9 +98,17 @@ class MarkdownActions:
             start = buf.get_iter_at_mark(buf.get_insert())
             start.set_line_offset(0)
             end = start.copy()
-            end.forward_to_line_end()
+            if not end.ends_line():
+                end.forward_to_line_end()
 
         text = buf.get_text(start, end, True)
+        if not buf.get_has_selection() and text.strip() == "":
+            buf.delete(start, end)
+            buf.insert(start, "1. ")
+            cursor = buf.get_iter_at_mark(buf.get_insert())
+            buf.place_cursor(cursor)
+            self._textview.grab_focus()
+            return
         lines = text.split('\n')
 
         new_lines = []
