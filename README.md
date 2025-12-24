@@ -49,11 +49,12 @@ git clone https://github.com/rabfulton/ChatGTK
 cd ChatGTK
 pip install -r requirements.txt
 ```
-Or use your package manager to install the dependencies. 
-The application when launched from the terminal will complain about which dependencies are missing. 
-You optionally require `texlive` and `dvipng` if you want mathematics to render nicely. Install `beets` and `playerctl` if you want the music control functionality.
-If you install dependencies via your distro, make sure Python packages like `requests` and `websockets` are present.
+Or use your package manager to install the dependencies.  
+- You optionally require `texlive` and `dvipng` if you want mathematics to render nicely.
+- Install `beets` and `playerctl` if you want the music control functionality.
+- Install `qdrant-client`, `qdrant` if you want to try the vector database for memory system.
 
+Launch the application by running:
 ```bash
 ./chatgtk.sh
 ```
@@ -343,6 +344,8 @@ install `texlive-fontsrecommended` from your package manager.
 - `gtk-3.0`
 - `gtksourceview4`
 - `pulseaudio`
+- `websockets`
+- `requests`
 - `texlive` (for LaTeX support)
 - `dvipng` (for LaTeX rendering)
 - `texlive-fontsrecommended` (For better looking exported PDF's)
