@@ -2260,13 +2260,20 @@ class OpenAIGTKClient(Gtk.Window):
             delattr(self, 'ws_provider')
         self._hide_recording_popover()
 
-    def audio_transcription(self, widget):
+    def _insert_text_into_entry(self, entry: Gtk.Entry, text: str) -> None:
+        """Insert text at the entry cursor position."""
+        position = entry.get_position()
+        new_position = entry.insert_text(text, position)
+        entry.set_position(new_position)
+
+    def audio_transcription(self, widget, target_entry: Gtk.Entry = None, insert_at_cursor: bool = False):
         """Handle audio transcription."""
         print("Audio transcription...")
         stt_model = getattr(self, "speech_to_text_model", "") or "whisper-1"
         stt_provider = None
         stt_base_url = None
         stt_api_key = None
+        target_entry = target_entry or self.entry_question
         
         # Check if this is a custom STT model
         cfg = (self.custom_models or {}).get(stt_model, {})
@@ -2346,7 +2353,10 @@ class OpenAIGTKClient(Gtk.Window):
                                     print(f"[Audio STT] Model {model} failed")
 
                                 if transcript:
-                                    GLib.idle_add(self.entry_question.set_text, transcript)
+                                    if insert_at_cursor:
+                                        GLib.idle_add(self._insert_text_into_entry, target_entry, transcript)
+                                    else:
+                                        GLib.idle_add(target_entry.set_text, transcript)
                                 else:
                                     print("[Audio STT] No transcript produced; keeping input unchanged.")
                             
@@ -2689,6 +2699,15 @@ class OpenAIGTKClient(Gtk.Window):
         model_temperature = self._get_temperature_for_model(current_model)
 
         if "realtime" not in current_model.lower():
+            if self._in_document_mode and self._document_view:
+                if self._document_view.editor_has_focus():
+                    self._audio_transcription_to_textview(self._document_view.get_editor_view())
+                    return
+                if self.entry_question.has_focus():
+                    self.audio_transcription(widget, target_entry=self.entry_question, insert_at_cursor=True)
+                    return
+                self._audio_transcription_to_textview(self._document_view.get_editor_view())
+                return
             # Call function for normal transcription
             self.audio_transcription(widget)
 

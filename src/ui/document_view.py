@@ -450,6 +450,14 @@ class DocumentView(UIComponent):
     def focus_editor(self) -> None:
         """Focus the document editor."""
         self._text_view.grab_focus()
+
+    def editor_has_focus(self) -> bool:
+        """Return True when the document editor has keyboard focus."""
+        return self._text_view.has_focus()
+
+    def get_editor_view(self) -> GtkSource.View:
+        """Expose the document editor view for integrations."""
+        return self._text_view
     
     def cleanup(self) -> None:
         """Clean up event subscriptions."""

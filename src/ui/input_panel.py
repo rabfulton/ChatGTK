@@ -85,6 +85,8 @@ class InputPanel(UIComponent):
         self.btn_voice.set_image(Gtk.Image.new_from_icon_name("audio-input-microphone-symbolic", Gtk.IconSize.BUTTON))
         self.btn_voice.set_always_show_image(True)
         self.btn_voice.set_tooltip_text("Start Voice Input")
+        self.btn_voice.set_focus_on_click(False)
+        self.btn_voice.set_can_focus(False)
         self.btn_voice.connect("clicked", self._on_voice_clicked)
         input_row.pack_start(self.btn_voice, False, False, 0)
         
