@@ -204,7 +204,13 @@ class OpenAIGTKClient(Gtk.Window):
         self._model_id_to_display = self._model_selector._model_id_to_display
         
         # Provider initialization
-        if self.providers or self.custom_models:
+        whitelist_models, whitelist_map = self._get_whitelist_models()
+        if whitelist_models:
+            self.model_provider_map = whitelist_map
+            self.controller.model_provider_map = self.model_provider_map
+            default_model = self.settings.get('DEFAULT_MODEL', '') or ''
+            self.update_model_list(whitelist_models, default_model)
+        elif self.providers or self.custom_models:
             self.fetch_models_async()
         else:
             default_models = self.controller.get_default_models_for_provider('openai')
@@ -353,7 +359,23 @@ class OpenAIGTKClient(Gtk.Window):
     def _init_providers_deferred(self) -> bool:
         """Initialize providers after UI is shown."""
         self.controller.initialize_providers_from_env()
+        self.fetch_models_async()
         return False
+
+    def _get_whitelist_models(self) -> tuple[list, dict]:
+        """Build a model list from whitelist settings for fast startup."""
+        provider_keys = ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom')
+        models = []
+        mapping = {}
+        for provider_key in provider_keys:
+            setting_key = f"{provider_key.upper()}_MODEL_WHITELIST"
+            whitelist_str = self.settings.get(setting_key, "") or ""
+            for model_id in (m.strip() for m in whitelist_str.split(",") if m.strip()):
+                if model_id not in mapping:
+                    models.append(model_id)
+                mapping[model_id] = provider_key
+        unique_models = list(dict.fromkeys(models))
+        return unique_models, mapping
 
     def _build_tray_menu(self):
         """
@@ -1211,6 +1233,7 @@ class OpenAIGTKClient(Gtk.Window):
             font_size=self.settings.get('FONT_SIZE', 12),
         )
         self._view_stack.add_named(self._document_view.widget, "document")
+        self._document_view.widget.show_all()
         self._document_view_initialized = True
 
     def _ensure_latex_available(self) -> bool:
