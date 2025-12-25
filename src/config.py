@@ -301,6 +301,8 @@ SETTINGS_CONFIG = {
     'LAST_ACTIVE_DOCUMENT': {'type': str, 'default': ''},
     # Current project ID. Empty string means default history folder (no project).
     'CURRENT_PROJECT': {'type': str, 'default': ''},
+    # Display name for the default history folder (empty project ID).
+    'DEFAULT_PROJECT_LABEL': {'type': str, 'default': 'Default'},
     # Model whitelists per provider – comma-separated model IDs.
     # These defaults mirror the curated sets previously hardcoded in ai_providers.py.
     'OPENAI_MODEL_WHITELIST': {

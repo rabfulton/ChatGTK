@@ -2916,6 +2916,11 @@ class OpenAIGTKClient(Gtk.Window):
         rename_item = Gtk.MenuItem(label="Rename Document")
         rename_item.connect("activate", self._on_rename_document, row)
         menu.append(rename_item)
+
+        # Move to Project option
+        project_item = Gtk.MenuItem(label="Move to Project...")
+        project_item.connect("activate", self._on_move_document_to_project, row)
+        menu.append(project_item)
         
         # Delete option
         delete_item = Gtk.MenuItem(label="Delete Document")
@@ -2973,6 +2978,22 @@ class OpenAIGTKClient(Gtk.Window):
             # If viewing this document, switch to chat view
             if self._in_document_mode and self.controller.document_service.current_document_id == row.doc_id:
                 self._switch_to_chat_view()
+            self._history_sidebar.refresh()
+
+    def _on_move_document_to_project(self, widget, row):
+        """Handle move document to project action."""
+        from dialogs import show_add_document_to_project_dialog
+        doc_id = row.doc_id
+        project_id = show_add_document_to_project_dialog(self, self.controller, doc_id)
+        if project_id is None:
+            return
+        if (
+            self.controller.document_service.current_document_id == doc_id
+            and self.controller.get_current_project() != project_id
+        ):
+            self.controller.switch_project(project_id)
+        if hasattr(self, '_history_sidebar'):
+            self._history_sidebar.refresh_project_menu()
             self._history_sidebar.refresh()
 
     def get_chat_timestamp(self, filename):
@@ -3210,11 +3231,15 @@ class OpenAIGTKClient(Gtk.Window):
         """Handle move to project action."""
         from dialogs import show_add_to_project_dialog
         chat_id = history_row.chat_id
-        if show_add_to_project_dialog(self, self.controller, chat_id):
-            # Refresh sidebar after move
-            if hasattr(self, '_history_sidebar'):
-                self._history_sidebar.refresh_project_menu()
-                self._history_sidebar.refresh()
+        project_id = show_add_to_project_dialog(self, self.controller, chat_id)
+        if project_id is None:
+            return
+        if self.current_chat_id == chat_id and self.controller.get_current_project() != project_id:
+            self.controller.switch_project(project_id)
+        # Refresh sidebar after move
+        if hasattr(self, '_history_sidebar'):
+            self._history_sidebar.refresh_project_menu()
+            self._history_sidebar.refresh()
 
     def on_rename_chat(self, widget, history_row):
         """Handle rename chat action."""

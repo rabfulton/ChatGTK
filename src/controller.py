@@ -621,6 +621,11 @@ class ChatController:
         source_dir = str(self._chat_history_repo.history_dir)
         return self._projects_repo.move_chat_to_project(chat_id, source_dir, project_id)
 
+    def move_document_to_project(self, doc_id: str, project_id: str) -> bool:
+        """Move a document to a project (or default history if project_id is empty)."""
+        source_dir = str(self._document_repo.history_dir)
+        return self._projects_repo.move_document_to_project(doc_id, source_dir, project_id)
+
     # -----------------------------------------------------------------------
     # System prompts management
     # -----------------------------------------------------------------------

@@ -8,8 +8,10 @@ import shutil
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
+from datetime import datetime
 
 from config import PARENT_DIR
+from .history_index import load_history_index, save_history_index
 
 
 PROJECTS_FILE = os.path.join(PARENT_DIR, "projects.json")
@@ -166,4 +168,67 @@ class ProjectsRepository:
                 shutil.rmtree(dest_assets)
             shutil.move(src_assets, dest_assets)
         
+        return True
+
+    def move_document_to_project(self, doc_id: str, source_dir: str, project_id: str) -> bool:
+        """Move a document to a project (or default history)."""
+        from config import HISTORY_DIR
+
+        # Determine destination directory
+        if project_id:
+            dest_dir = self.get_history_dir(project_id)
+        else:
+            dest_dir = HISTORY_DIR
+
+        if os.path.abspath(dest_dir) == os.path.abspath(source_dir):
+            return True
+
+        os.makedirs(dest_dir, exist_ok=True)
+
+        # Normalize doc_id
+        doc_id_clean = doc_id.replace('.json', '')
+
+        # Move document JSON file
+        src_file = os.path.join(source_dir, f"{doc_id_clean}.json")
+        if not os.path.exists(src_file):
+            return False
+
+        dest_file = os.path.join(dest_dir, f"{doc_id_clean}.json")
+        shutil.move(src_file, dest_file)
+
+        # Remove entry from source history index
+        source_index = load_history_index(Path(source_dir))
+        source_entries = source_index.get("entries", {})
+        if doc_id_clean in source_entries:
+            del source_entries[doc_id_clean]
+            save_history_index(Path(source_dir), source_index)
+
+        # Add entry to destination history index
+        title = doc_id_clean
+        updated_at = ""
+        try:
+            with open(dest_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            title = data.get('title', title)
+            updated_at = data.get('updated_at', '') or data.get('timestamp', '')
+        except Exception:
+            pass
+
+        dest_index = load_history_index(Path(dest_dir))
+        dest_entries = dest_index.get("entries", {})
+        try:
+            file_mtime = os.path.getmtime(dest_file)
+        except OSError:
+            file_mtime = 0.0
+        if not updated_at and file_mtime:
+            updated_at = datetime.fromtimestamp(file_mtime).isoformat()
+        dest_entries[doc_id_clean] = {
+            "title": title,
+            "updated_at": updated_at,
+            "sort_ts": updated_at,
+            "file_mtime": file_mtime,
+            "is_document": True,
+        }
+        save_history_index(Path(dest_dir), dest_index)
+
         return True

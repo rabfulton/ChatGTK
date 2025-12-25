@@ -13,6 +13,7 @@ import os
 import subprocess
 import tempfile
 import threading
+from typing import Optional
 from pathlib import Path
 
 import gi
@@ -5543,7 +5544,7 @@ class APIKeyDialog(Gtk.Dialog):
 # Project Management Dialogs
 # ---------------------------------------------------------------------------
 
-def show_add_to_project_dialog(parent, controller, chat_id: str) -> bool:
+def show_add_to_project_dialog(parent, controller, chat_id: str) -> Optional[str]:
     """
     Show dialog to move a chat to a project.
     
@@ -5558,8 +5559,8 @@ def show_add_to_project_dialog(parent, controller, chat_id: str) -> bool:
         
     Returns
     -------
-    bool
-        True if chat was moved to a project.
+    Optional[str]
+        Project ID if chat was moved, None otherwise.
     """
     dialog = Gtk.Dialog(
         title="Move to Project",
@@ -5584,8 +5585,9 @@ def show_add_to_project_dialog(parent, controller, chat_id: str) -> bool:
     projects_combo = Gtk.ComboBoxText()
     projects_repo = controller._projects_repo
     
-    # Add "All Chats" (default history) as first option
-    projects_combo.append("", "All Chats")
+    # Add default history as first option
+    default_label = controller.get_setting('DEFAULT_PROJECT_LABEL', 'Default')
+    projects_combo.append("", default_label)
     
     # Add existing projects
     for project in projects_repo.list_all():
@@ -5625,10 +5627,104 @@ def show_add_to_project_dialog(parent, controller, chat_id: str) -> bool:
     dialog.show_all()
     response = dialog.run()
     
-    result = False
+    result = None
     if response == Gtk.ResponseType.OK:
-        project_id = projects_combo.get_active_id()  # Empty string for "All Chats"
-        result = controller.move_chat_to_project(chat_id, project_id)
+        project_id = projects_combo.get_active_id()  # Empty string for default history
+        if controller.move_chat_to_project(chat_id, project_id):
+            result = project_id
+    
+    dialog.destroy()
+    return result
+
+
+def show_add_document_to_project_dialog(parent, controller, doc_id: str) -> Optional[str]:
+    """
+    Show dialog to move a document to a project.
+    
+    Parameters
+    ----------
+    parent : Gtk.Window
+        Parent window.
+    controller : ChatController
+        The application controller.
+    doc_id : str
+        The document ID to move to a project.
+        
+    Returns
+    -------
+    Optional[str]
+        Project ID if document was moved, None otherwise.
+    """
+    dialog = Gtk.Dialog(
+        title="Move to Project",
+        transient_for=parent,
+        flags=0
+    )
+    dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Move", Gtk.ResponseType.OK)
+    dialog.set_default_size(350, 200)
+    
+    box = dialog.get_content_area()
+    box.set_spacing(12)
+    box.set_margin_start(16)
+    box.set_margin_end(16)
+    box.set_margin_top(16)
+    box.set_margin_bottom(16)
+    
+    # Destination dropdown
+    projects_label = Gtk.Label(label="Move to:")
+    projects_label.set_xalign(0)
+    box.pack_start(projects_label, False, False, 0)
+    
+    projects_combo = Gtk.ComboBoxText()
+    projects_repo = controller._projects_repo
+    
+    # Add default history as first option
+    default_label = controller.get_setting('DEFAULT_PROJECT_LABEL', 'Default')
+    projects_combo.append("", default_label)
+    
+    # Add existing projects
+    for project in projects_repo.list_all():
+        projects_combo.append(project.id, project.name)
+    
+    projects_combo.set_active(0)
+    box.pack_start(projects_combo, False, False, 0)
+    
+    # Separator
+    box.pack_start(Gtk.Separator(), False, False, 8)
+    
+    # New project section
+    new_label = Gtk.Label(label="Or create new project:")
+    new_label.set_xalign(0)
+    box.pack_start(new_label, False, False, 0)
+    
+    new_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    new_entry = Gtk.Entry()
+    new_entry.set_placeholder_text("New project name")
+    new_box.pack_start(new_entry, True, True, 0)
+    
+    add_btn = Gtk.Button(label="Add")
+    new_box.pack_start(add_btn, False, False, 0)
+    box.pack_start(new_box, False, False, 0)
+    
+    def on_add_new(btn):
+        name = new_entry.get_text().strip()
+        if name:
+            project = projects_repo.create(name)
+            projects_combo.append(project.id, project.name)
+            projects_combo.set_active_id(project.id)
+            new_entry.set_text("")
+    
+    add_btn.connect("clicked", on_add_new)
+    new_entry.connect("activate", lambda e: on_add_new(None))
+    
+    dialog.show_all()
+    response = dialog.run()
+    
+    result = None
+    if response == Gtk.ResponseType.OK:
+        project_id = projects_combo.get_active_id()  # Empty string for default history
+        if controller.move_document_to_project(doc_id, project_id):
+            result = project_id
     
     dialog.destroy()
     return result
@@ -5676,7 +5772,25 @@ def show_manage_projects_dialog(parent, controller, on_change=None):
     def refresh_list():
         for child in listbox.get_children():
             listbox.remove(child)
-        
+
+        default_label = controller.get_setting('DEFAULT_PROJECT_LABEL', 'Default')
+        default_row = Gtk.ListBoxRow()
+        default_row.project_id = ""
+        default_row.is_default = True
+
+        default_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        default_box.set_margin_start(8)
+        default_box.set_margin_end(8)
+        default_box.set_margin_top(4)
+        default_box.set_margin_bottom(4)
+
+        default_text = Gtk.Label(label=default_label)
+        default_text.set_xalign(0)
+        default_box.pack_start(default_text, True, True, 0)
+
+        default_row.add(default_box)
+        listbox.add(default_row)
+
         for project in projects_repo.list_all():
             row = Gtk.ListBoxRow()
             row.project_id = project.id
@@ -5711,11 +5825,47 @@ def show_manage_projects_dialog(parent, controller, on_change=None):
         row = listbox.get_selected_row()
         if not row:
             return
-        
+
+        if getattr(row, "project_id", "") == "":
+            current_label = controller.get_setting('DEFAULT_PROJECT_LABEL', 'Default')
+            rename_dialog = Gtk.Dialog(
+                title="Rename Default",
+                transient_for=dialog,
+                flags=0
+            )
+            rename_dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Rename", Gtk.ResponseType.OK)
+
+            rbox = rename_dialog.get_content_area()
+            rbox.set_spacing(8)
+            rbox.set_margin_start(12)
+            rbox.set_margin_end(12)
+            rbox.set_margin_top(12)
+            rbox.set_margin_bottom(12)
+
+            entry = Gtk.Entry()
+            entry.set_text(current_label)
+            entry.set_activates_default(True)
+            rbox.add(entry)
+
+            rename_dialog.set_default_response(Gtk.ResponseType.OK)
+            rename_dialog.show_all()
+
+            if rename_dialog.run() == Gtk.ResponseType.OK:
+                new_name = entry.get_text().strip()
+                if new_name:
+                    controller.set_setting('DEFAULT_PROJECT_LABEL', new_name)
+                    controller.settings_manager.save()
+                    refresh_list()
+                    if on_change:
+                        on_change()
+
+            rename_dialog.destroy()
+            return
+
         project = projects_repo.get(row.project_id)
         if not project:
             return
-        
+
         rename_dialog = Gtk.Dialog(
             title="Rename Project",
             transient_for=dialog,
@@ -5752,7 +5902,9 @@ def show_manage_projects_dialog(parent, controller, on_change=None):
         row = listbox.get_selected_row()
         if not row:
             return
-        
+        if getattr(row, "project_id", "") == "":
+            return
+
         project = projects_repo.get(row.project_id)
         if not project:
             return
@@ -5781,6 +5933,16 @@ def show_manage_projects_dialog(parent, controller, on_change=None):
     
     rename_btn.connect("clicked", on_rename)
     delete_btn.connect("clicked", on_delete)
+
+    def update_buttons(_listbox=None, _row=None):
+        row = listbox.get_selected_row()
+        if row and getattr(row, "project_id", "") == "":
+            delete_btn.set_sensitive(False)
+        else:
+            delete_btn.set_sensitive(True)
+
+    listbox.connect("row-selected", update_buttons)
+    update_buttons()
     
     dialog.show_all()
     dialog.run()

@@ -560,10 +560,13 @@ class HistorySidebar(UIComponent):
         """Build the project selector dropdown menu."""
         menu = Gtk.Menu()
         
-        # "All Chats" option (default history)
-        all_chats_item = Gtk.MenuItem(label="All Chats")
-        all_chats_item.connect("activate", self._on_project_selected, "")
-        menu.append(all_chats_item)
+        # Default history option
+        default_label = "Default"
+        if self._controller:
+            default_label = self._controller.get_setting('DEFAULT_PROJECT_LABEL', 'Default')
+        default_item = Gtk.MenuItem(label=default_label)
+        default_item.connect("activate", self._on_project_selected, "")
+        menu.append(default_item)
         
         menu.append(Gtk.SeparatorMenuItem())
         
@@ -605,7 +608,10 @@ class HistorySidebar(UIComponent):
                     if project:
                         self.project_button.set_tooltip_text(f"Project: {project.name}")
                         return
-            self.project_button.set_tooltip_text("Project: All Chats")
+            default_label = "Default"
+            if self._controller:
+                default_label = self._controller.get_setting('DEFAULT_PROJECT_LABEL', 'Default')
+            self.project_button.set_tooltip_text(f"Project: {default_label}")
     
     def _on_project_selected(self, menu_item, project_id: str) -> None:
         """Handle project selection from menu."""
