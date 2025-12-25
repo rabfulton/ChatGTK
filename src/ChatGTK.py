@@ -2898,6 +2898,10 @@ class OpenAIGTKClient(Gtk.Window):
 
     def on_new_chat_clicked(self, button):
         """Start a new chat conversation."""
+        # Switch to chat view if in document mode
+        if self._in_document_mode:
+            self._switch_to_chat_view()
+        
         self.controller.new_chat(self.system_message)
         self.history_list.unselect_all()
         self._clear_text_edit_target()
