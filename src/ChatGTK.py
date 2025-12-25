@@ -288,6 +288,7 @@ class OpenAIGTKClient(Gtk.Window):
         # State (also tracked in component)
         self.recording = False
         self.attached_file_path = None
+        self._attached_temp_path = None
         self.pending_edit_image = None
         self.pending_edit_message_index = None
         self._edit_buttons = []
@@ -2111,8 +2112,7 @@ class OpenAIGTKClient(Gtk.Window):
                         self.show_error_dialog(
                             f"File too large: {size_mb:.1f} MB exceeds maximum of 512 MB"
                         )
-                        self.attached_file_path = None
-                        self.btn_attach.set_label("Attach File")
+                        self._clear_attached_file()
                         return
                     
                     # For PDFs, pass the file through to the provider via the Responses API.
@@ -2121,8 +2121,7 @@ class OpenAIGTKClient(Gtk.Window):
                         if file_size > 1024 * 1024:
                             size_mb = file_size / (1024 * 1024)
                             if not self._show_large_file_warning(f"PDF file is {size_mb:.1f} MB"):
-                                self.attached_file_path = None
-                                self.btn_attach.set_label("Attach File")
+                                self._clear_attached_file()
                                 return
                         files.append({
                             "path": self.attached_file_path,
@@ -2136,8 +2135,7 @@ class OpenAIGTKClient(Gtk.Window):
                         if file_size > 100 * 1024:
                             size_kb = file_size / 1024
                             if not self._show_large_file_warning(f"Text file is {size_kb:.0f} KB"):
-                                self.attached_file_path = None
-                                self.btn_attach.set_label("Attach File")
+                                self._clear_attached_file()
                                 return
                         
                         try:
@@ -2146,8 +2144,7 @@ class OpenAIGTKClient(Gtk.Window):
                         except Exception as read_err:
                             print(f"Error reading text document: {read_err}")
                             self.show_error_dialog(f"Error reading file: {filename}")
-                            self.attached_file_path = None
-                            self.btn_attach.set_label("Attach File")
+                            self._clear_attached_file()
                             return
 
                         # Optionally truncate very large text files to avoid extremely
@@ -2166,12 +2163,12 @@ class OpenAIGTKClient(Gtk.Window):
                 display_text = (original_question + f"\n[Attached: {filename}]") if original_question else f"[Attached: {filename}]"
                 
                 # Reset attachment
-                self.attached_file_path = None
-                self.btn_attach.set_label("Attach File")
+                self._clear_attached_file()
                 
             except Exception as e:
                 print(f"Error processing file: {e}")
                 display_text = question + f"\n[Error attaching file]"
+                self._clear_attached_file()
 
         # Apply formatting (Markdown preprocessing like code blocks/tables) to the user message
         # just like we do for AI responses, so that code blocks render correctly.
@@ -2582,6 +2579,7 @@ class OpenAIGTKClient(Gtk.Window):
                 pass
             
             self.attached_file_path = filepath
+            self._attached_temp_path = None
             filename = os.path.basename(filepath)
             self.btn_attach.set_label(f"Attached: {filename}")
             print(f"File selected: {self.attached_file_path}")
@@ -2640,7 +2638,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         dialog.destroy()
 
-    def _set_text_edit_target(self, filepath: str):
+    def _set_text_edit_target(self, filepath: str, save_metadata: bool = True):
         if not filepath:
             return
         if not os.path.exists(filepath):
@@ -2651,12 +2649,14 @@ class OpenAIGTKClient(Gtk.Window):
         target = TextTarget(
             get_text=lambda: self._read_text_target_file(filepath),
             apply_tool_edit=lambda text, summary=None: self._write_text_target_file(filepath, text),
+            path=filepath,
         )
         self.controller.register_text_target("file", target)
-        if self.current_chat_id:
-            self.controller.save_current_chat(metadata={"text_edit_target_path": filepath})
-        else:
-            self._pending_text_edit_target_path = filepath
+        if save_metadata:
+            if self.current_chat_id:
+                self.controller.save_current_chat(metadata={"text_edit_target_path": filepath})
+            else:
+                self._pending_text_edit_target_path = filepath
         self._refresh_attach_button_label()
 
     def _clear_text_edit_target(self):
@@ -2664,6 +2664,24 @@ class OpenAIGTKClient(Gtk.Window):
         self._pending_text_edit_target_path = None
         self.controller.unregister_text_target("file")
         self._refresh_attach_button_label()
+
+    def _clear_attached_file(self):
+        temp_path = getattr(self, "_attached_temp_path", None)
+        if temp_path and self.attached_file_path == temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        self._attached_temp_path = None
+        self.attached_file_path = None
+        self.btn_attach.set_label("Attach File")
+
+    def _sanitize_filename(self, name: str) -> str:
+        if not name:
+            return ""
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+        safe = re.sub(r"_+", "_", safe).strip("._")
+        return safe
 
     def _read_text_target_file(self, filepath: str) -> str:
         try:
@@ -2921,6 +2939,11 @@ class OpenAIGTKClient(Gtk.Window):
         project_item = Gtk.MenuItem(label="Move to Project...")
         project_item.connect("activate", self._on_move_document_to_project, row)
         menu.append(project_item)
+
+        # Attach to Message option
+        attach_item = Gtk.MenuItem(label="Attach to Message")
+        attach_item.connect("activate", self._on_attach_document, row)
+        menu.append(attach_item)
         
         # Delete option
         delete_item = Gtk.MenuItem(label="Delete Document")
@@ -2996,6 +3019,60 @@ class OpenAIGTKClient(Gtk.Window):
             self._history_sidebar.refresh_project_menu()
             self._history_sidebar.refresh()
 
+    def _on_attach_document(self, widget, row):
+        """Attach a document to the next message or set it as a text edit target."""
+        doc = self.controller.document_service.get_document(row.doc_id)
+        if not doc:
+            self.show_error_dialog("Document not found.")
+            return
+        if getattr(self, "text_edit_tool_enabled", False):
+            self._attach_document_as_text_target(doc.id, doc.title or "document")
+            return
+        self._attach_document_as_file(doc.id, doc.title or "document", doc.content)
+
+    def _attach_document_as_text_target(self, doc_id: str, title: str):
+        self._clear_text_edit_target()
+        target = TextTarget(
+            get_text=lambda: self._get_document_markdown(doc_id),
+            apply_tool_edit=lambda text, summary=None: self._apply_document_text_edit(doc_id, text),
+        )
+        self.controller.register_text_target("file", target)
+        safe_title = self._sanitize_filename(title) or doc_id
+        self.text_edit_target_path = f"{safe_title}.md"
+        self._pending_text_edit_target_path = None
+        self._refresh_attach_button_label()
+
+    def _apply_document_text_edit(self, doc_id: str, text: str):
+        self.controller.document_service.update_document(doc_id, content=text)
+        if self.controller.document_service.current_document_id == doc_id:
+            GLib.idle_add(self._sync_document_view)
+        if hasattr(self, "_history_sidebar"):
+            GLib.idle_add(self._history_sidebar.refresh)
+
+    def _get_document_markdown(self, doc_id: str) -> str:
+        doc = self.controller.document_service.get_document(doc_id)
+        return doc.content if doc else ""
+
+    def _attach_document_as_file(self, doc_id: str, title: str, content: str):
+        self._clear_attached_file()
+        safe_title = self._sanitize_filename(title) or doc_id
+        filename = f"{safe_title}.md"
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, filename)
+        if os.path.exists(temp_path):
+            counter = 1
+            while True:
+                candidate = os.path.join(temp_dir, f"{safe_title}_{counter}.md")
+                if not os.path.exists(candidate):
+                    temp_path = candidate
+                    break
+                counter += 1
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            handle.write(content or "")
+        self.attached_file_path = temp_path
+        self._attached_temp_path = temp_path
+        self.btn_attach.set_label(f"Attached: {filename}")
+
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""
         try:
@@ -3035,7 +3112,7 @@ class OpenAIGTKClient(Gtk.Window):
             metadata = getattr(self.controller, "current_chat_metadata", {}) or {}
             target_path = metadata.get("text_edit_target_path")
             if target_path:
-                self._set_text_edit_target(target_path)
+                self._set_text_edit_target(target_path, save_metadata=False)
             else:
                 self._clear_text_edit_target()
             
@@ -3735,7 +3812,15 @@ class OpenAIGTKClient(Gtk.Window):
         btn_undo.set_size_request(button_size, button_size)
         icon_undo = Gtk.Image.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
         btn_undo.set_image(icon_undo)
-        btn_undo.set_tooltip_text("Undo last text edit")
+        
+        # Build tooltip with filename if available
+        tooltip = "Undo last text edit"
+        events = self.controller._text_edit_history_by_message.get(message_index)
+        if events:
+            target_path = events[-1].get("target_path")
+            if target_path:
+                tooltip = f"Undo edit to {os.path.basename(target_path)}"
+        btn_undo.set_tooltip_text(tooltip)
 
         def on_undo_clicked(widget):
             success, message = self.controller.undo_text_edit_for_message(message_index)

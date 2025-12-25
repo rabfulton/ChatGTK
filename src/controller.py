@@ -60,6 +60,7 @@ class TextTarget:
     """Text target for tool-based edits."""
     get_text: Callable[[], str]
     apply_tool_edit: Callable[[str, Optional[str]], None]
+    path: Optional[str] = None  # File path for undo persistence
 
 
 class ChatController:
@@ -335,12 +336,15 @@ class ChatController:
             entry.apply_tool_edit(new_text, summary)
             print(f"[TextEditTool] Applied {operation} edit to '{target}'.")
             if not self._suppress_text_edit_logging:
-                self._pending_text_edit_events.append({
+                event = {
                     "target": target,
                     "operation": operation,
                     "summary": summary or "",
                     "previous_text": original_text,
-                })
+                }
+                if entry.path:
+                    event["target_path"] = entry.path
+                self._pending_text_edit_events.append(event)
                 print(f"[TextEditTool] Logged edit event, pending count: {len(self._pending_text_edit_events)}")
             return summary or "Text updated."
         except Exception as e:
@@ -416,7 +420,19 @@ class ChatController:
             return False, "No text edit history found for this message."
         last_event = events[-1]
         target = last_event.get("target", "")
+        target_path = last_event.get("target_path")
         previous_text = last_event.get("previous_text", "")
+        
+        # If we have a stored path, write directly to file
+        if target_path and target == "file":
+            try:
+                with open(target_path, 'w', encoding='utf-8') as f:
+                    f.write(previous_text)
+                return True, "Undo applied."
+            except Exception as e:
+                return False, f"Error writing to {target_path}: {e}"
+        
+        # Fall back to current registered target
         entry = self._get_text_target(target)
         if entry is None:
             return False, f"Text target '{target}' is no longer available."
