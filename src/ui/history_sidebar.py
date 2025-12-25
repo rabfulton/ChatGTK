@@ -40,6 +40,7 @@ class HistorySidebar(UIComponent):
         on_context_menu: Optional[Callable[[Gtk.ListBoxRow, Gdk.EventButton], None]] = None,
         on_document_selected: Optional[Callable[[str], None]] = None,
         on_new_document: Optional[Callable[[], None]] = None,
+        on_project_changed: Optional[Callable[[], None]] = None,
         width: int = 200,
     ):
         """
@@ -67,6 +68,8 @@ class HistorySidebar(UIComponent):
             Callback when a document is selected.
         on_new_document : Optional[Callable[[], None]]
             Callback when new document is requested.
+        on_project_changed : Optional[Callable[[], None]]
+            Callback when project list or selection changes.
         width : int
             Initial sidebar width.
         """
@@ -81,6 +84,7 @@ class HistorySidebar(UIComponent):
         self._on_context_menu = on_context_menu
         self._on_document_selected = on_document_selected
         self._on_new_document = on_new_document
+        self._on_project_changed = on_project_changed
         
         # Filter state
         self._filter_text = ""
@@ -619,6 +623,8 @@ class HistorySidebar(UIComponent):
             self._controller.switch_project(project_id)
             self._update_project_button_tooltip()
             self.refresh()
+            if self._on_project_changed:
+                self._on_project_changed()
     
     def _on_new_project(self, menu_item) -> None:
         """Handle new project creation."""
@@ -660,6 +666,8 @@ class HistorySidebar(UIComponent):
                     self._controller.switch_project(project.id)
                     self._build_project_menu()
                     self.refresh()
+                    if self._on_project_changed:
+                        self._on_project_changed()
         
         dialog.destroy()
     
@@ -672,9 +680,15 @@ class HistorySidebar(UIComponent):
         show_manage_projects_dialog(
             self.widget.get_toplevel(),
             self._controller,
-            on_change=lambda: (self._build_project_menu(), self.refresh())
+            on_change=lambda: (
+                self._build_project_menu(),
+                self.refresh(),
+                self._on_project_changed() if self._on_project_changed else None
+            )
         )
     
     def refresh_project_menu(self) -> None:
         """Rebuild the project menu (call after project changes)."""
         self._build_project_menu()
+        if self._on_project_changed:
+            self._on_project_changed()

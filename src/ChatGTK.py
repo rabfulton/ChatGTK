@@ -138,6 +138,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_context_menu=self._on_sidebar_context_menu,
             on_document_selected=self.open_document,
             on_new_document=self.create_new_document,
+            on_project_changed=self._update_window_title,
             width=int(self.settings.get('SIDEBAR_WIDTH', 200)),
         )
         self.sidebar = self._history_sidebar.widget
@@ -302,6 +303,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Show all widgets first
         self.show_all()
+        self._update_window_title()
         
         # Then force sidebar visibility state
         if not self.settings.get('SIDEBAR_VISIBLE', True):
@@ -937,6 +939,7 @@ class OpenAIGTKClient(Gtk.Window):
             'TEXT_EDIT_TOOL_ENABLED': 'text_edit',
         }
         tool_indicator_keys = set(tool_key_map.keys()) | {'WEB_SEARCH_ENABLED'}
+        title_keys = {'CURRENT_PROJECT', 'DEFAULT_PROJECT_LABEL'}
         system_prompt_keys = {'SYSTEM_PROMPTS_JSON', 'ACTIVE_SYSTEM_PROMPT_ID'}
 
         if event.data.get('batch'):
@@ -981,6 +984,8 @@ class OpenAIGTKClient(Gtk.Window):
                 self.controller.update_system_message(system_message_value)
             if needs_tool_indicator_update:
                 GLib.idle_add(self._update_tool_indicators)
+            if changes.keys() & title_keys:
+                GLib.idle_add(self._update_window_title)
             return
 
         key = event.data.get('key', '')
@@ -1011,6 +1016,24 @@ class OpenAIGTKClient(Gtk.Window):
             GLib.idle_add(self._update_tool_indicators)
         elif key == 'SYSTEM_MESSAGE':
             self.controller.update_system_message(value)
+        if key in title_keys:
+            GLib.idle_add(self._update_window_title)
+
+    def _update_window_title(self):
+        """Update window title with current project name."""
+        base_title = "ChatGTK"
+        default_label = self.controller.get_setting('DEFAULT_PROJECT_LABEL', 'Default')
+        current_project = self.controller.get_current_project()
+        if current_project:
+            projects_repo = getattr(self.controller, '_projects_repo', None)
+            project_name = current_project
+            if projects_repo:
+                project = projects_repo.get(current_project)
+                if project:
+                    project_name = project.name
+            self.set_title(f"{base_title} : {project_name}")
+        else:
+            self.set_title(f"{base_title} : {default_label}")
 
     def _on_error_event(self, event):
         """Handle ERROR_OCCURRED event - show error to user."""
