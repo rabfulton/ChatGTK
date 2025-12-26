@@ -32,7 +32,7 @@ class MemoryService:
         db_path : str
             Path to the Qdrant database directory
         embedding_mode : str
-            One of: "local", "openai", "gemini", "cohere", "custom"
+            One of: "local", "openai", "gemini", "custom"
         embedding_model : str
             Model name for embeddings
         api_key : str

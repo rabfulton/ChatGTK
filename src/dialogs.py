@@ -1072,6 +1072,12 @@ class SettingsDialog(Gtk.Dialog):
         # Lazily build the Model Whitelist page on first access so opening the
         # settings dialog does not block on network calls to list models.
         self._model_whitelist_built = False
+        # Lazily build slower pages on first access to keep the dialog snappy.
+        self._audio_page_built = False
+        self._memory_page_built = False
+        self._read_aloud_signals_connected = False
+        self._read_aloud_auto_connected = False
+        self._read_aloud_tool_connected = False
 
         # Get the content area
         content = self.get_content_area()
@@ -1113,9 +1119,9 @@ class SettingsDialog(Gtk.Dialog):
 
         # Build pages
         self._build_general_page()
-        self._build_audio_page()
+        self._add_placeholder_page("Audio", "Loading audio settings...")
         self._build_tool_options_page()
-        self._build_memory_page()
+        self._add_placeholder_page("Memory", "Loading memory settings...")
         self._build_system_prompts_page()
         self._build_custom_models_page()
         # Model Whitelist page is built lazily when that category is selected
@@ -1158,6 +1164,10 @@ class SettingsDialog(Gtk.Dialog):
         if row is not None:
             cat = getattr(row, 'category_name', None)
             if cat:
+                if cat == "Audio":
+                    self._ensure_audio_page()
+                elif cat == "Memory":
+                    self._ensure_memory_page()
                 # Lazily construct the Model Whitelist page the first time it
                 # is selected so we don't block dialog opening on network I/O.
                 if cat == "Model Whitelist":
@@ -1688,6 +1698,7 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.switch_read_aloud, False, True, 0)
         list_box.add(row)
+        self._connect_read_aloud_signals()
 
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
@@ -1784,7 +1795,28 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_realtime_prompt, True, True, 0)
         list_box.add(row)
 
-        self.stack.add_named(scroll, "Audio")
+        return scroll
+
+    def _ensure_audio_page(self):
+        if not self._audio_page_built:
+            page = self._build_audio_page()
+            self._replace_stack_page("Audio", page)
+            self._audio_page_built = True
+            self.stack.show_all()
+
+    def _connect_read_aloud_signals(self):
+        if self._read_aloud_signals_connected:
+            return
+        if not hasattr(self, "switch_read_aloud") or not hasattr(self, "switch_read_aloud_tool"):
+            return
+        if not self._read_aloud_auto_connected:
+            self.switch_read_aloud.connect("state-set", self._on_read_aloud_state_set)
+            self._read_aloud_auto_connected = True
+        if not self._read_aloud_tool_connected:
+            self.switch_read_aloud_tool.connect("state-set", self._on_read_aloud_tool_state_set)
+            self._read_aloud_tool_connected = True
+        if self._read_aloud_auto_connected and self._read_aloud_tool_connected:
+            self._read_aloud_signals_connected = True
 
     # -----------------------------------------------------------------------
     # Tool Options page
@@ -2248,8 +2280,7 @@ class SettingsDialog(Gtk.Dialog):
         list_box.add(row)
 
         # Connect signals to enforce mutual exclusivity between auto-read and tool
-        self.switch_read_aloud.connect("state-set", self._on_read_aloud_state_set)
-        self.switch_read_aloud_tool.connect("state-set", self._on_read_aloud_tool_state_set)
+        self._connect_read_aloud_signals()
 
         self.stack.add_named(scroll, "Tool Options")
 
@@ -2336,7 +2367,7 @@ class SettingsDialog(Gtk.Dialog):
         available_modes = []
         if LOCAL_EMBEDDINGS_AVAILABLE:
             available_modes.append("local")
-        available_modes.extend(["openai", "gemini", "cohere"])
+        available_modes.extend(["openai", "gemini"])
         # Add "custom" if there are any custom embedding models
         self._custom_embedding_models = [
             model_id for model_id, cfg in self.custom_models.items()
@@ -2535,7 +2566,14 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.btn_memory_clear, False, True, 0)
         list_box.add(row)
         
-        self.stack.add_named(scroll, "Memory")
+        return scroll
+
+    def _ensure_memory_page(self):
+        if not self._memory_page_built:
+            page = self._build_memory_page()
+            self._replace_stack_page("Memory", page)
+            self._memory_page_built = True
+            self.stack.show_all()
         
         # Initial stats refresh
         GLib.idle_add(self._on_memory_refresh_stats, None)
@@ -2549,7 +2587,6 @@ class SettingsDialog(Gtk.Dialog):
             "local": ["all-MiniLM-L6-v2", "all-mpnet-base-v2"],
             "openai": ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
             "gemini": ["text-embedding-004"],
-            "cohere": ["embed-english-v3.0", "embed-multilingual-v3.0"],
             "custom": getattr(self, '_custom_embedding_models', []),
         }
         
@@ -3677,6 +3714,25 @@ class SettingsDialog(Gtk.Dialog):
             # The dialog may already be visible, so explicitly show new widgets.
             self.stack.show_all()
 
+    def _add_placeholder_page(self, name: str, message: str) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(24)
+        box.set_margin_bottom(24)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+        spinner = Gtk.Spinner()
+        spinner.start()
+        label = Gtk.Label(label=message, xalign=0)
+        box.pack_start(spinner, False, False, 0)
+        box.pack_start(label, False, False, 0)
+        self.stack.add_named(box, name)
+
+    def _replace_stack_page(self, name: str, widget) -> None:
+        existing = self.stack.get_child_by_name(name)
+        if existing is not None:
+            self.stack.remove(existing)
+        self.stack.add_named(widget, name)
+
     # -----------------------------------------------------------------------
     # Model Whitelist page
     # -----------------------------------------------------------------------
@@ -4608,6 +4664,43 @@ class SettingsDialog(Gtk.Dialog):
                 return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
             return ""
 
+        audio_page_built = getattr(self, "_audio_page_built", False)
+        if audio_page_built:
+            microphone = self.combo_mic.get_active_text() or 'default'
+            speech_to_text_model = (
+                self.combo_stt_model.get_active_text()
+                or (self.combo_stt_model.get_child().get_text() if self.combo_stt_model.get_child() else '')
+                or 'whisper-1'
+            )
+            tts_voice_provider = self.combo_tts_provider.get_active_id() or 'openai'
+            tts_voice = self.combo_tts.get_active_text()
+            realtime_voice = self.combo_realtime.get_active_text()
+            realtime_prompt = self.entry_realtime_prompt.get_text()
+            realtime_vad_threshold = self.spin_vad_threshold.get_value()
+            mute_mic_during_playback = self.switch_mute_mic_playback.get_active()
+            read_aloud_enabled = self.switch_read_aloud.get_active()
+            tts_prompt_template = self.entry_audio_prompt_template.get_text().strip()
+            tts_hd = self.switch_hd.get_active()
+        else:
+            microphone = getattr(self, "microphone", "default") or "default"
+            speech_to_text_model = getattr(self, "speech_to_text_model", "whisper-1") or "whisper-1"
+            tts_voice_provider = getattr(self, "tts_voice_provider", "openai") or "openai"
+            tts_voice = getattr(self, "tts_voice", "")
+            realtime_voice = getattr(self, "realtime_voice", "")
+            realtime_prompt = getattr(self, "realtime_prompt", "")
+            realtime_vad_threshold = float(getattr(self, "realtime_vad_threshold", 0.1))
+            mute_mic_during_playback = bool(getattr(self, "mute_mic_during_playback", False))
+            read_aloud_enabled = bool(getattr(self, "read_aloud_enabled", False))
+            tts_prompt_template = (
+                getattr(self, "tts_prompt_template", "")
+                or getattr(self, "read_aloud_audio_prompt_template", "")
+            )
+            tts_hd = bool(getattr(self, "tts_hd", False))
+
+        read_aloud_tool_enabled = self.switch_read_aloud_tool.get_active()
+        if read_aloud_tool_enabled and read_aloud_enabled:
+            read_aloud_enabled = False
+
         return {
             'ai_name': self.entry_ai_name.get_text(),
             'font_family': self.entry_font.get_text(),
@@ -4619,19 +4712,19 @@ class SettingsDialog(Gtk.Dialog):
             'system_prompts_json': system_prompts_json,
             'active_system_prompt_id': self._active_prompt_id,
             'hidden_default_prompts': getattr(self, 'hidden_default_prompts', '[]'),
-            'microphone': self.combo_mic.get_active_text() or 'default',
-            'speech_to_text_model': self.combo_stt_model.get_active_text() or (self.combo_stt_model.get_child().get_text() if self.combo_stt_model.get_child() else '') or 'whisper-1',
-            'tts_voice_provider': self.combo_tts_provider.get_active_id() or 'openai',
-            'tts_voice': self.combo_tts.get_active_text(),
-            'realtime_voice': self.combo_realtime.get_active_text(),
-            'realtime_prompt': self.entry_realtime_prompt.get_text(),
-            'realtime_vad_threshold': self.spin_vad_threshold.get_value(),
-            'mute_mic_during_playback': self.switch_mute_mic_playback.get_active(),
+            'microphone': microphone,
+            'speech_to_text_model': speech_to_text_model,
+            'tts_voice_provider': tts_voice_provider,
+            'tts_voice': tts_voice,
+            'realtime_voice': realtime_voice,
+            'realtime_prompt': realtime_prompt,
+            'realtime_vad_threshold': realtime_vad_threshold,
+            'mute_mic_during_playback': mute_mic_during_playback,
             'max_tokens': int(self.spin_max_tokens.get_value()),
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
             'latex_color': self.btn_latex_color.get_rgba().to_string(),
-            'tts_hd': self.switch_hd.get_active(),
+            'tts_hd': tts_hd,
             'compaction_enabled': self.switch_compaction_enabled.get_active(),
             'compaction_max_size_kb': int(self.spin_compaction_max_size.get_value()),
             'compaction_keep_turns': int(self.spin_compaction_keep_turns.get_value()),
@@ -4650,8 +4743,8 @@ class SettingsDialog(Gtk.Dialog):
             'claude_model_whitelist': whitelist_str('claude', 'claude_model_whitelist'),
             'custom_model_whitelist': whitelist_str('custom', 'custom_model_whitelist'),
             # Read Aloud settings (uses unified TTS settings above)
-            'read_aloud_enabled': self.switch_read_aloud.get_active(),
-            'read_aloud_tool_enabled': self.switch_read_aloud_tool.get_active(),
+            'read_aloud_enabled': read_aloud_enabled,
+            'read_aloud_tool_enabled': read_aloud_tool_enabled,
             'text_edit_tool_enabled': self.switch_text_edit_tool_settings.get_active(),
             # Search/Memory Tool settings
             'search_tool_enabled': self.switch_search_tool_settings.get_active(),
@@ -4669,7 +4762,7 @@ class SettingsDialog(Gtk.Dialog):
             'memory_retrieval_top_k': getattr(self, 'spin_memory_top_k', None) and int(self.spin_memory_top_k.get_value()) or 5,
             'memory_min_similarity': getattr(self, 'spin_memory_min_sim', None) and self.spin_memory_min_sim.get_value() or 0.3,
             # Speech prompt template for Gemini TTS and audio-preview models
-            'tts_prompt_template': self.entry_audio_prompt_template.get_text().strip(),
+            'tts_prompt_template': tts_prompt_template,
             # Conversation buffer length (string: "ALL", "0", "10", etc.)
             'conversation_buffer_length': (self.entry_conv_buffer.get_text() or "ALL").strip(),
             # Window / tray behavior

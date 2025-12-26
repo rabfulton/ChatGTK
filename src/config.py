@@ -375,7 +375,7 @@ SETTINGS_CONFIG = {
     # --- Memory System Settings ---
     # Master switch for the semantic memory feature (requires qdrant-client and sentence-transformers).
     'MEMORY_ENABLED': {'type': bool, 'default': False},
-    # Embedding mode: "local" (sentence-transformers), "openai", "gemini", or "cohere".
+    # Embedding mode: "local" (sentence-transformers), "openai", "gemini", or "custom".
     'MEMORY_EMBEDDING_MODE': {'type': str, 'default': 'local'},
     # Embedding model name (depends on mode).
     'MEMORY_EMBEDDING_MODEL': {'type': str, 'default': 'all-MiniLM-L6-v2'},

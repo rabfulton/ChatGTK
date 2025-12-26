@@ -28,9 +28,6 @@ EMBEDDING_DIMENSIONS = {
     "text-embedding-ada-002": 1536,
     # Gemini
     "text-embedding-004": 768,
-    # Cohere
-    "embed-english-v3.0": 1024,
-    "embed-multilingual-v3.0": 1024,
     # Mistral
     "mistral-embed": 1024,
 }
@@ -131,36 +128,6 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         return [self.embed(t) for t in texts]
 
 
-class CohereEmbeddingProvider(EmbeddingProvider):
-    """Cohere embeddings via API."""
-    
-    def __init__(self, model_name: str = "embed-english-v3.0", api_key: str = None):
-        import cohere
-        self.model_name = model_name
-        self._client = cohere.Client(api_key or os.environ.get("COHERE_API_KEY"))
-        self._dimension = EMBEDDING_DIMENSIONS.get(model_name, 1024)
-    
-    @property
-    def dimension(self) -> int:
-        return self._dimension
-    
-    def embed(self, text: str) -> List[float]:
-        response = self._client.embed(
-            texts=[text],
-            model=self.model_name,
-            input_type="search_document"
-        )
-        return response.embeddings[0]
-    
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        response = self._client.embed(
-            texts=texts,
-            model=self.model_name,
-            input_type="search_document"
-        )
-        return response.embeddings
-
-
 class CustomEmbeddingProvider(EmbeddingProvider):
     """Custom embeddings via OpenAI-compatible /v1/embeddings endpoint."""
     
@@ -214,7 +181,7 @@ def get_embedding_provider(
     Parameters
     ----------
     mode : str
-        One of: "local", "openai", "gemini", "cohere", "custom"
+        One of: "local", "openai", "gemini", "custom"
     model : str
         Model name (uses sensible defaults if not provided)
     api_key : str
@@ -237,8 +204,6 @@ def get_embedding_provider(
         return OpenAIEmbeddingProvider(model or "text-embedding-3-small", api_key)
     elif mode == "gemini":
         return GeminiEmbeddingProvider(model or "text-embedding-004", api_key)
-    elif mode == "cohere":
-        return CohereEmbeddingProvider(model or "embed-english-v3.0", api_key)
     elif mode == "custom":
         if not endpoint:
             raise ValueError("Custom embedding mode requires an endpoint URL")

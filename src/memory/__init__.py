@@ -43,7 +43,7 @@ def get_available_embedding_modes() -> list:
     if LOCAL_EMBEDDINGS_AVAILABLE:
         modes.append("local")
     # Hosted modes only need their respective API keys, not extra deps
-    modes.extend(["openai", "gemini", "cohere"])
+    modes.extend(["openai", "gemini"])
     return modes
 
 
