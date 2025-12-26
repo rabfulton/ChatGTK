@@ -5947,3 +5947,451 @@ def show_manage_projects_dialog(parent, controller, on_change=None):
     dialog.show_all()
     dialog.run()
     dialog.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Image Picker Dialog for Document Mode
+# ---------------------------------------------------------------------------
+
+class ImagePickerDialog(Gtk.Dialog):
+    """
+    Dialog for selecting images to insert into documents.
+    
+    Shows thumbnails of images from all chats in the selected project,
+    with a dropdown to switch projects and an import button.
+    
+    Performance optimizations:
+    - Background thread for thumbnail loading
+    - Limit to MAX_IMAGES most recent images
+    - Cached thumbnails stored in .thumbnails/ folder
+    - Uses os.scandir for faster directory iteration
+    """
+    
+    THUMBNAIL_SIZE = 120
+    MAX_IMAGES = 50
+    SUPPORTED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+    
+    def __init__(
+        self,
+        parent: Gtk.Window,
+        current_project: str = "",
+        current_history_dir: str = None,
+        current_document_id: str = None,
+    ):
+        super().__init__(
+            title="Insert Image",
+            transient_for=parent,
+            modal=True,
+        )
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.add_button("Insert", Gtk.ResponseType.OK)
+        self.set_default_size(600, 500)
+        self.set_response_sensitive(Gtk.ResponseType.OK, False)
+        
+        self._current_project = current_project
+        self._current_history_dir = current_history_dir
+        self._current_document_id = current_document_id
+        self._selected_image_path = None
+        self._projects_repo = None
+        self._loading_cancelled = False
+        self._pending_thumbnails = []
+        
+        self._build_ui()
+        self._load_projects()
+        self._load_images()
+    
+    def _build_ui(self):
+        """Build the dialog UI."""
+        content = self.get_content_area()
+        content.set_spacing(12)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        
+        # Project selector row
+        project_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        
+        label = Gtk.Label(label="Project:")
+        label.set_xalign(0)
+        project_row.pack_start(label, False, False, 0)
+        
+        self._project_combo = Gtk.ComboBoxText()
+        self._project_combo.set_hexpand(True)
+        self._project_combo.connect("changed", self._on_project_changed)
+        project_row.pack_start(self._project_combo, True, True, 0)
+        
+        import_btn = Gtk.Button(label="Import...")
+        import_btn.set_tooltip_text("Import an image from your computer")
+        import_btn.connect("clicked", self._on_import_clicked)
+        project_row.pack_start(import_btn, False, False, 0)
+        
+        content.pack_start(project_row, False, False, 0)
+        
+        # Scrolled window for thumbnails
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        scroll.set_hexpand(True)
+        
+        self._flowbox = Gtk.FlowBox()
+        self._flowbox.set_valign(Gtk.Align.START)
+        self._flowbox.set_max_children_per_line(5)
+        self._flowbox.set_min_children_per_line(3)
+        self._flowbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._flowbox.set_homogeneous(True)
+        self._flowbox.connect("child-activated", self._on_image_activated)
+        self._flowbox.connect("selected-children-changed", self._on_selection_changed)
+        
+        scroll.add(self._flowbox)
+        content.pack_start(scroll, True, True, 0)
+        
+        # Status label
+        self._status_label = Gtk.Label(label="")
+        self._status_label.set_xalign(0)
+        self._status_label.get_style_context().add_class("dim-label")
+        content.pack_start(self._status_label, False, False, 0)
+    
+    def _load_projects(self):
+        """Load projects into the dropdown."""
+        from repositories import ProjectsRepository
+        from config import HISTORY_DIR
+        
+        self._projects_repo = ProjectsRepository()
+        
+        # Block signal during initial population to avoid triggering _load_images twice
+        self._project_combo.handler_block_by_func(self._on_project_changed)
+        
+        try:
+            # Add default project first
+            default_label = _get_setting_value(self.get_transient_for(), "DEFAULT_PROJECT_LABEL", "Default")
+            self._project_combo.append("", default_label)
+            
+            # Add user projects
+            for project in self._projects_repo.list_all():
+                self._project_combo.append(project.id, project.name)
+            
+            # Select current project
+            model = self._project_combo.get_model()
+            for i, row in enumerate(model):
+                if row[0] == self._current_project:
+                    self._project_combo.set_active(i)
+                    break
+            else:
+                self._project_combo.set_active(0)
+        finally:
+            self._project_combo.handler_unblock_by_func(self._on_project_changed)
+    
+    def _get_history_dir_for_project(self, project_id: str) -> str:
+        """Get the history directory for a project."""
+        from config import HISTORY_DIR
+        
+        if not project_id:
+            return HISTORY_DIR
+        return self._projects_repo.get_history_dir(project_id)
+    
+    def _get_thumbnail_cache_dir(self, history_dir: str) -> Path:
+        """Get the thumbnail cache directory for a history folder."""
+        cache_dir = Path(history_dir) / ".thumbnails"
+        cache_dir.mkdir(exist_ok=True)
+        return cache_dir
+    
+    def _get_cached_thumbnail_path(self, image_path: str, cache_dir: Path) -> Path:
+        """Get the path for a cached thumbnail."""
+        import hashlib
+        # Create a hash of the original path for the cache filename
+        path_hash = hashlib.md5(image_path.encode()).hexdigest()[:16]
+        return cache_dir / f"{path_hash}.png"
+    
+    def _get_project_images(self, history_dir: str) -> list:
+        """Find all images in a project's history directory using os.scandir."""
+        images = []
+        history_path = Path(history_dir)
+        
+        if not history_path.exists():
+            return images
+        
+        # Use os.scandir for faster directory iteration
+        try:
+            with os.scandir(history_path) as entries:
+                for entry in entries:
+                    if entry.is_dir() and not entry.name.startswith('.'):
+                        images_dir = Path(entry.path) / "images"
+                        if images_dir.exists():
+                            try:
+                                with os.scandir(images_dir) as img_entries:
+                                    for img_entry in img_entries:
+                                        if img_entry.is_file():
+                                            ext = os.path.splitext(img_entry.name)[1].lower()
+                                            if ext in self.SUPPORTED_EXTENSIONS:
+                                                # Store (path, mtime) tuple for sorting
+                                                try:
+                                                    mtime = img_entry.stat().st_mtime
+                                                    images.append((img_entry.path, mtime))
+                                                except OSError:
+                                                    pass
+                            except OSError:
+                                pass
+        except OSError:
+            return images
+        
+        # Sort by modification time, newest first, and limit
+        images.sort(key=lambda x: x[1], reverse=True)
+        return [path for path, _ in images[:self.MAX_IMAGES]]
+    
+    def _load_images(self):
+        """Load images for the currently selected project."""
+        # Cancel any pending thumbnail loading
+        self._loading_cancelled = True
+        
+        # Clear existing thumbnails
+        for child in self._flowbox.get_children():
+            self._flowbox.remove(child)
+        
+        self._selected_image_path = None
+        self.set_response_sensitive(Gtk.ResponseType.OK, False)
+        
+        # Get selected project
+        project_id = self._project_combo.get_active_id() or ""
+        history_dir = self._get_history_dir_for_project(project_id)
+        
+        images = self._get_project_images(history_dir)
+        
+        if not images:
+            self._status_label.set_text("No images found in this project")
+            return
+        
+        total = len(images)
+        if total >= self.MAX_IMAGES:
+            self._status_label.set_text(f"Showing {self.MAX_IMAGES} most recent (of {total}+)")
+        else:
+            self._status_label.set_text(f"{total} image(s) found")
+        
+        # Add placeholder frames first, then load thumbnails in background
+        self._pending_thumbnails = list(images)
+        self._loading_cancelled = False
+        
+        cache_dir = self._get_thumbnail_cache_dir(history_dir)
+        
+        # Start background loading
+        thread = threading.Thread(
+            target=self._load_thumbnails_thread,
+            args=(list(images), cache_dir),
+            daemon=True
+        )
+        thread.start()
+    
+    def _load_thumbnails_thread(self, image_paths: list, cache_dir: Path):
+        """Load thumbnails in a background thread."""
+        from gi.repository import GdkPixbuf
+        
+        for image_path in image_paths:
+            if self._loading_cancelled:
+                return
+            
+            try:
+                pixbuf = self._get_or_create_thumbnail(image_path, cache_dir)
+                if pixbuf and not self._loading_cancelled:
+                    # Schedule UI update on main thread
+                    GLib.idle_add(self._add_thumbnail_from_pixbuf, image_path, pixbuf)
+            except Exception:
+                pass
+    
+    def _get_or_create_thumbnail(self, image_path: str, cache_dir: Path):
+        """Get cached thumbnail or create and cache a new one."""
+        from gi.repository import GdkPixbuf
+        
+        cached_path = self._get_cached_thumbnail_path(image_path, cache_dir)
+        
+        # Check if cached thumbnail exists and is newer than source
+        try:
+            if cached_path.exists():
+                source_mtime = os.path.getmtime(image_path)
+                cache_mtime = os.path.getmtime(cached_path)
+                if cache_mtime >= source_mtime:
+                    # Use cached thumbnail
+                    return GdkPixbuf.Pixbuf.new_from_file(str(cached_path))
+        except OSError:
+            pass
+        
+        # Create new thumbnail
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                image_path,
+                self.THUMBNAIL_SIZE,
+                self.THUMBNAIL_SIZE,
+                True  # preserve aspect ratio
+            )
+            
+            # Save to cache
+            try:
+                pixbuf.savev(str(cached_path), "png", [], [])
+            except Exception:
+                pass  # Cache save failure is not critical
+            
+            return pixbuf
+        except Exception:
+            return None
+    
+    def _add_thumbnail_from_pixbuf(self, image_path: str, pixbuf):
+        """Add a thumbnail to the flowbox from a pre-loaded pixbuf (called on main thread)."""
+        if self._loading_cancelled:
+            return False
+        
+        # Create image widget
+        image = Gtk.Image.new_from_pixbuf(pixbuf)
+        image.set_margin_top(4)
+        image.set_margin_bottom(4)
+        image.set_margin_start(4)
+        image.set_margin_end(4)
+        
+        # Wrap in event box for tooltip
+        event_box = Gtk.EventBox()
+        event_box.add(image)
+        event_box.set_tooltip_text(os.path.basename(image_path))
+        event_box.image_path = image_path
+        
+        # Add frame effect
+        frame = Gtk.Frame()
+        frame.add(event_box)
+        frame.image_path = image_path
+        
+        self._flowbox.add(frame)
+        frame.show_all()
+        
+        return False  # Don't repeat
+    
+    def _add_thumbnail(self, image_path: str):
+        """Add a thumbnail for an image to the flowbox (synchronous, for imports)."""
+        try:
+            from gi.repository import GdkPixbuf
+            
+            # Load and scale image
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                image_path,
+                self.THUMBNAIL_SIZE,
+                self.THUMBNAIL_SIZE,
+                True  # preserve aspect ratio
+            )
+            
+            self._add_thumbnail_from_pixbuf(image_path, pixbuf)
+            
+        except Exception as e:
+            print(f"[ImagePicker] Failed to load thumbnail for {image_path}")
+    
+    def _on_project_changed(self, combo):
+        """Handle project selection change."""
+        self._load_images()
+    
+    def _on_selection_changed(self, flowbox):
+        """Handle thumbnail selection change."""
+        selected = flowbox.get_selected_children()
+        if selected:
+            child = selected[0].get_child()
+            self._selected_image_path = getattr(child, 'image_path', None)
+            self.set_response_sensitive(Gtk.ResponseType.OK, self._selected_image_path is not None)
+        else:
+            self._selected_image_path = None
+            self.set_response_sensitive(Gtk.ResponseType.OK, False)
+    
+    def _on_image_activated(self, flowbox, child):
+        """Handle double-click on thumbnail."""
+        frame = child.get_child()
+        self._selected_image_path = getattr(frame, 'image_path', None)
+        if self._selected_image_path:
+            self.response(Gtk.ResponseType.OK)
+    
+    def _on_import_clicked(self, button):
+        """Handle import button click."""
+        dialog = Gtk.FileChooserDialog(
+            title="Select Image",
+            transient_for=self,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Open", Gtk.ResponseType.OK)
+        
+        # Add image filter
+        filter_images = Gtk.FileFilter()
+        filter_images.set_name("Images")
+        for ext in self.SUPPORTED_EXTENSIONS:
+            filter_images.add_pattern(f"*{ext}")
+            filter_images.add_pattern(f"*{ext.upper()}")
+        dialog.add_filter(filter_images)
+        
+        # Add all files filter
+        filter_all = Gtk.FileFilter()
+        filter_all.set_name("All files")
+        filter_all.add_pattern("*")
+        dialog.add_filter(filter_all)
+        
+        if dialog.run() == Gtk.ResponseType.OK:
+            source_path = dialog.get_filename()
+            dialog.destroy()
+            
+            # Copy to document's images folder
+            imported_path = self._import_image(source_path)
+            if imported_path:
+                self._selected_image_path = imported_path
+                # Auto-close dialog and insert the imported image
+                self.response(Gtk.ResponseType.OK)
+        else:
+            dialog.destroy()
+    
+    def _import_image(self, source_path: str) -> str:
+        """
+        Import an image to the current document's images folder.
+        
+        Returns the path to the copied image, or None on failure.
+        """
+        import shutil
+        from datetime import datetime
+        
+        if not self._current_history_dir or not self._current_document_id:
+            # Fallback: use current project's history dir
+            project_id = self._project_combo.get_active_id() or ""
+            history_dir = self._get_history_dir_for_project(project_id)
+            doc_id = "imported"
+        else:
+            history_dir = self._current_history_dir
+            doc_id = self._current_document_id.replace('.json', '')
+        
+        # Create images directory for this document
+        images_dir = Path(history_dir) / doc_id / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ext = Path(source_path).suffix.lower()
+        dest_filename = f"imported_{timestamp}{ext}"
+        dest_path = images_dir / dest_filename
+        
+        # Ensure unique filename
+        counter = 1
+        while dest_path.exists():
+            dest_filename = f"imported_{timestamp}_{counter}{ext}"
+            dest_path = images_dir / dest_filename
+            counter += 1
+        
+        try:
+            shutil.copy2(source_path, dest_path)
+            return str(dest_path)
+        except Exception as e:
+            print(f"[ImagePicker] Failed to import image: {e}")
+            # Show error dialog
+            error_dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Failed to import image"
+            )
+            error_dialog.format_secondary_text(str(e))
+            error_dialog.run()
+            error_dialog.destroy()
+            return None
+    
+    def get_selected_image_path(self) -> str:
+        """Get the path of the selected image."""
+        return self._selected_image_path
+

@@ -133,13 +133,27 @@ class DocumentRepository(Repository[Document]):
         return doc.id
     
     def delete(self, doc_id: str) -> bool:
-        """Delete a document."""
+        """Delete a document and its associated assets folder."""
+        import shutil
+        
         path = self._get_path(doc_id)
-        if path.exists():
-            path.unlink()
-            self._remove_from_history_index(doc_id)
-            return True
-        return False
+        if not path.exists():
+            return False
+        
+        # Delete the JSON file
+        path.unlink()
+        self._remove_from_history_index(doc_id)
+        
+        # Delete associated assets folder (images, etc.)
+        doc_id_clean = doc_id.replace('.json', '')
+        assets_folder = self.history_dir / doc_id_clean
+        if assets_folder.exists() and assets_folder.is_dir():
+            try:
+                shutil.rmtree(assets_folder)
+            except OSError as e:
+                print(f"Warning: Could not delete document assets folder: {e}")
+        
+        return True
     
     def list_all(self) -> List[DocumentMetadata]:
         """List all documents with metadata."""

@@ -1158,6 +1158,62 @@ class OpenAIGTKClient(Gtk.Window):
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
         clipboard.set_text(content, -1)
 
+    def _on_document_insert_image(self) -> None:
+        """Handle insert image request in Document Mode."""
+        from dialogs import ImagePickerDialog
+        import shutil
+        from datetime import datetime
+        
+        # Get current document info
+        current_project = self.controller.get_current_project()
+        current_history_dir = self.controller.get_current_history_dir()
+        current_doc_id = None
+        if self.controller.has_document():
+            doc = self.controller.document_service.current_document
+            current_doc_id = doc.id if doc else None
+        
+        dialog = ImagePickerDialog(
+            parent=self,
+            current_project=current_project,
+            current_history_dir=current_history_dir,
+            current_document_id=current_doc_id,
+        )
+        dialog.show_all()
+        
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            image_path = dialog.get_selected_image_path()
+            if image_path and current_doc_id and current_history_dir:
+                # Check if image is already in document's folder
+                doc_images_dir = Path(current_history_dir) / current_doc_id / "images"
+                image_path_obj = Path(image_path)
+                
+                if doc_images_dir not in image_path_obj.parents:
+                    # Image is from another location - copy to document's folder
+                    doc_images_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    dest_filename = f"{timestamp}_{image_path_obj.name}"
+                    dest_path = doc_images_dir / dest_filename
+                    
+                    # Ensure unique filename
+                    counter = 1
+                    while dest_path.exists():
+                        dest_filename = f"{timestamp}_{counter}_{image_path_obj.name}"
+                        dest_path = doc_images_dir / dest_filename
+                        counter += 1
+                    
+                    try:
+                        shutil.copy2(image_path, dest_path)
+                        image_path = str(dest_path)
+                    except Exception as e:
+                        print(f"Warning: Could not copy image to document folder: {e}")
+                
+                # Insert image tag at cursor position
+                image_tag = f'<img src="{image_path}"/>'
+                self._document_view.insert_text_at_cursor(image_tag)
+        
+        dialog.destroy()
+
     def _register_document_text_target(self) -> None:
         """Register the current document as a text target for tool edits."""
         if not self.controller.has_document():
@@ -1272,6 +1328,7 @@ class OpenAIGTKClient(Gtk.Window):
             on_export=self._on_document_export,
             on_copy=self._on_document_copy,
             on_preview_toggled=self._on_document_preview_toggled,
+            on_insert_image=self._on_document_insert_image,
             font_family=self.settings.get('FONT_FAMILY', 'Sans'),
             font_size=self.settings.get('FONT_SIZE', 12),
             preview_text_color=self.settings.get('AI_COLOR', '#0D47A1'),

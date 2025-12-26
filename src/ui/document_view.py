@@ -36,6 +36,7 @@ class DocumentView(UIComponent):
         on_export: Optional[Callable[[], None]] = None,
         on_copy: Optional[Callable[[], None]] = None,
         on_preview_toggled: Optional[Callable[[bool], None]] = None,
+        on_insert_image: Optional[Callable[[], None]] = None,
         font_family: str = "Monospace",
         font_size: int = 12,
         preview_text_color: str = "#000000",
@@ -50,6 +51,7 @@ class DocumentView(UIComponent):
         self._on_export = on_export
         self._on_copy = on_copy
         self._preview_toggled_callback = on_preview_toggled
+        self._on_insert_image = on_insert_image
         self._font_family = font_family
         self._font_size = font_size
         self._preview_text_color = preview_text_color
@@ -105,6 +107,7 @@ class DocumentView(UIComponent):
         self._text_view.set_top_margin(12)
         self._text_view.set_bottom_margin(12)
         self._text_view.connect("key-press-event", self._on_key_press)
+        self._text_view.connect("button-press-event", self._on_button_press)
         
         self._apply_font_style()
         
@@ -335,6 +338,47 @@ class DocumentView(UIComponent):
             return True
         return self._handle_markdown_shortcuts(event)
 
+    def _on_button_press(self, widget, event) -> bool:
+        """Handle button press events for context menu."""
+        # Right-click (button 3)
+        if event.button == 3 and not self._in_preview_mode:
+            self._show_context_menu(event)
+            return True
+        return False
+
+    def _show_context_menu(self, event):
+        """Show the document editor context menu."""
+        menu = Gtk.Menu()
+        
+        # Insert Image item
+        insert_image_item = Gtk.MenuItem(label="Insert Image...")
+        insert_image_item.connect("activate", self._on_insert_image_activated)
+        menu.append(insert_image_item)
+        
+        menu.append(Gtk.SeparatorMenuItem())
+        
+        # Standard edit items
+        cut_item = Gtk.MenuItem(label="Cut")
+        cut_item.connect("activate", lambda w: self._text_view.emit("cut-clipboard"))
+        menu.append(cut_item)
+        
+        copy_item = Gtk.MenuItem(label="Copy")
+        copy_item.connect("activate", lambda w: self._text_view.emit("copy-clipboard"))
+        menu.append(copy_item)
+        
+        paste_item = Gtk.MenuItem(label="Paste")
+        paste_item.connect("activate", lambda w: self._text_view.emit("paste-clipboard"))
+        menu.append(paste_item)
+        
+        menu.show_all()
+        menu.popup_at_pointer(event)
+
+    def _on_insert_image_activated(self, menu_item):
+        """Handle Insert Image menu item activation."""
+        if self._on_insert_image:
+            self._on_insert_image()
+
+
     def _handle_markdown_shortcuts(self, event) -> bool:
         """Handle markdown formatting shortcuts."""
         if not self._get_shortcuts:
@@ -516,6 +560,10 @@ class DocumentView(UIComponent):
     def get_editor_view(self) -> GtkSource.View:
         """Expose the document editor view for integrations."""
         return self._text_view
+
+    def insert_text_at_cursor(self, text: str) -> None:
+        """Insert text at the current cursor position."""
+        self._buffer.insert_at_cursor(text)
     
     def cleanup(self) -> None:
         """Clean up event subscriptions."""
