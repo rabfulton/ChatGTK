@@ -252,5 +252,65 @@ class ChatService:
             messages[0] = messages[0].copy()
             messages[0]['content'] = messages[0]['content'] + '\n\n' + tool_guidance
         
+        # --- Conversation Compaction Logic ---
+        # If the conversation has a recent compaction, rebuild the message list
+        # to include System Message + Compacted Summary + Post-Compaction Messages
+        last_compaction = history.get_last_compaction()
+        if last_compaction:
+            # Reconstruct messages using the compaction
+            # 1. System Message (always first)
+            final_messages = []
+            if messages and messages[0].get('role') == 'system':
+                final_messages.append(messages[0])
+            
+            # 2. Compacted Summary Message
+            # Use 'system' role or a 'user' role instructing the model about the summary
+            summary_content = (
+                f"### Previous Conversation Summary\n\n"
+                f"{last_compaction['summary']}\n\n"
+                f"### Current Conversation\n"
+                f"(The conversation continues below...)"
+            )
+            # We can treat this as an extension of the system prompt or a separate system message
+            final_messages.append({
+                "role": "system",
+                "content": summary_content,
+                # Store metadata to track where this came from (optional)
+                "provider_meta": {"is_compaction_summary": True}
+            })
+            
+            # 3. Post-Compaction Messages
+            # Filter messages to include only those occurring after the last compaction point.
+            # We rely on 'end_index' stored in the compaction metadata, which corresponds
+            # to the index in the original history list.
+            cutoff_index = last_compaction.get('end_index', -1)
+            
+            # Map this index to the current 'messages' list.
+            if cutoff_index >= 0 and cutoff_index < len(messages):
+                # Include messages strictly after the cutoff index.
+                post_compaction_msgs = messages[cutoff_index + 1:]
+                
+                # Exclude the system message if it was preserved in post_compaction_msgs
+                # (since we already added it to final_messages).
+                if post_compaction_msgs and post_compaction_msgs[0].get('role') == 'system':
+                     post_compaction_msgs = post_compaction_msgs[1:]
+                
+                final_messages.extend(post_compaction_msgs)
+                
+                # Update the main messages list
+                messages = final_messages
+
         return messages
+
+    def get_conversation_size_kb(self, history: ConversationHistory) -> float:
+        """
+        Calculate the approximate size of the conversation in KB.
+        """
+        import json
+        try:
+            content_str = json.dumps([m.to_dict() for m in history.messages])
+            return len(content_str.encode('utf-8')) / 1024.0
+        except Exception:
+            return 0.0
+
     

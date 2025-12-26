@@ -217,6 +217,17 @@ class ConversationHistory:
                 return msg
         return None
     
+    def get_last_compaction(self) -> Optional[Dict[str, Any]]:
+        """Return the most recent compacted_data, if any."""
+        for idx, msg in enumerate(reversed(self._messages)):
+            compacted_data = msg.provider_meta.get('compacted_data')
+            if compacted_data:
+                # Add relative index to data
+                data = compacted_data.copy()
+                data['end_index'] = len(self._messages) - 1 - idx
+                return data
+        return None
+    
     def clear(self, system_message: str = "You are a helpful assistant.") -> None:
         """
         Clear the history and reset with a new system message.
@@ -307,7 +318,25 @@ class ConversationHistory:
             return self.to_list()
         
         # Get the base messages
-        messages = self.to_list()
+        # Check for compaction
+        last_compaction = self.get_last_compaction()
+        if last_compaction:
+             # Reconstruct: System Msg + Messages after compaction
+             system_msg = self._messages[0]
+             start_idx = last_compaction.get('end_index', -1) + 1
+             post_compaction = self._messages[start_idx:]
+             
+             messages = [system_msg.to_dict()] + [m.to_dict() for m in post_compaction]
+             
+             # Append summary to system message
+             summary = last_compaction.get('summary')
+             if summary and messages[0]['role'] == 'system':
+                 messages[0]['content'] += (
+                    f"\n\n### Previous Conversation Summary\n{summary}\n"
+                    f"### Current Conversation\n(The conversation continues below...)"
+                 )
+        else:
+            messages = self.to_list()
         
         # If there's no system message or no tools, return as-is
         if not messages or messages[0].get("role") != "system":

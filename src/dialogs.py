@@ -1388,6 +1388,73 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.switch_minimize_to_tray, False, True, 0)
         list_box.add(row)
 
+        # --- Separator before compaction settings ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # Enable Conversation Compaction
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Conversation Compaction", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("Automatically summarize long conversations to reduce token usage and costs")
+        self.switch_compaction_enabled = Gtk.Switch()
+        current_compaction_enabled = bool(getattr(self, "compaction_enabled", False))
+        self.switch_compaction_enabled.set_active(current_compaction_enabled)
+        self.switch_compaction_enabled.connect("notify::active", self._on_compaction_enabled_toggled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_compaction_enabled, False, True, 0)
+        list_box.add(row)
+
+        # Max Size Before Compaction (KB)
+        self.row_compaction_size = Gtk.ListBoxRow()
+        _add_listbox_row_margins(self.row_compaction_size)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.row_compaction_size.add(hbox)
+        label = Gtk.Label(label="Max Size Before Compaction (KB)", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("Trigger compaction when conversation size exceeds this value in kilobytes")
+        self.spin_compaction_max_size = Gtk.SpinButton()
+        self.spin_compaction_max_size.set_range(10, 10000)
+        self.spin_compaction_max_size.set_increments(10, 100)
+        current_compaction_size = getattr(self, "compaction_max_size_kb", 100) or 100
+        self.spin_compaction_max_size.set_value(float(current_compaction_size))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_compaction_max_size, False, True, 0)
+        list_box.add(self.row_compaction_size)
+
+        # Keep Turns After Compaction
+        self.row_compaction_keep = Gtk.ListBoxRow()
+        _add_listbox_row_margins(self.row_compaction_keep)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.row_compaction_keep.add(hbox)
+        label = Gtk.Label(label="Keep Turns After Compaction", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("Number of recent user/assistant turns to keep uncompressed (0 = compact everything)")
+        self.spin_compaction_keep_turns = Gtk.SpinButton()
+        self.spin_compaction_keep_turns.set_range(0, 50)
+        self.spin_compaction_keep_turns.set_increments(1, 5)
+        current_keep_turns = getattr(self, "compaction_keep_turns", 0) or 0
+        self.spin_compaction_keep_turns.set_value(float(current_keep_turns))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.spin_compaction_keep_turns, False, True, 0)
+        list_box.add(self.row_compaction_keep)
+
+        # Show/hide compaction size based on enabled state
+        self.row_compaction_size.set_sensitive(current_compaction_enabled)
+        self.row_compaction_keep.set_sensitive(current_compaction_enabled)
+
         self.stack.add_named(scroll, "General")
 
     # -----------------------------------------------------------------------
@@ -3179,12 +3246,29 @@ class SettingsDialog(Gtk.Dialog):
         # (Title, Description, Key, Default Value)
         # Note: DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX is a composite string in config.py,
         # so it will be loaded fully.
+        from config import (
+            DEFAULT_SYSTEM_PROMPT_APPENDIX, 
+            DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX,
+            DEFAULT_MUSIC_TOOL_PROMPT_APPENDIX,
+            DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX,
+            DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX,
+            DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX,
+            DEFAULT_COMPACTION_PROMPT
+        )
+        from config import SETTINGS_CONFIG
+        
         self._advanced_specs = [
             (
                 "System Prompt Appendix",
                 "Guidance appended to every system prompt to help with formatting.",
                 "system_prompt_appendix",
                 DEFAULT_SYSTEM_PROMPT_APPENDIX
+            ),
+            (
+                "Compaction Prompt",
+                "The prompt used to summarize the conversation during compaction.",
+                "compaction_prompt",
+                DEFAULT_COMPACTION_PROMPT
             ),
             (
                 "Image Tool Guidance",
@@ -4316,13 +4400,17 @@ class SettingsDialog(Gtk.Dialog):
         if hasattr(self, 'row_prompt_template'):
             if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview") and not is_custom_tts:
                 self.row_prompt_template.show()
-            else:
                 self.row_prompt_template.hide()
 
     def _on_tts_provider_changed(self, combo):
         """Handle TTS provider selection change."""
         self._populate_tts_voices()
         self._update_tts_option_visibility()
+
+    def _on_compaction_enabled_toggled(self, switch, gparam):
+        """Toggle sensitivity of compaction size spinbutton."""
+        self.row_compaction_size.set_sensitive(switch.get_active())
+        self.row_compaction_keep.set_sensitive(switch.get_active())
 
     # -----------------------------------------------------------------------
     # Read Aloud mutual exclusivity handlers
@@ -4544,6 +4632,10 @@ class SettingsDialog(Gtk.Dialog):
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
             'latex_color': self.btn_latex_color.get_rgba().to_string(),
             'tts_hd': self.switch_hd.get_active(),
+            'compaction_enabled': self.switch_compaction_enabled.get_active(),
+            'compaction_max_size_kb': int(self.spin_compaction_max_size.get_value()),
+            'compaction_keep_turns': int(self.spin_compaction_keep_turns.get_value()),
+            'compaction_prompt': get_buf_text('compaction_prompt'),
             'image_model': self.combo_image_model.get_active_text() or (self.combo_image_model.get_child().get_text() if self.combo_image_model.get_child() else '') or 'dall-e-3',
             'image_tool_enabled': self.switch_image_tool_settings.get_active(),
             'music_tool_enabled': self.switch_music_tool_settings.get_active(),
@@ -6394,4 +6486,3 @@ class ImagePickerDialog(Gtk.Dialog):
     def get_selected_image_path(self) -> str:
         """Get the path of the selected image."""
         return self._selected_image_path
-

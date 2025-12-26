@@ -17,6 +17,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
 
@@ -872,6 +873,9 @@ class ChatController:
     def add_notification(self, content: str, notification_type: str = 'info') -> int:
         """Add a notification message (cancel, error, etc.) as assistant message."""
         msg = create_assistant_message(content)
+        if "provider_meta" not in msg:
+            msg["provider_meta"] = {}
+        msg["provider_meta"]["is_notification"] = True
         msg_index = len(self.conversation_history)
         self.conversation_history.append(msg)
         return msg_index
@@ -1434,12 +1438,33 @@ class ChatController:
         if not is_chat_completion_model(model_name, self.custom_models):
             return self.apply_conversation_buffer_limit(self.conversation_history)
 
-        first_message = self.conversation_history[0]
+        # New retrieval flow:
+        # 1. Get base history (compacted or full)
+        # 2. Extract system prompt, apply tool guidance, memory, and compaction summary.
+        
+        compacted_history, compaction_summary = self._apply_compaction_view(self.conversation_history)
+        limited_history = self.apply_conversation_buffer_limit(compacted_history)
+        
+        # Filter out notification messages
+        limited_history = [
+            m for m in limited_history 
+            if not m.get("provider_meta", {}).get("is_notification", False)
+        ]
+        
+        if not limited_history:
+             return []
+
+        first_message = limited_history[0]
         if first_message.get("role") != "system":
-            return self.apply_conversation_buffer_limit(self.conversation_history)
+             return limited_history
 
         current_prompt = first_message.get("content", "") or ""
-
+        if compaction_summary:
+            current_prompt += (
+                f"\n\n### Previous Conversation Summary\n{compaction_summary}\n"
+                f"### Current Conversation\n(The conversation continues below...)"
+            )
+        
         # Add document mode guidance if in document mode
         if self.has_document() and "document" in self._text_targets:
             from config import DEFAULT_DOCUMENT_MODE_PROMPT_APPENDIX
@@ -1461,8 +1486,6 @@ class ChatController:
         except Exception as e:
             print(f"Error while appending tool guidance: {e}")
             new_prompt = current_prompt
-
-        limited_history = self.apply_conversation_buffer_limit(self.conversation_history)
 
         # Query memory for relevant context
         memory_context = self._get_memory_context_for_query()
@@ -1529,6 +1552,49 @@ class ChatController:
         except Exception as e:
             print(f"[Memory] Error querying memory: {e}")
             return ""
+
+    def _apply_compaction_view(self, history: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """
+        Return (history_view, summary_text).
+        
+        If a compaction is found:
+            - history_view contains [SystemMsg] + [Messages After Compaction]
+            - summary_text contains the summary
+        Else:
+            - history_view is original history
+            - summary_text is None
+        """
+        if not history:
+            return history, None
+        
+        # Search backwards for compaction data
+        # 'history' is list of dicts here
+        compaction_data = None
+        cutoff_index = -1
+        
+        # history length L. indices 0..L-1.
+        for i in range(len(history) - 1, -1, -1):
+            msg = history[i]
+            meta = msg.get("provider_meta", {})
+            if isinstance(meta, dict) and meta.get("compacted_data"):
+                compaction_data = meta["compacted_data"]
+                cutoff_index = i
+                break
+        
+        if compaction_data and cutoff_index >= 0:
+            # Reconstruct: System Msg + Messages after compaction point
+            system_msg = history[0] if history[0].get("role") == "system" else None
+            post_compaction = history[cutoff_index + 1:]
+            
+            new_history = []
+            if system_msg:
+                new_history.append(system_msg)
+            
+            new_history.extend(post_compaction)
+            
+            return new_history, compaction_data.get("summary")
+            
+        return history, None
 
     # -----------------------------------------------------------------------
     # Service accessors
@@ -2018,6 +2084,9 @@ class ChatController:
                 data={},
                 source='controller'
             ))
+            
+            # Post-response maintenance
+            self._check_and_perform_compaction()
 
     def _get_or_init_provider(self, model: str, provider_name: str) -> Any:
         """Get or initialize a provider for the given model."""
@@ -2191,3 +2260,168 @@ class ChatController:
         )
         # Re-initialize memory service if settings changed
         self._init_memory_service()
+
+    # -----------------------------------------------------------------------
+    # Conversation Compaction
+    # -----------------------------------------------------------------------
+
+    def _check_and_perform_compaction(self):
+        """Check if conversation exceeds size limit and compact if needed."""
+        if not self._settings_manager.get('COMPACTION_ENABLED', False):
+            return
+
+        limit_kb = self._settings_manager.get('COMPACTION_MAX_SIZE_KB', 100)
+        
+        # Use ChatService to get size of the EFFECTIVE conversation (what is sent to model)
+        from conversation import ConversationHistory
+        
+        # Remove notification-only messages from compaction sizing.
+        filtered_history = [
+            m for m in self.conversation_history
+            if not m.get("provider_meta", {}).get("is_notification", False)
+        ]
+
+        # Get the compacted view (System + Summary + Post-Compaction)
+        compacted_list, summary = self._apply_compaction_view(filtered_history)
+        
+        # If we have a summary, ensure it's counted in the size.
+        # _apply_compaction_view returns the list.
+        # If there's a summary, we usually inject it into the message content during prepare_messages_for_model.
+        # But here we just want a rough estimate.
+        # If we reconstruct a history object from the list, get_conversation_size_kb will dump it.
+        
+        # We need to manually inject the summary into the first message content for size calculation accuracy
+        # if it's not already there (it's returned separately by _apply_compaction_view).
+        
+        current_history = ConversationHistory.from_list(compacted_list)
+
+        size_kb = self._chat_service.get_conversation_size_kb(current_history)
+        
+        if size_kb > limit_kb:
+            # Avoid concurrent compaction
+            if getattr(self, '_compaction_in_progress', False):
+                return
+            
+            print(f"[Compaction] Triggering compaction for {self.current_chat_id} (Size: {size_kb:.2f}KB > {limit_kb}KB)")
+            self._compaction_in_progress = True
+            
+            import threading
+            base_history = ConversationHistory.from_list(filtered_history)
+            thread = threading.Thread(
+                target=self._run_compaction_background,
+                args=(base_history, self.current_chat_id),
+                daemon=True
+            )
+            thread.start()
+
+    def _run_compaction_background(self, history_obj, chat_id):
+        """Execute compaction in background thread."""
+        try:
+            from conversation import Message, ProviderMeta
+            
+            # Determine range to summarize: after last compaction or from beginning
+            last_compaction = history_obj.get_last_compaction()
+            start_index = 0
+            previous_summary = ""
+            if last_compaction:
+                # Map indices from history snapshot to current range
+                start_index = last_compaction.get('end_index', -1) + 1
+                previous_summary = last_compaction.get("summary", "") or ""
+            # Skip system message
+            start_index = max(start_index, 1)
+            
+            # Keep last N turns (user+assistant pairs) uncompressed.
+            keep_turns = self._settings_manager.get('COMPACTION_KEEP_TURNS', 0) or 0
+            keep_count = max(int(keep_turns), 0) * 2
+            end_index = len(history_obj.messages) - keep_count - 1
+            
+            if end_index <= start_index:
+                return
+
+            messages_to_compact = history_obj.messages[start_index:end_index+1]
+            if not messages_to_compact:
+                return
+
+            # Build transcript
+            transcript = ""
+            for msg in messages_to_compact:
+                transcript += f"{msg.role.upper()}: {msg.content}\n\n"
+            last_msg = messages_to_compact[-1]
+            
+            # Summarize
+            model = self._settings_manager.get('DEFAULT_MODEL', 'gpt-4o-mini')
+            from config import DEFAULT_COMPACTION_PROMPT
+            compaction_prompt = self._settings_manager.get('COMPACTION_PROMPT', DEFAULT_COMPACTION_PROMPT)
+            
+            if previous_summary:
+                prompt = (
+                    f"{compaction_prompt}\n\n"
+                    "Existing summary:\n"
+                    f"{previous_summary}\n\n"
+                    "New conversation segment:\n"
+                    f"{transcript}\n\n"
+                    "Update the summary so it includes both the existing summary and the new segment."
+                )
+            else:
+                prompt = (
+                    f"{compaction_prompt}\n\n"
+                    f"{transcript}"
+                )
+            
+            # Get provider and generate summary
+            provider_name = self.get_provider_name_for_model(model)
+            provider = self._get_or_init_provider(model, provider_name)
+            
+            print(f"[Compaction] Summarizing {len(messages_to_compact)} messages with {model}...")
+            
+            start_time = datetime.now()
+            summary = provider.generate_chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                temperature=0.3,
+                max_tokens=1000
+            )
+            duration = (datetime.now() - start_time).total_seconds()
+            print(f"[Compaction] Summary generated in {duration:.1f}s")
+            
+            # Create compaction metadata
+            compaction_data = {
+                "summary": summary,
+                "timestamp": datetime.now().isoformat(),
+                "start_index": start_index, 
+                "end_index": end_index,
+                "model": model,
+                "message_count": len(messages_to_compact),
+            }
+            
+            # Update history on main thread
+            def update_history():
+                # Attach metadata to stable message at end_index in live history
+                history_len = len(history_obj.messages)
+                live_len = len(self.conversation_history)
+                delta = max(live_len - history_len, 0)
+                target_index = min(end_index + delta, live_len - 1)
+
+                if target_index < len(self.conversation_history):
+                    target_msg = self.conversation_history[target_index]
+
+                    if "provider_meta" not in target_msg:
+                        target_msg["provider_meta"] = {}
+
+                    if isinstance(target_msg["provider_meta"], dict):
+                        target_msg["provider_meta"]["compacted_data"] = compaction_data
+                    
+                    self.save_current_chat()
+                    print(f"[Compaction] Applied compaction data to message {target_index}")
+                    
+                self._compaction_in_progress = False
+                return False
+
+            from gi.repository import GLib
+            GLib.idle_add(update_history)
+
+        except Exception as e:
+            print(f"[Compaction] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            self._compaction_in_progress = False

@@ -153,6 +153,11 @@ DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX = (
     "'history' (past conversations), 'documents' (configured directories), or 'all'."
 )
 
+DEFAULT_COMPACTION_PROMPT = (
+    "Summarize the following conversation concisely for future context. Preserve key details, "
+    "decisions, and context required for future reference."
+)
+
 DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX = (
     "You can edit the currently selected target file using apply_text_edit. "
     "When a target file is selected, use target=\"file\". Use text_get with "
@@ -394,6 +399,14 @@ SETTINGS_CONFIG = {
     # system tray instead of keeping it in the taskbar. A tray icon is shown
     # which can be used to restore or quit the application.
     'MINIMIZE_TO_TRAY_ENABLED': {'type': bool, 'default': False},
+    # --- Conversation Compaction Settings ---
+    # When enabled, long conversations will be summarized to reduce token usage and costs.
+    'COMPACTION_ENABLED': {'type': bool, 'default': False},
+    # Maximum conversation size in kilobytes before triggering compaction.
+    'COMPACTION_MAX_SIZE_KB': {'type': int, 'default': 100},
+    'COMPACTION_PROMPT': {'type': str, 'default': DEFAULT_COMPACTION_PROMPT},
+    # Number of recent user/assistant turns to keep after compaction.
+    'COMPACTION_KEEP_TURNS': {'type': int, 'default': 0},
     # Prompt Appendices
     'SYSTEM_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SYSTEM_PROMPT_APPENDIX},
     'IMAGE_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_IMAGE_TOOL_PROMPT_APPENDIX},
