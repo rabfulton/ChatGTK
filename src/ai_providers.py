@@ -2432,29 +2432,68 @@ class GrokProvider(AIProvider):
 
         return input_items, instructions
 
-    def _extract_responses_output(self, response) -> str:
+    def _extract_responses_output(self, response) -> tuple:
         """
         Extract concatenated text content from a Grok Responses API response.
 
-        For Grok web search we currently ignore function_call outputs and only
-        care about the textual answer.
+        Returns both text content and any function calls requested by the model.
         """
         text_content = ""
+        function_calls = []
 
         if hasattr(response, "output") and response.output:
             for item in response.output:
                 item_type = getattr(item, "type", None)
-                print(f"[GrokProvider] Response item type: {item_type}")
 
                 # Handle message output (contains text).
                 if item_type == "message" and hasattr(item, "content"):
                     for content_item in item.content:
                         if hasattr(content_item, "text"):
                             text_content += content_item.text
-                            # Debug: show first 500 chars of text
-                            # print(f"[GrokProvider] Text content (first 500 chars): {content_item.text[:500]}")
 
-        return text_content
+                # Handle function_call output.
+                elif item_type == "function_call":
+                    call_id = getattr(item, "call_id", None) or getattr(item, "id", "")
+                    name = getattr(item, "name", "")
+                    arguments = getattr(item, "arguments", "{}")
+                    if name:
+                        function_calls.append({
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": arguments,
+                        })
+
+        return text_content, function_calls
+
+    def _build_responses_tools(
+        self,
+        enabled_tools: set,
+        web_search_enabled: bool,
+        model: str,
+    ) -> list:
+        """
+        Build the tools array for Grok's Responses API.
+
+        Includes built-in web_search/x_search tools and function tools.
+        """
+        tools = []
+
+        if web_search_enabled and self._supports_web_search_tool(model):
+            tools.append({"type": "web_search"})
+            tools.append({"type": "x_search"})
+
+        from tools import TOOL_REGISTRY
+        for tool_name in sorted(enabled_tools):
+            spec = TOOL_REGISTRY.get(tool_name)
+            if spec:
+                tools.append({
+                    "type": "function",
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.parameters,
+                })
+
+        return tools
 
     def _generate_with_responses_api(
         self,
@@ -2463,6 +2502,12 @@ class GrokProvider(AIProvider):
         temperature: float = None,
         max_tokens: int = None,
         web_search_enabled: bool = False,
+        image_tool_handler=None,
+        music_tool_handler=None,
+        read_aloud_tool_handler=None,
+        search_tool_handler=None,
+        text_get_handler=None,
+        text_edit_handler=None,
     ) -> str:
         """
         Generate a response using xAI's Responses API for Grok models.
@@ -2475,11 +2520,15 @@ class GrokProvider(AIProvider):
 
         input_items, instructions = self._build_responses_input(messages)
 
-        tools = []
-        if web_search_enabled and self._supports_web_search_tool(model):
-            # xAI supports both `web_search` and `x_search` tools per docs.
-            tools.append({"type": "web_search"})
-            tools.append({"type": "x_search"})
+        enabled_tools = build_enabled_tools_from_handlers(
+            image_tool_handler,
+            music_tool_handler,
+            read_aloud_tool_handler,
+            search_tool_handler,
+            text_get_handler,
+            text_edit_handler,
+        )
+        tools = self._build_responses_tools(enabled_tools, web_search_enabled, model)
 
         params = {
             "model": model,
@@ -2497,14 +2546,67 @@ class GrokProvider(AIProvider):
 
         if tools:
             params["tools"] = tools
+            params["tool_choice"] = "auto"
 
         print(
             f"[GrokProvider] Calling Responses API with {len(input_items)} input items, "
             f"{len(tools)} tools (web_search_enabled={web_search_enabled})"
         )
 
-        response = self.client.responses.create(**params)
-        return self._extract_responses_output(response)
+        if not enabled_tools:
+            response = self.client.responses.create(**params)
+            text_content, _ = self._extract_responses_output(response)
+            return text_content
+
+        tool_context = ToolContext(
+            image_handler=image_tool_handler,
+            music_handler=music_tool_handler,
+            read_aloud_handler=read_aloud_tool_handler,
+            search_handler=search_tool_handler,
+            text_get_handler=text_get_handler,
+            text_edit_handler=text_edit_handler,
+        )
+
+        max_tool_rounds = 3
+        tool_result_snippets = []
+        current_input = input_items.copy()
+
+        for _ in range(max_tool_rounds):
+            response = self.client.responses.create(**{
+                **params,
+                "input": current_input,
+            })
+
+            text_content, function_calls = self._extract_responses_output(response)
+
+            if not function_calls:
+                if tool_result_snippets:
+                    return text_content + "\n\n" + "\n\n".join(tool_result_snippets)
+                return text_content
+
+            for fc in function_calls:
+                parsed_args = parse_tool_arguments(fc["arguments"])
+                tool_result = run_tool_call(fc["name"], parsed_args, tool_context)
+
+                if tool_result and not should_hide_tool_result(tool_result):
+                    tool_result_snippets.append(strip_hide_prefix(tool_result))
+
+                current_input.append({
+                    "type": "function_call",
+                    "call_id": fc["call_id"],
+                    "name": fc["name"],
+                    "arguments": fc["arguments"],
+                })
+                current_input.append({
+                    "type": "function_call_output",
+                    "call_id": fc["call_id"],
+                    "output": strip_hide_prefix(tool_result) if tool_result else "",
+                })
+
+        final_text = text_content if text_content else ""
+        if tool_result_snippets:
+            return final_text + "\n\n" + "\n\n".join(tool_result_snippets)
+        return final_text
 
     def get_available_models(self, disable_filter: bool = False):
         """
@@ -2568,8 +2670,8 @@ class GrokProvider(AIProvider):
         Generate a chat completion using Grok text models.
 
         Routing logic:
-        - When web_search is enabled and the model supports it (and no function
-          tools are in play), use the Responses API with web_search/x_search.
+        - When web_search is enabled and the model supports it, use the
+          Responses API with web_search/x_search and any enabled function tools.
         - Otherwise, fall back to the standard chat.completions schema with
           optional function tools (image/music/read_aloud).
         """
@@ -2580,23 +2682,19 @@ class GrokProvider(AIProvider):
             raise RuntimeError("Grok client not initialized")
 
         # Decide whether to route via the Responses API for web search.
-        has_function_tools = any(
-            handler is not None
-            for handler in (
-                image_tool_handler,
-                music_tool_handler,
-                read_aloud_tool_handler,
-                text_get_handler,
-                text_edit_handler,
-            )
-        )
-        if web_search_enabled and not has_function_tools and self._supports_web_search_tool(model):
+        if web_search_enabled and self._supports_web_search_tool(model):
             return self._generate_with_responses_api(
                 messages=messages,
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 web_search_enabled=web_search_enabled,
+                image_tool_handler=image_tool_handler,
+                music_tool_handler=music_tool_handler,
+                read_aloud_tool_handler=read_aloud_tool_handler,
+                search_tool_handler=search_tool_handler,
+                text_get_handler=text_get_handler,
+                text_edit_handler=text_edit_handler,
             )
 
         # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
