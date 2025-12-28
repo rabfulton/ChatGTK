@@ -2374,13 +2374,28 @@ class GrokProvider(AIProvider):
 
             # Extract system messages for the instructions parameter.
             if role == "system":
-                instructions = content_text
+                if instructions:
+                    instructions = f"{instructions}\n\n{content_text}"
+                else:
+                    instructions = content_text
                 continue
 
-            # For now, skip assistant messages when building Responses input.
-            # xAI's current Responses API rejects assistant-side `output_text`
-            # style inputs, so we only send user/system content.
+            # Include assistant messages as regular message content so the model
+            # retains conversation context across turns.
             if role == "assistant":
+                if content_text:
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": role,
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": content_text,
+                                }
+                            ],
+                        }
+                    )
                 continue
 
             # Build content parts for user messages.
