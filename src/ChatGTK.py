@@ -99,6 +99,15 @@ class OpenAIGTKClient(Gtk.Window):
         # Initialize window
         window_width = self.settings.get('WINDOW_WIDTH', 900)
         window_height = self.settings.get('WINDOW_HEIGHT', 700)
+        if os.environ.get("GDK_BACKEND") == "broadway":
+            # Clamp to reported screen size so mobile viewports don't overflow.
+            screen = Gdk.Screen.get_default()
+            if screen:
+                screen_width = screen.get_width()
+                screen_height = screen.get_height()
+                if screen_width > 0 and screen_height > 0:
+                    window_width = min(window_width, screen_width)
+                    window_height = min(window_height, screen_height)
         self.set_default_size(window_width, window_height)
 
         # Tray icon / indicator (created lazily when needed)

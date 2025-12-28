@@ -336,6 +336,7 @@ install `texlive-fontsrecommended` from your package manager.
 - beets>=1.6.0 (optional, for music control tool)
 
 ### System Dependencies
+- `openai`
 - `python3`
 - `gtk-3.0`
 - `gtksourceview4`
