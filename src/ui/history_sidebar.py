@@ -287,14 +287,7 @@ class HistorySidebar(UIComponent):
         
         # Timestamp
         timestamp = doc.get('updated_at') or doc.get('created_at', '')
-        if isinstance(timestamp, str) and 'T' in timestamp:
-            try:
-                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                timestamp = dt.strftime("%Y-%m-%d %H:%M")
-            except:
-                pass
-        
-        time_label = Gtk.Label(label=str(timestamp), xalign=0)
+        time_label = Gtk.Label(label=self._format_timestamp(timestamp), xalign=0)
         time_label.get_style_context().add_class('timestamp')
         
         vbox.pack_start(title_box, True, True, 0)
@@ -303,6 +296,8 @@ class HistorySidebar(UIComponent):
         row.add(vbox)
         row.doc_id = doc.get('id', '')
         row.is_document = True
+        row.title_label = title_label
+        row.time_label = time_label
         
         return row
     
@@ -325,14 +320,7 @@ class HistorySidebar(UIComponent):
         
         # Timestamp
         timestamp = history.get('timestamp', '')
-        if isinstance(timestamp, str) and 'T' in timestamp:
-            try:
-                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                timestamp = dt.strftime("%Y-%m-%d %H:%M")
-            except:
-                pass
-        
-        time_label = Gtk.Label(label=str(timestamp), xalign=0)
+        time_label = Gtk.Label(label=self._format_timestamp(timestamp), xalign=0)
         time_label.get_style_context().add_class('timestamp')
         
         vbox.pack_start(title_label, True, True, 0)
@@ -386,6 +374,39 @@ class HistorySidebar(UIComponent):
                 return False
         
         return self._filter_text.lower() in text.lower()
+
+    def _format_timestamp(self, timestamp: Any) -> str:
+        """Format timestamps consistently for sidebar rows."""
+        if isinstance(timestamp, datetime):
+            return timestamp.strftime("%Y-%m-%d %H:%M")
+        if isinstance(timestamp, str) and 'T' in timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                return timestamp
+        return str(timestamp)
+
+    def _update_document_row(self, doc_id: str) -> bool:
+        """Update a document row in place to avoid full refresh."""
+        if not self._controller or self._filter_text:
+            return False
+        doc_service = getattr(self._controller, 'document_service', None)
+        if not doc_service:
+            return False
+        doc = doc_service.get_document(doc_id)
+        if not doc:
+            return False
+        for row in self.history_list.get_children():
+            if getattr(row, 'is_document', False) and getattr(row, 'doc_id', None) == doc_id:
+                if hasattr(row, 'title_label'):
+                    row.title_label.set_text(doc.title or "Untitled")
+                if hasattr(row, 'time_label'):
+                    row.time_label.set_text(self._format_timestamp(doc.updated_at))
+                if self._current_document_id == doc_id:
+                    self.history_list.select_row(row)
+                return True
+        return False
     
     def select_chat(self, chat_id: str, scroll_to: bool = True) -> None:
         """Select a chat by ID and optionally scroll it into view."""
@@ -547,6 +568,9 @@ class HistorySidebar(UIComponent):
         """Handle document events - refresh list and select document."""
         doc_id = event.data.get('document_id', '')
         def update():
+            if event.type == EventType.DOCUMENT_SAVED and doc_id:
+                if self._update_document_row(doc_id):
+                    return
             self.refresh()
             if doc_id:
                 GLib.idle_add(self.select_document, doc_id)
