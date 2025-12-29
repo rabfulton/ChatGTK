@@ -1178,7 +1178,8 @@ class OpenAIGTKClient(Gtk.Window):
             
             # Create a conversation-like structure for export_chat_to_pdf
             # The document content is treated as an assistant message for rendering
-            conversation = [{'role': 'assistant', 'content': doc.content}]
+            content = self._strip_document_br_lines(doc.content)
+            conversation = [{'role': 'assistant', 'content': content}]
             
             try:
                 result = export_chat_to_pdf(conversation, filename, doc.title, include_roles=False)
@@ -1207,6 +1208,25 @@ class OpenAIGTKClient(Gtk.Window):
         content = self.controller.get_document_content()
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
         clipboard.set_text(content, -1)
+
+    def _strip_document_br_lines(self, content: str) -> str:
+        """Remove standalone <br> lines outside fenced code blocks."""
+        if not content:
+            return content
+        lines = content.splitlines()
+        output = []
+        in_code_block = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                output.append(line)
+                continue
+            if not in_code_block and re.match(r'^\s*<br\s*/?>\s*$', line, re.IGNORECASE):
+                output.append("")
+                continue
+            output.append(line)
+        return "\n".join(output)
 
     def _on_document_insert_image(self) -> None:
         """Handle insert image request in Document Mode."""

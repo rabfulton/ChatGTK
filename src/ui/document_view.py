@@ -317,6 +317,7 @@ class DocumentView(UIComponent):
             self._preview_box.show_all()
             return
 
+        content = self._apply_document_line_breaks(content)
         processed = format_response(content)
         content_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         css_container = """
@@ -350,6 +351,25 @@ class DocumentView(UIComponent):
         self.set_content(new_text)
         if self._on_content_changed:
             self._on_content_changed(new_text)
+
+    def _apply_document_line_breaks(self, content: str) -> str:
+        """Convert <br> lines to blank lines outside code blocks."""
+        if not content:
+            return content
+        lines = content.splitlines()
+        output = []
+        in_code_block = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                output.append(line)
+                continue
+            if not in_code_block and re.match(r'^\s*<br\s*/?>\s*$', line, re.IGNORECASE):
+                output.append("---DOC-PREVIEW-BR---")
+                continue
+            output.append(line)
+        return "\n".join(output)
 
     def _register_preview_anchor(self, block_text: str, widget: Gtk.Widget) -> None:
         """Register a heading anchor for preview scrolling."""

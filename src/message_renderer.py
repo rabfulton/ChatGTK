@@ -19,6 +19,7 @@ from markup_utils import format_response, process_inline_markup, process_text_fo
 from latex_utils import process_tex_markup, insert_tex_image
 from gtk_utils import insert_resized_image
 
+DOC_PREVIEW_LINE_BREAK = "---DOC-PREVIEW-BR---"
 
 @dataclass
 class RenderSettings:
@@ -646,9 +647,21 @@ class MessageRenderer:
                     seg = seg[1:]
                 if seg.endswith('\n'):
                     seg = seg[:-1]
+                if DOC_PREVIEW_LINE_BREAK in seg:
+                    seg = re.sub(
+                        r'^\s*' + re.escape(DOC_PREVIEW_LINE_BREAK) + r'\s*$',
+                        f"\n\n{DOC_PREVIEW_LINE_BREAK}\n\n",
+                        seg,
+                        flags=re.MULTILINE,
+                    )
 
                 for block in self._split_formatted_blocks(seg):
                     if not block.strip():
+                        continue
+                    if block.strip() == DOC_PREVIEW_LINE_BREAK:
+                        spacer = Gtk.Box()
+                        spacer.set_size_request(-1, 12)
+                        container.pack_start(spacer, False, False, 0)
                         continue
                     processed = process_tex_markup(
                         block, self.settings.latex_color,
