@@ -203,7 +203,7 @@ Document Mode provides a focused editing environment for creating and refining l
   - Enabled by the **Enable Image Tool** switch in the **Tools** dialog (top bar → *Tools*).
   - Uses your preferred **Image Model** from the main **Settings** dialog.
   - Available to supported OpenAI, Gemini, Grok, and Claude chat models via function/tool calling.
-  - If you are using a model wuth native image tools such as GPT-5, the image tool, when enabled, will override the native capability and use your preferred image generations model.
+  - If you are using a model with native image tools such as GPT-5, the image tool, when enabled, will override the native capability and use your preferred image generations model.
 
 - **Music control tool (`control_music`)**
   - Disabled by default; enable via **Enable Music Tool** in the **Tools** dialog.

@@ -655,6 +655,7 @@ class MessageRenderer:
                         flags=re.MULTILINE,
                     )
 
+                block_padding = max(4, int(self.settings.font_size * 0.5))
                 for block in self._split_formatted_blocks(seg):
                     if not block.strip():
                         continue
@@ -703,7 +704,7 @@ class MessageRenderer:
                         self._apply_bullet_hanging_indent(buffer)
                         if on_block_rendered:
                             on_block_rendered(block, text_view)
-                        container.pack_start(text_view, False, False, 0)
+                        container.pack_start(text_view, False, False, block_padding)
                     else:
                         processed = process_inline_markup(processed, self.settings.font_size)
                         text_view = self._create_text_view(processed, text_color, link_handler=link_handler)
@@ -718,7 +719,7 @@ class MessageRenderer:
                         )
                         if on_block_rendered:
                             on_block_rendered(block, text_view)
-                        container.pack_start(text_view, False, False, 0)
+                        container.pack_start(text_view, False, False, block_padding)
                     full_text.append(block)
         
         return full_text
