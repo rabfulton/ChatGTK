@@ -730,7 +730,13 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Use component to set models
         if hasattr(self, '_model_selector'):
-            self._model_selector.set_models(models, display_names, active_model)
+            self._model_selector.set_models(
+                models,
+                display_names,
+                active_model,
+                provider_map=self.model_provider_map,
+                group_by_provider=self.settings.get('GROUP_MODELS_BY_PROVIDER', False),
+            )
             # Sync mappings
             self._display_to_model_id = self._model_selector._display_to_model_id
             self._model_id_to_display = self._model_selector._model_id_to_display
@@ -976,6 +982,7 @@ class OpenAIGTKClient(Gtk.Window):
         tool_indicator_keys = set(tool_key_map.keys()) | {'WEB_SEARCH_ENABLED'}
         title_keys = {'CURRENT_PROJECT', 'DEFAULT_PROJECT_LABEL'}
         system_prompt_keys = {'SYSTEM_PROMPTS_JSON', 'ACTIVE_SYSTEM_PROMPT_ID'}
+        model_group_key = 'GROUP_MODELS_BY_PROVIDER'
 
         if event.data.get('batch'):
             changes = event.data.get('changes', {})
@@ -1021,6 +1028,10 @@ class OpenAIGTKClient(Gtk.Window):
                 GLib.idle_add(self._update_tool_indicators)
             if changes.keys() & title_keys:
                 GLib.idle_add(self._update_window_title)
+            if model_group_key in changes:
+                current_model = self._get_model_id_from_combo()
+                models = list(self.model_provider_map.keys())
+                GLib.idle_add(lambda: self.update_model_list(models, current_model))
             return
 
         key = event.data.get('key', '')
@@ -1053,6 +1064,10 @@ class OpenAIGTKClient(Gtk.Window):
             self.controller.update_system_message(value)
         if key in title_keys:
             GLib.idle_add(self._update_window_title)
+        if key == model_group_key:
+            current_model = self._get_model_id_from_combo()
+            models = list(self.model_provider_map.keys())
+            GLib.idle_add(lambda: self.update_model_list(models, current_model))
 
     def _update_window_title(self):
         """Update window title with current project name."""

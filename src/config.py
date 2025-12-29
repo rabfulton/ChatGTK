@@ -235,6 +235,7 @@ SETTINGS_CONFIG = {
     'FONT_SIZE': {'type': int, 'default': 12},
     'USER_COLOR': {'type': str, 'default': '#2E7D32'},
     'AI_COLOR': {'type': str, 'default': '#0D47A1'},
+    'GROUP_MODELS_BY_PROVIDER': {'type': bool, 'default': False},
     'DEFAULT_MODEL': {'type': str, 'default': 'gpt-4o-mini'},
     # Preferred image model for both autonomous tool calls and the `img:` prefix.
     # This can be any supported image-capable model from OpenAI, Gemini, or Grok.

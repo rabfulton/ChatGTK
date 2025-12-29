@@ -531,6 +531,8 @@ class MessageRenderer:
         raw_text: Optional[str] = None,
         message_index: Optional[int] = None,
         on_update_message_text: Optional[Callable[[int, str], None]] = None,
+        link_handler: Optional[Callable[[str], bool]] = None,
+        on_block_rendered: Optional[Callable[[str, Gtk.Widget], None]] = None,
     ) -> List[str]:
         """Render rich text into a container without message-specific UI."""
         raw_blocks = None
@@ -551,6 +553,8 @@ class MessageRenderer:
             block_state=block_state,
             on_update_message_text=on_update_message_text,
             allow_context_menu=False,
+            link_handler=link_handler,
+            on_block_rendered=on_block_rendered,
         )
 
     def _render_message_content(
@@ -563,6 +567,8 @@ class MessageRenderer:
         block_state: Optional[dict] = None,
         on_update_message_text: Optional[Callable[[int, str], None]] = None,
         allow_context_menu: bool = True,
+        link_handler: Optional[Callable[[str], bool]] = None,
+        on_block_rendered: Optional[Callable[[str, Gtk.Widget], None]] = None,
     ) -> List[str]:
         """Render message text into a container, supporting code blocks, tables, etc."""
         full_text = [] # To accumulate text for speech synthesis
@@ -651,7 +657,7 @@ class MessageRenderer:
                     )
 
                     if "<img" in processed:
-                        text_view = self._create_text_view("", text_color)
+                        text_view = self._create_text_view("", text_color, link_handler=link_handler)
                         if allow_context_menu and message_index is not None:
                             self._attach_popup_to_text_view(text_view, message_index)
                         self._attach_text_block_editor(
@@ -682,10 +688,12 @@ class MessageRenderer:
                                 text = process_text_formatting(part, self.settings.font_size)
                                 self._insert_markup_with_links(buffer, text, getattr(buffer, "link_rgba", None))
                         self._apply_bullet_hanging_indent(buffer)
+                        if on_block_rendered:
+                            on_block_rendered(block, text_view)
                         container.pack_start(text_view, False, False, 0)
                     else:
                         processed = process_inline_markup(processed, self.settings.font_size)
-                        text_view = self._create_text_view(processed, text_color)
+                        text_view = self._create_text_view(processed, text_color, link_handler=link_handler)
                         if allow_context_menu and message_index is not None:
                             self._attach_popup_to_text_view(text_view, message_index)
                         self._attach_text_block_editor(
@@ -695,6 +703,8 @@ class MessageRenderer:
                             block_state,
                             on_update_message_text=on_update_message_text,
                         )
+                        if on_block_rendered:
+                            on_block_rendered(block, text_view)
                         container.pack_start(text_view, False, False, 0)
                     full_text.append(block)
         
@@ -746,7 +756,12 @@ class MessageRenderer:
         # LaTeX images are named math_inline_* or math_display_*
         return "math_inline_" in path or "math_display_" in path
 
-    def _create_text_view(self, markup_text: str, text_color: str) -> Gtk.TextView:
+    def _create_text_view(
+        self,
+        markup_text: str,
+        text_color: str,
+        link_handler: Optional[Callable[[str], bool]] = None,
+    ) -> Gtk.TextView:
         """Create a styled, read-only TextView with markup."""
         text_view = Gtk.TextView()
         text_view.set_wrap_mode(Gtk.WrapMode.WORD)
@@ -805,6 +820,10 @@ class MessageRenderer:
                 for tag in iter_at_click.get_tags():
                     url = getattr(tag, "href", None)
                     if url:
+                        if link_handler and url.startswith("#"):
+                            handled = link_handler(url)
+                            if handled:
+                                return True
                         Gtk.show_uri_on_window(self.window, url, Gdk.CURRENT_TIME)
                         return True
             return False

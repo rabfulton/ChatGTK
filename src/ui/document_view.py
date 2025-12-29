@@ -8,6 +8,7 @@ This component provides a focused document editing interface with:
 """
 
 from typing import Optional, Callable, Any, Dict
+from urllib.parse import unquote
 import re
 
 import gi
@@ -64,6 +65,9 @@ class DocumentView(UIComponent):
         self._updating_preview_state = False
         self._in_preview_mode = False
         self._current_content = ""
+        self._preview_anchor_widgets = {}
+        self._preview_anchor_aliases = {}
+        self._preview_anchor_counts = {}
         
         # Build UI
         self._widget = self._build_ui()
@@ -128,6 +132,7 @@ class DocumentView(UIComponent):
         preview_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         preview_scrolled.set_vexpand(True)
         preview_scrolled.set_hexpand(True)
+        self._preview_scrolled = preview_scrolled
 
         self._preview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self._preview_box.set_margin_start(0)
@@ -284,6 +289,9 @@ class DocumentView(UIComponent):
         """Render the document content as formatted output."""
         for child in self._preview_box.get_children():
             self._preview_box.remove(child)
+        self._preview_anchor_widgets = {}
+        self._preview_anchor_aliases = {}
+        self._preview_anchor_counts = {}
 
         try:
             from markup_utils import format_response
@@ -332,6 +340,8 @@ class DocumentView(UIComponent):
             raw_text=content,
             message_index=-1,
             on_update_message_text=self._on_preview_block_updated,
+            link_handler=self._on_preview_link_clicked,
+            on_block_rendered=self._register_preview_anchor,
         )
         self._preview_box.show_all()
 
@@ -340,6 +350,102 @@ class DocumentView(UIComponent):
         self.set_content(new_text)
         if self._on_content_changed:
             self._on_content_changed(new_text)
+
+    def _register_preview_anchor(self, block_text: str, widget: Gtk.Widget) -> None:
+        """Register a heading anchor for preview scrolling."""
+        if not block_text:
+            return
+        for line_index, line in enumerate(block_text.splitlines()):
+            line = line.strip()
+            match = re.match(r'^\s{0,3}(#{1,6})\s+(.+)$', line)
+            if not match:
+                continue
+            heading = match.group(2).strip()
+            heading = re.sub(r'\s+#+\s*$', '', heading).strip()
+            slug = self._slugify_heading(heading)
+            if not slug:
+                continue
+            count = self._preview_anchor_counts.get(slug, 0)
+            self._preview_anchor_counts[slug] = count + 1
+            if count:
+                slug = f"{slug}-{count}"
+            if slug not in self._preview_anchor_widgets:
+                self._preview_anchor_widgets[slug] = {
+                    "widget": widget,
+                    "line_index": line_index,
+                }
+            normalized = self._normalize_anchor_slug(slug)
+            if normalized and normalized not in self._preview_anchor_aliases:
+                self._preview_anchor_aliases[normalized] = slug
+
+    def _slugify_heading(self, heading: str) -> str:
+        """Convert a heading into a GitHub-style anchor slug."""
+        heading = heading.strip().lower()
+        heading = re.sub(r'[^\w\s-]', '', heading)
+        heading = re.sub(r'\s+', '-', heading)
+        heading = re.sub(r'-{2,}', '-', heading)
+        return heading.strip('-')
+
+    def _normalize_anchor_slug(self, slug: str) -> str:
+        """Normalize a slug for loose matching (e.g., place-2 vs place2)."""
+        slug = slug.strip().lower()
+        return re.sub(r'[^a-z0-9]', '', slug)
+
+    def _on_preview_link_clicked(self, url: str) -> bool:
+        """Handle internal anchor links in preview mode."""
+        if not url or not url.startswith("#"):
+            return False
+        anchor = unquote(url[1:]).strip().lower()
+        if not anchor:
+            return False
+        if self._scroll_to_anchor(anchor):
+            return True
+        normalized = self._normalize_anchor_slug(anchor)
+        mapped = self._preview_anchor_aliases.get(normalized)
+        if mapped:
+            return self._scroll_to_anchor(mapped)
+        return False
+
+    def _scroll_to_anchor(self, slug: str) -> bool:
+        anchor = self._preview_anchor_widgets.get(slug)
+        if not anchor:
+            return False
+        widget = anchor.get("widget")
+        line_index = anchor.get("line_index")
+        if not widget:
+            return False
+        if not self._preview_scrolled:
+            return False
+        def do_scroll():
+            coords = widget.translate_coordinates(self._preview_box, 0, 0)
+            if coords is None:
+                base_y = widget.get_allocation().y
+                parent = widget.get_parent()
+                while parent and parent is not self._preview_box:
+                    base_y += parent.get_allocation().y
+                    parent = parent.get_parent()
+            elif len(coords) == 2:
+                _x, base_y = coords
+            else:
+                success, _x, base_y = coords
+                if not success:
+                    return False
+            y = base_y
+            if isinstance(widget, Gtk.TextView) and isinstance(line_index, int):
+                buffer = widget.get_buffer()
+                line_count = buffer.get_line_count()
+                if line_count > 0:
+                    target_line = min(line_index, line_count - 1)
+                    iter_at_line = buffer.get_iter_at_line(target_line)
+                    rect = widget.get_iter_location(iter_at_line)
+                    _wx, wy = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
+                    y = base_y + wy
+            adj = self._preview_scrolled.get_vadjustment()
+            target = max(adj.get_lower(), min(y, adj.get_upper() - adj.get_page_size()))
+            adj.set_value(target)
+            return False
+        GLib.idle_add(do_scroll)
+        return True
     
     def _apply_css(self, widget: Gtk.Widget, css: str) -> None:
         """Apply CSS to a widget."""

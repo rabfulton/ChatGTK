@@ -197,8 +197,8 @@ def _linkify(text: str) -> str:
 
     text = grok_footnote_pattern.sub(_grok_repl, text)
 
-    # 1) Standard markdown links: [label](https://example.com)
-    md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
+    # 1) Standard markdown links: [label](https://example.com) or [label](#anchor)
+    md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+|#[^\s)]+)\)')
 
     def _md_repl(match):
         label = match.group(1)

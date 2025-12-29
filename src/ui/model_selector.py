@@ -43,6 +43,8 @@ class ModelSelector(UIComponent):
         
         self._on_model_changed = on_model_changed
         self._updating = False
+        self._group_by_provider = False
+        self._last_selected_display: Optional[str] = None
         
         # Mappings
         self._display_to_model_id: Dict[str, str] = {}
@@ -61,7 +63,14 @@ class ModelSelector(UIComponent):
         combo.connect('changed', self._on_combo_changed)
         return combo
     
-    def set_models(self, models: List[str], display_names: Dict[str, str] = None, active_model: str = None):
+    def set_models(
+        self,
+        models: List[str],
+        display_names: Dict[str, str] = None,
+        active_model: str = None,
+        provider_map: Dict[str, str] = None,
+        group_by_provider: bool = False,
+    ):
         """
         Set available models.
         
@@ -73,9 +82,14 @@ class ModelSelector(UIComponent):
             Optional mapping of model_id to display name.
         active_model : str
             Model to select initially.
+        provider_map : Dict[str, str]
+            Optional mapping of model_id to provider key.
+        group_by_provider : bool
+            Whether to group models by provider in the dropdown.
         """
         self._updating = True
         try:
+            self._group_by_provider = bool(group_by_provider)
             # Build mappings
             self._display_to_model_id = {}
             self._model_id_to_display = {}
@@ -94,19 +108,77 @@ class ModelSelector(UIComponent):
             
             # Populate combo
             self.widget.remove_all()
-            
-            # Add active model first if specified
-            if active_display and active_display in self._display_to_model_id:
-                self.widget.append_text(active_display)
-                other_displays = sorted(d for d in self._display_to_model_id.keys() if d != active_display)
+
+            if self._group_by_provider:
+                provider_map = provider_map or {}
+                provider_order = ["openai", "gemini", "grok", "claude", "perplexity", "custom"]
+                provider_labels = {
+                    "openai": "OpenAI",
+                    "gemini": "Gemini",
+                    "grok": "Grok",
+                    "claude": "Claude",
+                    "perplexity": "Perplexity",
+                    "custom": "Custom",
+                    "other": "Other",
+                }
+                grouped: Dict[str, List[str]] = {}
+                for model_id in models:
+                    provider = provider_map.get(model_id, "other")
+                    grouped.setdefault(provider, []).append(model_id)
+                for provider in grouped:
+                    grouped[provider] = sorted(
+                        grouped[provider],
+                        key=lambda mid: self._model_id_to_display.get(mid, mid).lower(),
+                    )
+
+                ordered_providers = [p for p in provider_order if p in grouped]
+                ordered_providers.extend(
+                    p for p in sorted(grouped.keys()) if p not in ordered_providers
+                )
+
+                for provider in ordered_providers:
+                    label = provider_labels.get(provider, provider.title())
+                    self.widget.append_text(f"-- {label} --")
+                    for model_id in grouped[provider]:
+                        display = self._model_id_to_display.get(model_id, model_id)
+                        self.widget.append_text(display)
             else:
-                other_displays = sorted(self._display_to_model_id.keys())
-            
-            for display in other_displays:
-                self.widget.append_text(display)
-            
-            if self.widget.get_model().iter_n_children(None) > 0:
-                self.widget.set_active(0)
+                # Add active model first if specified
+                if active_display and active_display in self._display_to_model_id:
+                    self.widget.append_text(active_display)
+                    other_displays = sorted(d for d in self._display_to_model_id.keys() if d != active_display)
+                else:
+                    other_displays = sorted(self._display_to_model_id.keys())
+                
+                for display in other_displays:
+                    self.widget.append_text(display)
+
+            active_idx = None
+            if active_display and active_display in self._display_to_model_id:
+                model_store = self.widget.get_model()
+                iter = model_store.get_iter_first()
+                idx = 0
+                while iter:
+                    if model_store.get_value(iter, 0) == active_display:
+                        active_idx = idx
+                        break
+                    iter = model_store.iter_next(iter)
+                    idx += 1
+            if active_idx is None:
+                model_store = self.widget.get_model()
+                iter = model_store.get_iter_first()
+                idx = 0
+                while iter:
+                    display_text = model_store.get_value(iter, 0)
+                    if display_text in self._display_to_model_id:
+                        active_idx = idx
+                        active_display = display_text
+                        break
+                    iter = model_store.iter_next(iter)
+                    idx += 1
+            if active_idx is not None:
+                self.widget.set_active(active_idx)
+                self._last_selected_display = active_display
         finally:
             self._updating = False
     
@@ -115,7 +187,8 @@ class ModelSelector(UIComponent):
         display = self.widget.get_active_text()
         if not display:
             return None
-        # Check mapping - if no mapping, the display IS the model_id
+        if display not in self._display_to_model_id:
+            return None
         return self._display_to_model_id.get(display, display)
     
     def get_selected_display(self) -> Optional[str]:
@@ -136,9 +209,9 @@ class ModelSelector(UIComponent):
             iter = model_store.iter_next(iter)
             idx += 1
     
-    def _select_display(self, display: str):
+    def _select_display(self, display: str, force: bool = False):
         """Select by display text."""
-        if self._updating:
+        if self._updating and not force:
             return
         
         model_store = self.widget.get_model()
@@ -161,28 +234,35 @@ class ModelSelector(UIComponent):
             selected_display = combo.get_active_text()
             if not selected_display:
                 return
-            
+
+            if selected_display not in self._display_to_model_id:
+                if self._last_selected_display:
+                    self._select_display(self._last_selected_display, force=True)
+                return
+
             selected_model_id = self._display_to_model_id.get(selected_display, selected_display)
+            self._last_selected_display = selected_display
             
             # Callback
             if self._on_model_changed:
                 self._on_model_changed(selected_model_id, selected_display)
             
-            # Reorder: put selected first
-            model_store = combo.get_model()
-            display_texts = []
-            iter = model_store.get_iter_first()
-            while iter:
-                display_texts.append(model_store.get_value(iter, 0))
-                iter = model_store.iter_next(iter)
-            
-            combo.remove_all()
-            combo.append_text(selected_display)
-            
-            for display in sorted(d for d in display_texts if d != selected_display):
-                combo.append_text(display)
-            
-            combo.set_active(0)
+            if not self._group_by_provider:
+                # Reorder: put selected first
+                model_store = combo.get_model()
+                display_texts = []
+                iter = model_store.get_iter_first()
+                while iter:
+                    display_texts.append(model_store.get_value(iter, 0))
+                    iter = model_store.iter_next(iter)
+                
+                combo.remove_all()
+                combo.append_text(selected_display)
+                
+                for display in sorted(d for d in display_texts if d != selected_display):
+                    combo.append_text(display)
+                
+                combo.set_active(0)
         finally:
             self._updating = False
     

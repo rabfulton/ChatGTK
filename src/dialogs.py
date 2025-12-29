@@ -1215,6 +1215,20 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(self.entry_default_model, False, True, 0)
         list_box.add(row)
 
+        # Group models by provider
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Group Models by Provider", xalign=0)
+        label.set_hexpand(True)
+        self.switch_group_models = Gtk.Switch()
+        current_group_models = bool(getattr(self, "group_models_by_provider", False))
+        self.switch_group_models.set_active(current_group_models)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_group_models, False, True, 0)
+        list_box.add(row)
+
         # --- Separator (as its own ListBoxRow, so it's visible) ---
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
@@ -4708,6 +4722,7 @@ class SettingsDialog(Gtk.Dialog):
             'user_color': self.btn_user_color.get_rgba().to_string(),
             'ai_color': self.btn_ai_color.get_rgba().to_string(),
             'default_model': self.entry_default_model.get_text(),
+            'group_models_by_provider': self.switch_group_models.get_active(),
             'system_message': system_message,
             'system_prompts_json': system_prompts_json,
             'active_system_prompt_id': self._active_prompt_id,
