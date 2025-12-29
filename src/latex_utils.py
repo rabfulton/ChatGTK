@@ -1524,8 +1524,11 @@ class ProtectedRegions:
         for line in lines:
             if is_horizontal_rule(line):
                 # Convert to LaTeX horizontal rule with spacing
-                # Use \hrule with some vertical spacing
-                token = self._store("HRULE", r"\bigskip\noindent\rule{\linewidth}{0.4pt}\bigskip")
+                # Force a paragraph break so the rule stands on its own line.
+                token = self._store(
+                    "HRULE",
+                    r"\par\bigskip\noindent\rule{\linewidth}{0.4pt}\par\bigskip"
+                )
                 result_lines.append(token)
             else:
                 result_lines.append(line)
@@ -1720,9 +1723,11 @@ def insert_forced_newlines_safe(text: str, regions: ProtectedRegions) -> str:
                 # Rule: don't add \\ if this is the last line or next line is blank
                 # This prevents "There's no line here to end" errors
                 is_last = (i == len(lines) - 1)
-                next_is_blank = (i < len(lines) - 1 and lines[i + 1].strip() == "")
+                next_line = lines[i + 1] if i < len(lines) - 1 else ""
+                next_is_blank = (i < len(lines) - 1 and next_line.strip() == "")
+                next_is_hrule = bool(re.match(r'^@@HRULE_\d+@@$', next_line.strip()))
                 
-                if is_last or next_is_blank:
+                if is_last or next_is_blank or next_is_hrule:
                     processed.append(line)
                 else:
                     processed.append(line + r"\\")
