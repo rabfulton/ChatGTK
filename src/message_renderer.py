@@ -338,7 +338,8 @@ class MessageRenderer:
                 return
             separator = Gtk.SeparatorMenuItem()
             delete_item = Gtk.MenuItem(label="Delete Message")
-            delete_item.connect("activate", lambda w: self.callbacks.on_delete(w, view.message_index))
+            resolved_index = self._resolve_message_index(view)
+            delete_item.connect("activate", lambda w: self.callbacks.on_delete(w, resolved_index))
             menu.append(separator)
             menu.append(delete_item)
             menu.show_all()
@@ -460,7 +461,14 @@ class MessageRenderer:
                                 if self._is_latex_math_image(img_path):
                                     insert_tex_image(buffer, insert_iter, img_path, text_view, self.window, is_math_image=True)
                                 else:
-                                    insert_resized_image(buffer, insert_iter, img_path, text_view, self.window)
+                                    insert_resized_image(
+                                        buffer,
+                                        insert_iter,
+                                        img_path,
+                                        text_view,
+                                        self.window,
+                                        message_index=message_index,
+                                    )
                             else:
                                 text = process_text_formatting(part, self.settings.font_size)
                                 self._insert_markup_with_links(buffer, text, getattr(buffer, "link_rgba", None))
@@ -826,6 +834,20 @@ class MessageRenderer:
                 list_stack.clear()
                 
             offset += len(line)
+
+    def _resolve_message_index(self, widget: Gtk.Widget) -> Optional[int]:
+        """Resolve the current message index by walking widget ancestors."""
+        if hasattr(self.window, "_resolve_message_index_for_widget"):
+            resolved = self.window._resolve_message_index_for_widget(widget)
+            if resolved is not None:
+                return resolved
+        current = widget
+        while current is not None:
+            idx = getattr(current, "message_index", None)
+            if idx is not None:
+                return idx
+            current = current.get_parent()
+        return getattr(widget, "message_index", None)
 
     def create_table_widget(self, table_text: str) -> Optional[Gtk.Widget]:
         """Convert markdown table text to a GTK grid widget."""

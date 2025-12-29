@@ -17,6 +17,9 @@ import json
 import shutil
 import subprocess
 import tempfile
+import re
+import hashlib
+from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
@@ -861,7 +864,10 @@ class ChatController:
     def delete_message(self, index: int) -> bool:
         """Delete message at index. Returns True if successful."""
         if 0 < index < len(self.conversation_history):  # Don't delete system message
+            removed_message = self.conversation_history[index]
+            remaining_messages = self.conversation_history[:index] + self.conversation_history[index + 1:]
             del self.conversation_history[index]
+            self._cleanup_orphaned_message_files(removed_message, remaining_messages)
             self._event_bus.publish(Event(
                 type=EventType.MESSAGE_DELETED,
                 data={'index': index},
@@ -869,6 +875,168 @@ class ChatController:
             ))
             return True
         return False
+
+    def _cleanup_orphaned_message_files(
+        self,
+        removed_message: Dict[str, Any],
+        remaining_messages: List[Dict[str, Any]],
+    ) -> None:
+        """Remove files tied only to a deleted message within the chat cache."""
+        if not removed_message:
+            return
+        history_dir = Path(self.get_current_history_dir())
+        chat_id = (self.current_chat_id or "temp").replace('.json', '')
+        chat_dir = self._safe_resolve_path(history_dir / chat_id)
+
+        removed_paths = self._normalize_message_paths(
+            self._extract_message_file_paths(removed_message),
+            history_dir,
+        )
+        removed_paths.update(self._extract_formula_cache_paths(removed_message, chat_dir))
+        if not removed_paths:
+            return
+
+        remaining_paths = set()
+        for message in remaining_messages:
+            remaining_paths.update(
+                self._normalize_message_paths(
+                    self._extract_message_file_paths(message),
+                    history_dir,
+                )
+            )
+            remaining_paths.update(self._extract_formula_cache_paths(message, chat_dir))
+
+        for path in removed_paths - remaining_paths:
+            if not self._path_within_dir(path, chat_dir):
+                continue
+            if not path.exists() or not path.is_file():
+                continue
+            try:
+                path.unlink()
+            except OSError as e:
+                print(f"Warning: Could not delete message file {path}: {e}")
+
+    def _extract_message_file_paths(self, message: Dict[str, Any]) -> Set[str]:
+        """Extract file path references from a message."""
+        paths: Set[str] = set()
+
+        def add_from_text(text: str) -> None:
+            if not text:
+                return
+            for match in re.findall(r'<img src="([^"]+)"/>', text):
+                paths.add(match)
+            for match in re.findall(r'<audio_file>(.*?)</audio_file>', text, flags=re.DOTALL):
+                candidate = match.strip()
+                if candidate:
+                    paths.add(candidate)
+
+        content = message.get("content", "")
+        if isinstance(content, str):
+            add_from_text(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    part_type = part.get("type")
+                    if part_type in ("text", "input_text", "output_text"):
+                        add_from_text(part.get("text", ""))
+                    elif part_type in ("image_url", "input_image"):
+                        url = part.get("image_url")
+                        if isinstance(url, dict):
+                            url = url.get("url", "")
+                        if isinstance(url, str) and url:
+                            paths.add(url)
+                else:
+                    add_from_text(str(part))
+
+        for file_info in message.get("files", []) or []:
+            file_path = file_info.get("path")
+            if file_path:
+                paths.add(file_path)
+
+        return paths
+
+    def _extract_formula_cache_paths(self, message: Dict[str, Any], chat_dir: Path) -> Set[Path]:
+        """Map LaTeX formulas in a message to cached formula image paths."""
+        if not chat_dir:
+            return set()
+        text_segments = self._extract_message_text_segments(message)
+        if not text_segments:
+            return set()
+        text_color = self._settings_manager.get('LATEX_COLOR', '#000000')
+        cache_dir = chat_dir / "formula_cache"
+        paths: Set[Path] = set()
+        for text in text_segments:
+            paths.update(self._formula_paths_from_text(text, cache_dir, text_color))
+        return paths
+
+    def _extract_message_text_segments(self, message: Dict[str, Any]) -> List[str]:
+        """Extract text segments from a message for LaTeX scanning."""
+        segments: List[str] = []
+        content = message.get("content", "")
+        if isinstance(content, str):
+            segments.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    part_type = part.get("type")
+                    if part_type in ("text", "input_text", "output_text"):
+                        segments.append(part.get("text", ""))
+                else:
+                    segments.append(str(part))
+        return segments
+
+    def _formula_paths_from_text(self, text: str, cache_dir: Path, text_color: str) -> Set[Path]:
+        """Return cached formula image paths referenced by math in text."""
+        paths: Set[Path] = set()
+        if not text:
+            return paths
+
+        def sanitize_math(math_content: str) -> str:
+            return math_content.replace("**", "")
+
+        def add_formula_paths(pattern: str, is_display: bool, flags: int = 0) -> None:
+            for match in re.findall(pattern, text, flags):
+                math_content = sanitize_math(match)
+                formula_hash = hashlib.sha256(
+                    f"{math_content}_{is_display}_{text_color}".encode()
+                ).hexdigest()[:16]
+                paths.add(cache_dir / f"formula_{formula_hash}.png")
+
+        add_formula_paths(r'\\\[(.*?)\\\]', True, flags=re.DOTALL)
+        add_formula_paths(r'\\\((.*?)\\\)', False, flags=re.DOTALL)
+        return paths
+
+    def _normalize_message_paths(self, paths: Set[str], history_dir: Path) -> Set[Path]:
+        """Normalize paths to absolute Paths, skipping URLs/data URIs."""
+        normalized: Set[Path] = set()
+        for raw_path in paths:
+            if not raw_path:
+                continue
+            raw_path = str(raw_path).strip()
+            if raw_path.startswith(("data:", "http://", "https://")):
+                continue
+            path = Path(raw_path).expanduser()
+            if not path.is_absolute():
+                path = history_dir / path
+            normalized.add(self._safe_resolve_path(path))
+        return normalized
+
+    def _safe_resolve_path(self, path: Path) -> Path:
+        """Resolve paths without requiring the target to exist."""
+        try:
+            return path.resolve(strict=False)
+        except TypeError:
+            return path.resolve()
+        except FileNotFoundError:
+            return path.absolute()
+
+    def _path_within_dir(self, path: Path, root: Path) -> bool:
+        """Return True if the path is within the root directory."""
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
 
     def add_notification(self, content: str, notification_type: str = 'info') -> int:
         """Add a notification message (cancel, error, etc.) as assistant message."""

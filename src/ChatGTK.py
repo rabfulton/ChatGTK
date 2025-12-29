@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+from types import SimpleNamespace
 os.environ['AUDIODEV'] = 'pulse'  # Force use of PulseAudio
 import gi
 import json
@@ -15,6 +16,7 @@ import mimetypes
 import base64
 import time
 import getpass
+from typing import Optional
 from latex_utils import (
     tex_to_png,
     process_tex_markup,
@@ -2892,6 +2894,7 @@ class OpenAIGTKClient(Gtk.Window):
     def on_delete_chat(self, widget, history_row):
         """Delete the selected chat history."""
         filename = history_row.chat_id
+        normalized_filename = self._normalize_chat_id(filename)
         
         dialog = Gtk.MessageDialog(
             transient_for=self,
@@ -2906,7 +2909,7 @@ class OpenAIGTKClient(Gtk.Window):
 
         if response == Gtk.ResponseType.YES:
             # If we are deleting the currently active chat, clear the display first
-            if self.current_chat_id == filename:
+            if self._normalize_chat_id(self.current_chat_id) == normalized_filename:
                 # Clear the display
                 for child in self.conversation_box.get_children():
                     child.destroy()
@@ -2916,7 +2919,7 @@ class OpenAIGTKClient(Gtk.Window):
                 self.controller.new_chat(self.system_message)
 
             # Delete the chat history via controller
-            self.controller.delete_chat(filename)
+            self.controller.delete_chat(normalized_filename)
             
             # Refresh the history list
             self.refresh_history_list()
@@ -3344,6 +3347,11 @@ class OpenAIGTKClient(Gtk.Window):
         if message_index <= 0 or message_index >= self.controller.get_message_count():
             return
 
+        if self.controller.get_message_count() == 2 and self.current_chat_id is not None:
+            history_row = SimpleNamespace(chat_id=self.current_chat_id)
+            self.on_delete_chat(None, history_row)
+            return
+
         widget_idx = message_index - 1  # message_widgets excludes system message
         if widget_idx < 0 or widget_idx >= len(self.message_widgets):
             return
@@ -3369,6 +3377,21 @@ class OpenAIGTKClient(Gtk.Window):
     def on_delete_message(self, _menu_item, message_index: int):
         """Menu callback to delete a message."""
         self.delete_message(message_index)
+
+    def _resolve_message_index_for_widget(self, widget) -> Optional[int]:
+        """Resolve the current message index for a widget inside the message list."""
+        current = widget
+        while current is not None:
+            if current in self.message_widgets:
+                return self.message_widgets.index(current) + 1  # offset for system message
+            current = current.get_parent()
+        return getattr(widget, "message_index", None)
+
+    def _normalize_chat_id(self, chat_id: str) -> str:
+        """Normalize chat IDs by stripping the .json suffix."""
+        if not chat_id:
+            return ""
+        return chat_id[:-5] if chat_id.endswith(".json") else chat_id
 
     def create_history_context_menu(self, history_row):
         """Create a context menu for chat history items."""

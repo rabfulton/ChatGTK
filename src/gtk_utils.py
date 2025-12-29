@@ -37,7 +37,7 @@ def parse_color_to_rgba(color_str):
     return rgba
 
 
-def insert_resized_image(buffer, iter, img_path, text_view=None, window=None):
+def insert_resized_image(buffer, iter, img_path, text_view=None, window=None, message_index=None):
     """Insert an image into the text buffer with responsive sizing.
 
     The image will shrink to fit the available width in the TextView while
@@ -76,6 +76,13 @@ def insert_resized_image(buffer, iter, img_path, text_view=None, window=None):
                     save_item = Gtk.MenuItem(label="Save Image As...")
                     save_item.connect("activate", lambda w: window.save_image_to_file(img_path))
                     menu.append(save_item)
+                    resolved_index = message_index
+                    if hasattr(window, "_resolve_message_index_for_widget"):
+                        resolved_index = window._resolve_message_index_for_widget(widget)
+                    if resolved_index is not None and hasattr(window, "on_delete_message"):
+                        delete_item = Gtk.MenuItem(label="Delete Message")
+                        delete_item.connect("activate", lambda w: window.on_delete_message(w, resolved_index))
+                        menu.append(delete_item)
                     menu.show_all()
                     menu.popup_at_pointer(event)
                     return True
