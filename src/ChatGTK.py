@@ -48,7 +48,7 @@ from markup_utils import (
 )
 from gi.repository import Gdk
 from datetime import datetime
-from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG
+from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, SETTINGS_FILE
 from tools import (
     ToolManager,
     is_chat_completion_model,
@@ -92,6 +92,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Initialize the controller FIRST - it manages state and business logic
         # Must be created before settings sync since property setters delegate to controller
         self.controller = ChatController()
+        self._apply_theme_color_defaults()
         # Defer provider initialization to keep startup responsive
         GLib.idle_add(self._init_providers_deferred)
 
@@ -371,6 +372,28 @@ class OpenAIGTKClient(Gtk.Window):
         self.connect("window-state-event", self.on_window_state_event)
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self._on_global_key_press)
+
+    def _apply_theme_color_defaults(self) -> None:
+        """Set first-run message colors based on the active GTK theme."""
+        settings_path = Path(SETTINGS_FILE)
+        if settings_path.exists():
+            return
+
+        context = self.get_style_context()
+        theme_color = context.get_color(Gtk.StateFlags.NORMAL)
+        if not theme_color:
+            return
+
+        red = int(theme_color.red * 255)
+        green = int(theme_color.green * 255)
+        blue = int(theme_color.blue * 255)
+        color_hex = f"#{red:02X}{green:02X}{blue:02X}"
+
+        self.settings.set_many(
+            {"AI_COLOR": color_hex, "USER_COLOR": color_hex},
+            emit_event=False,
+        )
+        self.settings.save()
 
     def _init_providers_deferred(self) -> bool:
         """Initialize providers after UI is shown."""
