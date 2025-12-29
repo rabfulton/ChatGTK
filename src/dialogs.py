@@ -5009,6 +5009,8 @@ class ToolsDialog(Gtk.Dialog):
         from model_cards import get_card
         card = get_card(current_model) if current_model else None
         self.is_gemini = card and card.provider == "gemini" if card else False
+        model_id = card.id if card else (current_model or "")
+        self.is_grok3 = model_id.lower() in ("grok-3", "grok-3-mini")
 
         box = self.get_content_area()
         box.set_spacing(6)
@@ -5109,6 +5111,8 @@ class ToolsDialog(Gtk.Dialog):
         if self.is_gemini:
             self.switch_web_search.connect("notify::active", self._on_gemini_web_search_toggled)
             self._on_gemini_web_search_toggled(self.switch_web_search, None)
+        if self.is_grok3:
+            self.switch_web_search.connect("notify::active", self._on_grok_web_search_toggled)
 
         if not self.tool_use_supported:
             frame = Gtk.Frame()
@@ -5167,6 +5171,38 @@ class ToolsDialog(Gtk.Dialog):
             frame.add(notice_box)
             box.pack_start(frame, False, False, 0)
 
+        # Grok-3 web search limitation notice
+        if self.is_grok3:
+            frame = Gtk.Frame()
+            frame.set_shadow_type(Gtk.ShadowType.IN)
+            frame.set_margin_top(6)
+            frame.set_margin_bottom(0)
+            frame.set_margin_start(12)
+            frame.set_margin_end(12)
+
+            notice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            notice_box.set_margin_top(8)
+            notice_box.set_margin_bottom(8)
+            notice_box.set_margin_start(8)
+            notice_box.set_margin_end(8)
+
+            info_icon = Gtk.Image.new_from_icon_name("dialog-warning-symbolic", Gtk.IconSize.MENU)
+            notice_box.pack_start(info_icon, False, False, 0)
+
+            self.grok_notice = Gtk.Label(
+                label="Grok-3 models do not support native Web Search (web_search/x_search).",
+                xalign=0,
+            )
+            self.grok_notice.set_line_wrap(True)
+            self.grok_notice.set_line_wrap_mode(Pango.WrapMode.WORD)
+            notice_box.pack_start(self.grok_notice, True, True, 0)
+
+            frame.add(notice_box)
+            frame.set_visible(False)
+            self.grok_notice_frame = frame
+            box.pack_start(frame, False, False, 0)
+            self._on_grok_web_search_toggled(self.switch_web_search, None)
+
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("OK", Gtk.ResponseType.OK)
 
@@ -5186,6 +5222,11 @@ class ToolsDialog(Gtk.Dialog):
             self.switch_read_aloud_tool.set_active(False)
             self.switch_search_tool.set_active(False)
             self.switch_text_edit_tool.set_active(False)
+
+    def _on_grok_web_search_toggled(self, switch, _pspec):
+        """Show a warning when web search is enabled for Grok-3 models."""
+        if hasattr(self, "grok_notice_frame"):
+            self.grok_notice_frame.set_visible(switch.get_active())
 
     def get_tool_settings(self):
         """Return the tool settings from the dialog."""

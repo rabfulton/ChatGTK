@@ -2344,6 +2344,10 @@ class GrokProvider(AIProvider):
         if not model:
             return False
 
+        model_lower = model.lower()
+        if model_lower in ("grok-3", "grok-3-mini"):
+            return False
+
         # Check model card for web_search capability
         card = get_card(model)
         if card:

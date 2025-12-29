@@ -1284,13 +1284,13 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         id="grok-3",
         provider="grok",
         display_name="Grok-3",
-        capabilities=Capabilities(text=True, vision=True, tool_use=True, web_search=True),
+        capabilities=Capabilities(text=True, vision=True, tool_use=True, web_search=False),
     ),
     "grok-3-mini": ModelCard(
         id="grok-3-mini",
         provider="grok",
         display_name="Grok-3 Mini",
-        capabilities=Capabilities(text=True, vision=True, tool_use=True, web_search=True),
+        capabilities=Capabilities(text=True, vision=True, tool_use=True, web_search=False),
     ),
     "grok-4-0709": ModelCard(
         id="grok-4-0709",
