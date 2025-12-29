@@ -482,15 +482,21 @@ class DocumentView(UIComponent):
     def _show_summary_popover(self, summary: str) -> None:
         """Show a summary popover above the input bar."""
         anchor = getattr(self, '_popover_anchor', None) or self._text_view
-        
+        base_width = anchor.get_allocated_width() or self._text_view.get_allocated_width()
+        popover_width = int(base_width * 0.7) if base_width else 420
+
         popover = Gtk.Popover()
         popover.set_relative_to(anchor)
         popover.set_position(Gtk.PositionType.TOP)
+        popover.set_size_request(popover_width, -1)
         
         event_box = Gtk.EventBox()
         event_box.connect("button-press-event", lambda w, e: popover.popdown())
         
         label = Gtk.Label(label=f"✓ {summary}")
+        label.set_line_wrap(True)
+        label.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        label.set_xalign(0.0)
         label.set_margin_start(12)
         label.set_margin_end(12)
         label.set_margin_top(8)
