@@ -747,6 +747,7 @@ class OpenAIGTKClient(Gtk.Window):
             create_save_button=self.create_save_button,
             create_copy_button=self.create_copy_button,
             create_undo_button=self.create_undo_button,
+            on_update_message_text=self._on_message_text_updated,
         )
         self.message_renderer = MessageRenderer(
             settings=settings,
@@ -1387,8 +1388,7 @@ class OpenAIGTKClient(Gtk.Window):
         index = event.data.get('index', 0)
         # Only handle if source is controller (avoid double-display)
         if event.source == 'controller':
-            formatted = format_response(content)
-            GLib.idle_add(lambda: self.append_message('user', formatted, index))
+            GLib.idle_add(lambda: self.append_message('user', content, index))
             # Track last active chat when chat ID is assigned (first user message)
             last_active_chat = self.settings.get('LAST_ACTIVE_CHAT', '')
             if self.current_chat_id and last_active_chat != self.current_chat_id:
@@ -1409,7 +1409,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Only handle if source is controller
         if event.source == 'controller':
-            GLib.idle_add(lambda: self.append_message('ai', formatted, index))
+            GLib.idle_add(lambda: self.append_message('ai', content, index))
             
             # Read aloud if enabled (skip audio models)
             card = get_card(model, self.custom_models)
@@ -2002,8 +2002,7 @@ class OpenAIGTKClient(Gtk.Window):
         msg_index = len(self.conversation_history)
         assistant_msg = create_assistant_message(content)
         self.conversation_history.append(assistant_msg)
-        formatted = format_response(content)
-        GLib.idle_add(lambda idx=msg_index, msg=formatted: self.append_message('ai', msg, idx))
+        GLib.idle_add(lambda idx=msg_index, msg=content: self.append_message('ai', msg, idx))
         GLib.idle_add(self.save_current_chat)
 
     def _on_realtime_user_transcript(self, transcript: str):
@@ -2013,8 +2012,7 @@ class OpenAIGTKClient(Gtk.Window):
         msg_index = len(self.conversation_history)
         user_msg = create_user_message(transcript)
         self.conversation_history.append(user_msg)
-        formatted = format_response(transcript)
-        GLib.idle_add(lambda idx=msg_index, msg=formatted: self.append_message('user', msg, idx))
+        GLib.idle_add(lambda idx=msg_index, msg=transcript: self.append_message('user', msg, idx))
         GLib.idle_add(self.save_current_chat)
 
     def _on_realtime_assistant_transcript(self, transcript: str):
@@ -2024,8 +2022,7 @@ class OpenAIGTKClient(Gtk.Window):
         msg_index = len(self.conversation_history)
         assistant_msg = create_assistant_message(transcript)
         self.conversation_history.append(assistant_msg)
-        formatted = format_response(transcript)
-        GLib.idle_add(lambda idx=msg_index, msg=formatted: self.append_message('ai', msg, idx))
+        GLib.idle_add(lambda idx=msg_index, msg=transcript: self.append_message('ai', msg, idx))
         GLib.idle_add(self.save_current_chat)
 
     def append_message(self, sender, message_text, message_index: int = None):
@@ -2949,6 +2946,9 @@ class OpenAIGTKClient(Gtk.Window):
         if not self.conversation_history or len(self.conversation_history) <= 1:
             # No conversation to reload (only system message)
             return False
+
+        if hasattr(self, "message_renderer"):
+            self.message_renderer.set_scroll_suppressed(True)
         
         # Save current scroll position
         scrolled_window = None
@@ -2967,15 +2967,18 @@ class OpenAIGTKClient(Gtk.Window):
             child.destroy()
         self.message_widgets.clear()
         
-        # Rebuild conversation display with formatting
-        for idx, message in enumerate(self.conversation_history):
-            if message['role'] != 'system':  # Skip system message
-                message_index = idx
-                if message['role'] == 'user':
-                    self.append_message('user', message['content'], message_index)
-                elif message['role'] == 'assistant':
-                    formatted_content = format_response(message['content'])
-                    self.append_message('ai', formatted_content, message_index)
+        try:
+            # Rebuild conversation display with formatting
+            for idx, message in enumerate(self.conversation_history):
+                if message['role'] != 'system':  # Skip system message
+                    message_index = idx
+                    if message['role'] == 'user':
+                        self.append_message('user', message['content'], message_index)
+                    elif message['role'] == 'assistant':
+                        self.append_message('ai', message['content'], message_index)
+        finally:
+            if hasattr(self, "message_renderer"):
+                self.message_renderer.set_scroll_suppressed(False)
         
         # Restore scroll position
         if scrolled_window and scroll_position > 0:
@@ -3263,11 +3266,9 @@ class OpenAIGTKClient(Gtk.Window):
                     # Use display_content if available, otherwise fall back to content
                     content = message.get('display_content') or message['content']
                     if message['role'] == 'user':
-                        formatted_content = format_response(content)
-                        self.append_message('user', formatted_content, message_index)
+                        self.append_message('user', content, message_index)
                     elif message['role'] == 'assistant':
-                        formatted_content = format_response(message['content'])
-                        self.append_message('ai', formatted_content, message_index)
+                        self.append_message('ai', message['content'], message_index)
             
             # Scroll to the beginning of the conversation
             def scroll_to_top():
@@ -3377,6 +3378,17 @@ class OpenAIGTKClient(Gtk.Window):
     def on_delete_message(self, _menu_item, message_index: int):
         """Menu callback to delete a message."""
         self.delete_message(message_index)
+
+    def _on_message_text_updated(self, message_index: int, new_text: str) -> None:
+        """Update a message's raw content after inline edits."""
+        if message_index <= 0 or message_index >= len(self.conversation_history):
+            return
+        message = self.conversation_history[message_index]
+        message["content"] = new_text
+        if "display_content" in message:
+            message["display_content"] = new_text
+        self.save_current_chat()
+        GLib.idle_add(self._reload_current_conversation)
 
     def _resolve_message_index_for_widget(self, widget) -> Optional[int]:
         """Resolve the current message index for a widget inside the message list."""

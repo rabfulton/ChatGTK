@@ -15,7 +15,7 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('GtkSource', '4')
 from gi.repository import Gtk, GtkSource, Gdk, GLib, Pango
 
-from markup_utils import process_inline_markup, process_text_formatting
+from markup_utils import format_response, process_inline_markup, process_text_formatting
 from latex_utils import process_tex_markup, insert_tex_image
 from gtk_utils import insert_resized_image
 
@@ -43,6 +43,7 @@ class RenderCallbacks:
     create_save_button: Optional[Callable[[str], Gtk.Widget]] = None  # (image_path) -> button
     create_copy_button: Optional[Callable[[int], Gtk.Widget]] = None  # (msg_index) -> button
     create_undo_button: Optional[Callable[[int], Gtk.Widget]] = None  # (msg_index) -> button
+    on_update_message_text: Optional[Callable[[int, str], None]] = None  # (msg_index, new_text)
 
 
 class MessageRenderer:
@@ -63,6 +64,9 @@ class MessageRenderer:
         self.message_widgets = message_widgets
         self.window = window
         self.current_chat_id = current_chat_id
+        self._raw_message_text_by_index = {}
+        self._raw_blocks_by_index = {}
+        self._suppress_scroll = False
 
     def update_chat_id(self, chat_id: str):
         """Update the current chat ID for image paths."""
@@ -70,6 +74,8 @@ class MessageRenderer:
 
     def _scroll_to_widget(self, widget: Gtk.Widget):
         """Scroll so the widget is at the top of the visible area."""
+        if self._suppress_scroll:
+            return
         def do_scroll():
             # Find the ScrolledWindow ancestor
             sw = self.conversation_box
@@ -90,6 +96,10 @@ class MessageRenderer:
         
         # Wait for layout to complete
         GLib.timeout_add(50, do_scroll)
+
+    def set_scroll_suppressed(self, suppressed: bool) -> None:
+        """Control auto-scrolling when appending messages."""
+        self._suppress_scroll = bool(suppressed)
 
     def _apply_css_override(self, widget, css_string: str):
         """Apply CSS with USER priority to override existing styles."""
@@ -190,8 +200,13 @@ class MessageRenderer:
         else:
             self.append_ai_message(text, index)
 
-    def append_user_message(self, text: str, message_index: int):
+    def append_user_message(self, raw_text: str, message_index: int):
         """Add a user message as a styled box with markdown support."""
+        formatted_text = format_response(raw_text)
+        raw_blocks = self._split_raw_blocks(raw_text)
+        self._raw_message_text_by_index[message_index] = raw_text
+        self._raw_blocks_by_index[message_index] = raw_blocks
+
         # Wrap in EventBox to receive button events
         event_box = Gtk.EventBox()
         event_box.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
@@ -215,7 +230,15 @@ class MessageRenderer:
         content_container.pack_start(lbl_name, False, False, 0)
         
         # Render markdown content
-        self._render_message_content(text, message_index, content_container, self.settings.user_color)
+        block_state = {"index": 0}
+        self._render_message_content(
+            formatted_text,
+            message_index,
+            content_container,
+            self.settings.user_color,
+            raw_blocks=raw_blocks,
+            block_state=block_state,
+        )
 
         event_box.add(content_container)
 
@@ -237,8 +260,13 @@ class MessageRenderer:
         
         self._scroll_to_widget(event_box)
 
-    def append_ai_message(self, message_text: str, message_index: int):
+    def append_ai_message(self, raw_text: str, message_index: int):
         """Add an AI message with code blocks, tables, and images."""
+        formatted_text = format_response(raw_text)
+        raw_blocks = self._split_raw_blocks(raw_text)
+        self._raw_message_text_by_index[message_index] = raw_text
+        self._raw_blocks_by_index[message_index] = raw_blocks
+
         # Container for the entire AI response
         response_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         response_container.set_events(Gdk.EventMask.BUTTON_PRESS_MASK)
@@ -267,8 +295,14 @@ class MessageRenderer:
         content_container.pack_start(header_box, False, False, 0)
         
         # Render markdown content
+        block_state = {"index": 0}
         full_text_segments = self._render_message_content(
-            message_text, message_index, content_container, self.settings.ai_color
+            formatted_text,
+            message_index,
+            content_container,
+            self.settings.ai_color,
+            raw_blocks=raw_blocks,
+            block_state=block_state,
         )
                     
         # Create speech button and add to header
@@ -287,7 +321,7 @@ class MessageRenderer:
         
         # Add edit button if message contains a generated image (not LaTeX math)
         if self.callbacks.create_edit_button or self.callbacks.create_save_button:
-            img_matches = re.findall(r'<img src="([^"]+)"/>', message_text)
+            img_matches = re.findall(r'<img src="([^"]+)"/>', formatted_text)
             for img_path in img_matches:
                 if not self._is_latex_math_image(img_path):
                     if self.callbacks.create_edit_button:
@@ -329,6 +363,149 @@ class MessageRenderer:
             return False
         return bool(message.get("text_edit_events"))
 
+    def _split_raw_blocks(self, raw_text: str) -> List[dict]:
+        """Split raw markdown into paragraph-like blocks with separators."""
+        parts = re.split(r'(\n\s*\n)', raw_text)
+        blocks = []
+        for idx in range(0, len(parts), 2):
+            block_text = parts[idx]
+            separator = parts[idx + 1] if idx + 1 < len(parts) else ""
+            blocks.append({
+                "text": block_text,
+                "separator": separator,
+                "editable": self._is_editable_block(block_text),
+            })
+        return blocks
+
+    def _split_formatted_blocks(self, text: str) -> List[str]:
+        """Split formatted text into paragraph-like blocks."""
+        parts = re.split(r'\n\s*\n', text)
+        return parts if parts else [text]
+
+    def _is_editable_block(self, block_text: str) -> bool:
+        """Return True for blocks that are safe for inline editing."""
+        stripped = block_text.strip()
+        if not stripped:
+            return False
+        if "```" in stripped:
+            return False
+        if re.fullmatch(r'[*_-]{3,}', stripped.replace(" ", "")):
+            return False
+        if re.search(r'^\s*\|?.+\|.+\n\s*\|?\s*[:\-| ]+\|', block_text, re.MULTILINE):
+            return False
+        return True
+
+    def _next_editable_block_index(self, raw_blocks: List[dict], block_state: dict) -> Optional[int]:
+        while block_state["index"] < len(raw_blocks):
+            idx = block_state["index"]
+            block_state["index"] += 1
+            if raw_blocks[idx]["editable"]:
+                return idx
+        return None
+
+    def _attach_text_block_editor(
+        self,
+        text_view: Gtk.TextView,
+        message_index: Optional[int],
+        raw_blocks: Optional[List[dict]],
+        block_state: Optional[dict],
+        on_update_message_text: Optional[Callable[[int, str], None]] = None,
+    ) -> None:
+        if message_index is None or not raw_blocks or block_state is None:
+            return
+        update_cb = on_update_message_text or self.callbacks.on_update_message_text
+        if not update_cb:
+            return
+        block_index = self._next_editable_block_index(raw_blocks, block_state)
+        if block_index is None:
+            return
+        text_view._edit_message_index = message_index
+        text_view._edit_block_index = block_index
+        text_view._edit_on_update = update_cb
+
+    def _show_block_edit_popover(self, text_view: Gtk.TextView) -> None:
+        message_index = getattr(text_view, "_edit_message_index", None)
+        block_index = getattr(text_view, "_edit_block_index", None)
+        update_cb = getattr(text_view, "_edit_on_update", None)
+        if message_index is None or block_index is None:
+            return
+        raw_text = self._raw_message_text_by_index.get(message_index, "")
+        blocks = self._split_raw_blocks(raw_text)
+        if block_index >= len(blocks):
+            return
+
+        popover = Gtk.Popover.new(text_view)
+        popover.set_position(Gtk.PositionType.TOP)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+
+        label = Gtk.Label(label="Edit block (markdown preserved)")
+        label.set_xalign(0)
+        box.pack_start(label, False, False, 0)
+
+        editor = Gtk.TextView()
+        editor.set_wrap_mode(Gtk.WrapMode.WORD)
+        editor.set_editable(True)
+        editor.set_cursor_visible(True)
+        editor.set_left_margin(8)
+        editor.set_right_margin(8)
+        editor_buffer = editor.get_buffer()
+        editor_buffer.set_text(blocks[block_index]["text"])
+
+        editor_scrolled = Gtk.ScrolledWindow()
+        editor_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        editor_scrolled.set_min_content_height(120)
+        editor_scrolled.set_min_content_width(360)
+        editor_scrolled.add(editor)
+        box.pack_start(editor_scrolled, True, True, 0)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        buttons.set_halign(Gtk.Align.END)
+        cancel_btn = Gtk.Button(label="Cancel")
+        save_btn = Gtk.Button(label="Save")
+        buttons.pack_start(cancel_btn, False, False, 0)
+        buttons.pack_start(save_btn, False, False, 0)
+        box.pack_start(buttons, False, False, 0)
+
+        cancel_btn.connect("clicked", lambda *_: popover.popdown())
+
+        def on_save(_button):
+            new_text = editor_buffer.get_text(
+                editor_buffer.get_start_iter(),
+                editor_buffer.get_end_iter(),
+                True,
+            )
+            self._apply_block_edit(message_index, block_index, new_text, update_cb)
+            popover.popdown()
+
+        save_btn.connect("clicked", on_save)
+
+        popover.add(box)
+        popover.show_all()
+
+    def _apply_block_edit(
+        self,
+        message_index: int,
+        block_index: int,
+        new_text: str,
+        on_update_message_text: Optional[Callable[[int, str], None]] = None,
+    ) -> None:
+        raw_text = self._raw_message_text_by_index.get(message_index, "")
+        blocks = self._split_raw_blocks(raw_text)
+        if block_index >= len(blocks):
+            return
+        blocks[block_index]["text"] = new_text
+        new_raw = "".join(block["text"] + block["separator"] for block in blocks)
+        self._raw_message_text_by_index[message_index] = new_raw
+        self._raw_blocks_by_index[message_index] = blocks
+        update_cb = on_update_message_text or self.callbacks.on_update_message_text
+        if update_cb:
+            update_cb(message_index, new_raw)
+
     def _attach_popup_to_text_view(self, text_view: Gtk.TextView, message_index: int):
         """Attach right-click popup menu to text view."""
         text_view.message_index = message_index
@@ -346,13 +523,33 @@ class MessageRenderer:
 
         text_view.connect("populate-popup", on_text_view_populate_popup)
 
-    def render_rich_content(self, container: Gtk.Box, message_text: str, text_color: str) -> List[str]:
+    def render_rich_content(
+        self,
+        container: Gtk.Box,
+        message_text: str,
+        text_color: str,
+        raw_text: Optional[str] = None,
+        message_index: Optional[int] = None,
+        on_update_message_text: Optional[Callable[[int, str], None]] = None,
+    ) -> List[str]:
         """Render rich text into a container without message-specific UI."""
+        raw_blocks = None
+        block_state = None
+        if raw_text is not None:
+            raw_blocks = self._split_raw_blocks(raw_text)
+            block_state = {"index": 0}
+            if message_index is None:
+                message_index = -1
+            self._raw_message_text_by_index[message_index] = raw_text
+            self._raw_blocks_by_index[message_index] = raw_blocks
         return self._render_message_content(
             message_text=message_text,
-            message_index=None,
+            message_index=message_index,
             container=container,
             text_color=text_color,
+            raw_blocks=raw_blocks,
+            block_state=block_state,
+            on_update_message_text=on_update_message_text,
             allow_context_menu=False,
         )
 
@@ -362,6 +559,9 @@ class MessageRenderer:
         message_index: Optional[int],
         container: Gtk.Box,
         text_color: str,
+        raw_blocks: Optional[list] = None,
+        block_state: Optional[dict] = None,
+        on_update_message_text: Optional[Callable[[int, str], None]] = None,
         allow_context_menu: bool = True,
     ) -> List[str]:
         """Render message text into a container, supporting code blocks, tables, etc."""
@@ -440,18 +640,27 @@ class MessageRenderer:
                     seg = seg[1:]
                 if seg.endswith('\n'):
                     seg = seg[:-1]
-                    
-                if seg.strip():
+
+                for block in self._split_formatted_blocks(seg):
+                    if not block.strip():
+                        continue
                     processed = process_tex_markup(
-                        seg, self.settings.latex_color, 
+                        block, self.settings.latex_color,
                         self.current_chat_id, self.settings.source_theme,
                         self.settings.latex_dpi
                     )
-                    
+
                     if "<img" in processed:
                         text_view = self._create_text_view("", text_color)
                         if allow_context_menu and message_index is not None:
                             self._attach_popup_to_text_view(text_view, message_index)
+                        self._attach_text_block_editor(
+                            text_view,
+                            message_index,
+                            raw_blocks,
+                            block_state,
+                            on_update_message_text=on_update_message_text,
+                        )
                         buffer = text_view.get_buffer()
                         parts = re.split(r'(<img src="[^"]+"/>)', processed)
                         for part in parts:
@@ -479,8 +688,15 @@ class MessageRenderer:
                         text_view = self._create_text_view(processed, text_color)
                         if allow_context_menu and message_index is not None:
                             self._attach_popup_to_text_view(text_view, message_index)
+                        self._attach_text_block_editor(
+                            text_view,
+                            message_index,
+                            raw_blocks,
+                            block_state,
+                            on_update_message_text=on_update_message_text,
+                        )
                         container.pack_start(text_view, False, False, 0)
-                    full_text.append(seg)
+                    full_text.append(block)
         
         return full_text
 
@@ -568,6 +784,14 @@ class MessageRenderer:
 
         # Link click handling
         def on_button_press(view, event):
+            if (
+                event.type == Gdk.EventType._2BUTTON_PRESS
+                and event.button == 1
+                and getattr(view, "_edit_block_index", None) is not None
+                and (self.callbacks.on_update_message_text or getattr(view, "_edit_on_update", None))
+            ):
+                self._show_block_edit_popover(view)
+                return True
             if event.button == 1:
                 window_type = view.get_window_type(event.window)
                 if window_type is None:

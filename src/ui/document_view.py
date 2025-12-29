@@ -165,6 +165,7 @@ class DocumentView(UIComponent):
         self._preview_toggle.set_tooltip_text("Toggle Preview (Ctrl+P)")
         self._preview_toggle.connect("toggled", self._on_preview_toggled)
         header_box.pack_start(self._preview_toggle, False, False, 0)
+        GLib.idle_add(self._set_preview_toggle_width)
 
         # Editing tools centered in the toolbar
         self._markdown_toolbar = MarkdownToolbar(
@@ -247,12 +248,27 @@ class DocumentView(UIComponent):
         self._text_view.get_style_context().add_provider(
             css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
+
+    def _set_preview_toggle_width(self) -> bool:
+        """Lock the preview toggle width to the wider of its labels."""
+        if not hasattr(self, "_preview_toggle") or not self._preview_toggle:
+            return False
+        current_label = self._preview_toggle.get_label() or "Preview"
+        widths = []
+        for label in ("Preview", "Edit"):
+            self._preview_toggle.set_label(label)
+            widths.append(self._preview_toggle.get_preferred_width()[1])
+        self._preview_toggle.set_label(current_label)
+        if widths:
+            self._preview_toggle.set_size_request(max(widths), -1)
+        return False
     
     def _on_preview_toggled(self, button: Gtk.ToggleButton) -> None:
         """Handle preview toggle."""
         if self._updating_preview_state:
             return
         self._in_preview_mode = button.get_active()
+        self._preview_toggle.set_label("Edit" if self._in_preview_mode else "Preview")
         if self._in_preview_mode:
             # Save current content and render preview
             self._current_content = self.get_content()
@@ -313,8 +329,17 @@ class DocumentView(UIComponent):
             content_container,
             processed,
             self._preview_text_color,
+            raw_text=content,
+            message_index=-1,
+            on_update_message_text=self._on_preview_block_updated,
         )
         self._preview_box.show_all()
+
+    def _on_preview_block_updated(self, _message_index: int, new_text: str) -> None:
+        """Apply a preview block edit back into the document content."""
+        self.set_content(new_text)
+        if self._on_content_changed:
+            self._on_content_changed(new_text)
     
     def _apply_css(self, widget: Gtk.Widget, css: str) -> None:
         """Apply CSS to a widget."""
@@ -534,6 +559,7 @@ class DocumentView(UIComponent):
             enabled = bool(enabled)
             self._preview_toggle.set_active(enabled)
             self._in_preview_mode = enabled
+            self._preview_toggle.set_label("Edit" if self._in_preview_mode else "Preview")
             if self._in_preview_mode:
                 self._current_content = self.get_content()
                 self._render_preview()
