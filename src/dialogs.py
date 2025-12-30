@@ -4470,6 +4470,7 @@ class SettingsDialog(Gtk.Dialog):
         if hasattr(self, 'row_prompt_template'):
             if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview") and not is_custom_tts:
                 self.row_prompt_template.show()
+            else:
                 self.row_prompt_template.hide()
 
     def _on_tts_provider_changed(self, combo):
