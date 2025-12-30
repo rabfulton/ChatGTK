@@ -43,11 +43,23 @@ INSTALL_DIR=$(pwd)
 echo "Creating launcher script..."
 cat << EOF > chatgtk-launcher.sh
 #!/bin/bash
-export OPENAI_API_KEY="${api_key}"
-export GEMINI_API_KEY="${gemini_key}"
-export GROK_API_KEY="${grok_key}"
-export CLAUDE_API_KEY="${claude_key}"
-export ANTHROPIC_API_KEY="${claude_key}"
+EOF
+
+if [ -n "$api_key" ]; then
+    echo "export OPENAI_API_KEY=\"${api_key}\"" >> chatgtk-launcher.sh
+fi
+if [ -n "$gemini_key" ]; then
+    echo "export GEMINI_API_KEY=\"${gemini_key}\"" >> chatgtk-launcher.sh
+fi
+if [ -n "$grok_key" ]; then
+    echo "export GROK_API_KEY=\"${grok_key}\"" >> chatgtk-launcher.sh
+fi
+if [ -n "$claude_key" ]; then
+    echo "export CLAUDE_API_KEY=\"${claude_key}\"" >> chatgtk-launcher.sh
+    echo "export ANTHROPIC_API_KEY=\"${claude_key}\"" >> chatgtk-launcher.sh
+fi
+
+cat << EOF >> chatgtk-launcher.sh
 cd "${INSTALL_DIR}"
 exec python3 src/ChatGTK.py
 EOF
