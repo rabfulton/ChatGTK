@@ -823,7 +823,7 @@ class MessageRenderer:
                 return True
             if event.button == 1:
                 window_type = view.get_window_type(event.window)
-                if window_type is None:
+                if window_type is None or window_type != Gtk.TextWindowType.TEXT:
                     return False
 
                 x, y = view.window_to_buffer_coords(window_type, int(event.x), int(event.y))

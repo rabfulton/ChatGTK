@@ -1120,7 +1120,7 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         id="gemini-3-pro-image-preview",
         provider="gemini",
         display_name="Gemini 3 Pro Image Preview",
-        capabilities=Capabilities(text=True, image_gen=True, image_edit=True),
+        capabilities=Capabilities(text=True, image_gen=True, image_edit=True, tool_use=True),
         quirks={"multimodal_image_gen": True},
     ),
 
