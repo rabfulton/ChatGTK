@@ -83,6 +83,9 @@ You will need at least one API key for the application to function. Alternativel
 *Image Generation*
 ![Image Generation](screenshots/images.png)
 
+*Document Mode*
+![Image Generation](screenshots/document.png)
+
 ## Getting API keys
 
 - **OpenAI API key**  
