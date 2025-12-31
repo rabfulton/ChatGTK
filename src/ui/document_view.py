@@ -144,14 +144,72 @@ class DocumentView(UIComponent):
         preview_scrolled.add(self._preview_box)
         self._mode_stack.add_named(preview_scrolled, "preview")
         
-        # Toolbar (built after text view so actions can bind to it)
+        # Toolbar + find bar (built after text view so actions can bind to it)
         toolbar = self._build_toolbar()
+        find_bar = self._build_find_bar()
         container.pack_start(toolbar, False, False, 0)
+        container.pack_start(find_bar, False, False, 0)
         container.pack_start(self._mode_stack, True, True, 0)
 
         self._refresh_undo_redo_state()
         
         return container
+
+    def _build_find_bar(self) -> Gtk.Revealer:
+        """Build the find/replace bar."""
+        self._search_settings = GtkSource.SearchSettings()
+        self._search_context = GtkSource.SearchContext.new(self._buffer, self._search_settings)
+
+        self._find_revealer = Gtk.Revealer()
+        self._find_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self._find_revealer.set_reveal_child(False)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+        box.set_margin_top(4)
+        box.set_margin_bottom(4)
+
+        self._find_entry = Gtk.Entry()
+        self._find_entry.set_placeholder_text("Find")
+        self._find_entry.set_hexpand(True)
+        self._find_entry.connect("key-press-event", self._on_find_entry_key_press)
+        self._find_entry.connect("activate", self._on_find_next_activated)
+        self._find_entry.connect("changed", self._on_find_text_changed)
+        box.pack_start(self._find_entry, True, True, 0)
+
+        self._replace_entry = Gtk.Entry()
+        self._replace_entry.set_placeholder_text("Replace")
+        self._replace_entry.set_hexpand(True)
+        box.pack_start(self._replace_entry, True, True, 0)
+
+        prev_btn = Gtk.Button.new_from_icon_name("go-up-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        prev_btn.set_tooltip_text("Find previous")
+        prev_btn.connect("clicked", lambda _w: self._find_previous())
+        box.pack_start(prev_btn, False, False, 0)
+
+        next_btn = Gtk.Button.new_from_icon_name("go-down-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        next_btn.set_tooltip_text("Find next")
+        next_btn.connect("clicked", lambda _w: self._find_next())
+        box.pack_start(next_btn, False, False, 0)
+
+        replace_btn = Gtk.Button(label="Replace")
+        replace_btn.set_tooltip_text("Replace selection")
+        replace_btn.connect("clicked", lambda _w: self._replace_one())
+        box.pack_start(replace_btn, False, False, 0)
+
+        replace_all_btn = Gtk.Button(label="Replace all")
+        replace_all_btn.set_tooltip_text("Replace all matches")
+        replace_all_btn.connect("clicked", lambda _w: self._replace_all())
+        box.pack_start(replace_all_btn, False, False, 0)
+
+        close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        close_btn.set_tooltip_text("Close find")
+        close_btn.connect("clicked", lambda _w: self._toggle_find_bar(False))
+        box.pack_start(close_btn, False, False, 0)
+
+        self._find_revealer.add(box)
+        return self._find_revealer
     
     def _build_toolbar(self) -> Gtk.Box:
         """Build the document toolbar."""
@@ -216,6 +274,13 @@ class DocumentView(UIComponent):
         copy_btn.set_tooltip_text("Copy all")
         copy_btn.connect("clicked", lambda w: self._on_copy() if self._on_copy else None)
         right_box.pack_start(copy_btn, False, False, 0)
+
+        # Find button
+        find_btn = Gtk.Button()
+        find_btn.set_image(Gtk.Image.new_from_icon_name("system-search-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
+        find_btn.set_tooltip_text("Find / Replace (Ctrl+F)")
+        find_btn.connect("clicked", lambda _w: self._toggle_find_bar())
+        right_box.pack_start(find_btn, False, False, 0)
         
         # Export button
         export_btn = Gtk.Button()
@@ -610,7 +675,107 @@ class DocumentView(UIComponent):
         if key_name == "y":
             self._redo()
             return True
+        if key_name == "f" and not (event.state & Gdk.ModifierType.SHIFT_MASK):
+            if hasattr(self, "_find_revealer") and self._find_revealer.get_reveal_child():
+                self._toggle_find_bar(False)
+                self._text_view.grab_focus()
+            else:
+                self._toggle_find_bar(True)
+            return True
         return False
+
+    def _toggle_find_bar(self, enabled: Optional[bool] = None) -> None:
+        """Show or hide the find/replace bar."""
+        if not hasattr(self, "_find_revealer") or not self._find_revealer:
+            return
+        current = self._find_revealer.get_reveal_child()
+        target = (not current) if enabled is None else bool(enabled)
+        self._find_revealer.set_reveal_child(target)
+        if target:
+            self._find_entry.grab_focus()
+            if self._search_settings.get_search_text():
+                self._find_from_iter(self._buffer.get_start_iter(), focus_editor=False)
+        else:
+            self._search_context.set_highlight(False)
+            self._text_view.grab_focus()
+
+    def _on_find_entry_key_press(self, _widget, event) -> bool:
+        """Handle shortcuts when the find entry has focus."""
+        if not (event.state & Gdk.ModifierType.CONTROL_MASK):
+            return False
+        key_name = Gdk.keyval_name(event.keyval)
+        if not key_name:
+            return False
+        if key_name.lower() == "f":
+            self._toggle_find_bar(False)
+            return True
+        return False
+
+    def _on_find_text_changed(self, entry: Gtk.Entry) -> None:
+        """Update search settings when the find text changes."""
+        text = entry.get_text()
+        self._search_settings.set_search_text(text)
+        self._search_context.set_highlight(bool(text))
+        if text:
+            self._find_from_iter(self._buffer.get_start_iter(), focus_editor=False)
+
+    def _on_find_next_activated(self, _entry: Gtk.Entry) -> None:
+        """Jump to next match when pressing Enter in find entry."""
+        self._find_next()
+
+    def _get_search_start_iter(self, forward: bool = True):
+        buf = self._buffer
+        if buf.get_has_selection():
+            sel_start, sel_end = buf.get_selection_bounds()
+            return sel_end if forward else sel_start
+        return buf.get_iter_at_mark(buf.get_insert())
+
+    def _find_next(self) -> None:
+        """Find the next match."""
+        if not self._search_settings.get_search_text():
+            return
+        start = self._get_search_start_iter(True)
+        self._find_from_iter(start, forward=True)
+
+    def _find_previous(self) -> None:
+        """Find the previous match."""
+        if not self._search_settings.get_search_text():
+            return
+        start = self._get_search_start_iter(False)
+        self._find_from_iter(start, forward=False)
+
+    def _find_from_iter(self, start, forward: bool = True, focus_editor: bool = True) -> None:
+        """Find a match from a starting iterator and select it."""
+        if forward:
+            match, match_start, match_end, _wrapped = self._search_context.forward(start)
+        else:
+            match, match_start, match_end, _wrapped = self._search_context.backward(start)
+        if match:
+            self._buffer.select_range(match_start, match_end)
+            self._text_view.scroll_to_iter(match_start, 0.1, False, 0, 0)
+            if focus_editor:
+                self._text_view.grab_focus()
+
+    def _replace_one(self) -> None:
+        """Replace the current selection if it matches."""
+        if not self._search_settings.get_search_text():
+            return
+        if not self._buffer.get_has_selection():
+            self._find_next()
+            return
+        sel_start, sel_end = self._buffer.get_selection_bounds()
+        replacement = self._replace_entry.get_text()
+        if self._search_context.replace(sel_start, sel_end, replacement, len(replacement)):
+            self._refresh_undo_redo_state()
+            self._find_next()
+
+    def _replace_all(self) -> None:
+        """Replace all matches in the buffer."""
+        if not self._search_settings.get_search_text():
+            return
+        replacement = self._replace_entry.get_text()
+        self._search_context.replace_all(replacement, len(replacement))
+        self._refresh_undo_redo_state()
 
     def _maybe_continue_list(self, event) -> bool:
         """Insert the next list marker on Return when in a list line."""
