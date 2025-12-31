@@ -174,6 +174,29 @@ DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX = (
     "Always provide a short summary of the change."
 )
 
+
+
+DEFAULT_WOLFRAM_TOOL_PROMPT_APPENDIX = r"""
+User can enable the Wolfram Alpha tool.
+- The tool is `wolfram_alpha`.
+- WolframAlpha understands natural language queries about entities in chemistry, physics, geography, history, art, astronomy, and more.
+- WolframAlpha performs mathematical calculations, date and unit conversions, formula solving, etc.
+- Convert inputs to simplified keyword queries whenever possible (e.g. convert "how many people live in France" to "France population").
+- Send queries in English only; translate non-English queries before sending, then respond in the original language.
+- ALWAYS use {"query": query} structure for tool calls; `query` must be a single-line string.
+- The result does not need to be repeated verbatim; trim to the most useful parts and format them clearly.
+- Use LaTeX for math rendering only: '$$\n[expression]\n$$' for standalone cases and '\( [expression] \)' when inline.
+- Use regular Markdown for non-math formatting (lists, headings, links). If Wolfram returns image URLs, render them with Markdown image syntax: ![](URL).
+- Prefer plain-text numbers like `6*10^14` over scientific notation like `6e14`.
+- Never mention your knowledge cutoff date; Wolfram may return more recent data.
+- If data for multiple properties is needed, make separate calls for each property.
+- If a WolframAlpha result is not relevant to the query:
+ -- If Wolfram provides multiple 'Assumptions' for a query, choose the more relevant one(s) without explaining the initial result. If you are unsure, ask the user to choose.
+ -- Re-send the exact same 'query' with NO modifications, and add the 'assumption' parameter, formatted as a list, with the relevant values.
+ -- ONLY simplify or rephrase the initial query if a more relevant 'Assumption' or other input suggestions are not provided.
+ -- Do not explain each step unless user input is needed. Proceed directly to making a better API call based on the available assumptions.
+"""
+
 DEFAULT_DOCUMENT_MODE_PROMPT_APPENDIX = (
     "You are in Document Mode. Your task is to edit the document directly.\n\n"
     "Use apply_text_edit with target=\"document\" to make changes. "
@@ -243,13 +266,19 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the image-generation tool to text models.
     # When false, models will not be told about the tool and cannot call it.
     'IMAGE_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Runtime tool toggle for the Tools menu (persisted across restarts).
+    'TOOL_MENU_IMAGE_ENABLED': {'type': bool, 'default': False},
     # Master switch for exposing the music control tool (beets + local player) to text models.
     # When false, models will not be told about the tool and cannot call it.
     'MUSIC_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Runtime tool toggle for the Tools menu (persisted across restarts).
+    'TOOL_MENU_MUSIC_ENABLED': {'type': bool, 'default': False},
     # Master switch for enabling provider-native web search tools (OpenAI web_search
     # and Gemini google_search). When false, models will not be given access to
     # these web-grounded tools.
     'WEB_SEARCH_ENABLED': {'type': bool, 'default': False},
+    # Runtime tool toggle for the Tools menu (persisted across restarts).
+    'TOOL_MENU_WEB_SEARCH_ENABLED': {'type': bool, 'default': False},
     # Path to the music player executable used for playback (e.g. mpv, vlc).
     'MUSIC_PLAYER_PATH': {'type': str, 'default': '/usr/bin/audacious -p <playlist>'},
     # Directory where music files are stored; used by beets to locate tracks.
@@ -358,11 +387,21 @@ SETTINGS_CONFIG = {
     # Master switch for exposing the read_aloud tool to text models.
     # When false, models will not be told about the tool and cannot call it.
     'READ_ALOUD_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Runtime tool toggle for the Tools menu (persisted across restarts).
+    'TOOL_MENU_READ_ALOUD_ENABLED': {'type': bool, 'default': False},
     # Master switch for exposing the search/memory tool to text models.
     # When enabled, models can search past conversations and configured directories.
     'SEARCH_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Runtime tool toggle for the Tools menu (persisted across restarts).
+    'TOOL_MENU_SEARCH_ENABLED': {'type': bool, 'default': False},
+    # Master switch for exposing the Wolfram Alpha tool to text models.
+    'WOLFRAM_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Runtime tool toggle for the Tools menu (persisted across restarts).
+    'TOOL_MENU_WOLFRAM_ENABLED': {'type': bool, 'default': False},
     # Master switch for exposing the text edit tools to text models.
     'TEXT_EDIT_TOOL_ENABLED': {'type': bool, 'default': False},
+    # Runtime tool toggle for the Tools menu (persisted across restarts).
+    'TOOL_MENU_TEXT_EDIT_ENABLED': {'type': bool, 'default': False},
     # Whether to include the conversation history folder in search tool queries.
     'SEARCH_HISTORY_ENABLED': {'type': bool, 'default': True},
     # Comma-separated list of additional directories to search (for documents, notes, etc.).
@@ -415,6 +454,7 @@ SETTINGS_CONFIG = {
     'READ_ALOUD_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX},
     'SEARCH_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX},
     'TEXT_EDIT_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX},
+    'WOLFRAM_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_WOLFRAM_TOOL_PROMPT_APPENDIX},
     # Keyboard shortcuts - JSON-encoded dict mapping action names to key combos
     'KEYBOARD_SHORTCUTS': {'type': str, 'default': ''},
     # Model shortcuts - JSON-encoded dict mapping model_1..model_5 to model IDs

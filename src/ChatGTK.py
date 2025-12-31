@@ -121,12 +121,14 @@ class OpenAIGTKClient(Gtk.Window):
 
         # UI-only state (not delegated to controller)
         self.message_widgets = []
-        self.image_tool_enabled = bool(self.settings.get('IMAGE_TOOL_ENABLED', True))
-        self.music_tool_enabled = bool(self.settings.get('MUSIC_TOOL_ENABLED', False))
-        self.web_search_enabled = bool(self.settings.get('WEB_SEARCH_ENABLED', False))
-        self.read_aloud_tool_enabled = bool(self.settings.get('READ_ALOUD_TOOL_ENABLED', False))
-        self.search_tool_enabled = bool(self.settings.get('SEARCH_TOOL_ENABLED', False))
-        self.text_edit_tool_enabled = bool(self.settings.get('TEXT_EDIT_TOOL_ENABLED', False))
+        self.image_tool_enabled = bool(self.settings.get('TOOL_MENU_IMAGE_ENABLED', self.settings.get('IMAGE_TOOL_ENABLED', True)))
+        self.music_tool_enabled = bool(self.settings.get('TOOL_MENU_MUSIC_ENABLED', self.settings.get('MUSIC_TOOL_ENABLED', False)))
+        self.web_search_enabled = bool(self.settings.get('TOOL_MENU_WEB_SEARCH_ENABLED', self.settings.get('WEB_SEARCH_ENABLED', False)))
+        self.read_aloud_tool_enabled = bool(self.settings.get('TOOL_MENU_READ_ALOUD_ENABLED', self.settings.get('READ_ALOUD_TOOL_ENABLED', False)))
+        self.search_tool_enabled = bool(self.settings.get('TOOL_MENU_SEARCH_ENABLED', self.settings.get('SEARCH_TOOL_ENABLED', False)))
+        self.text_edit_tool_enabled = bool(self.settings.get('TOOL_MENU_TEXT_EDIT_ENABLED', self.settings.get('TEXT_EDIT_TOOL_ENABLED', False)))
+        self.wolfram_tool_enabled = bool(self.settings.get('TOOL_MENU_WOLFRAM_ENABLED', self.settings.get('WOLFRAM_TOOL_ENABLED', False)))
+
 
         # Remember the current geometry if not maximized
         self.current_geometry = (window_width, window_height)
@@ -973,16 +975,38 @@ class OpenAIGTKClient(Gtk.Window):
             'FONT_SIZE', 'FONT_FAMILY', 'AI_COLOR', 'USER_COLOR', 'AI_NAME',
         }
         tool_key_map = {
-            'IMAGE_TOOL_ENABLED': 'image',
-            'MUSIC_TOOL_ENABLED': 'music',
-            'READ_ALOUD_TOOL_ENABLED': 'read_aloud',
-            'SEARCH_TOOL_ENABLED': 'search',
-            'TEXT_EDIT_TOOL_ENABLED': 'text_edit',
+            'TOOL_MENU_IMAGE_ENABLED': 'image',
+            'TOOL_MENU_MUSIC_ENABLED': 'music',
+            'TOOL_MENU_READ_ALOUD_ENABLED': 'read_aloud',
+            'TOOL_MENU_SEARCH_ENABLED': 'search',
+            'TOOL_MENU_TEXT_EDIT_ENABLED': 'text_edit',
+            'TOOL_MENU_WOLFRAM_ENABLED': 'wolfram',
         }
-        tool_indicator_keys = set(tool_key_map.keys()) | {'WEB_SEARCH_ENABLED'}
+        tool_indicator_keys = set(tool_key_map.keys()) | {'TOOL_MENU_WEB_SEARCH_ENABLED'}
+        visibility_to_runtime = {
+            'IMAGE_TOOL_ENABLED': 'TOOL_MENU_IMAGE_ENABLED',
+            'MUSIC_TOOL_ENABLED': 'TOOL_MENU_MUSIC_ENABLED',
+            'READ_ALOUD_TOOL_ENABLED': 'TOOL_MENU_READ_ALOUD_ENABLED',
+            'SEARCH_TOOL_ENABLED': 'TOOL_MENU_SEARCH_ENABLED',
+            'TEXT_EDIT_TOOL_ENABLED': 'TOOL_MENU_TEXT_EDIT_ENABLED',
+            'WOLFRAM_TOOL_ENABLED': 'TOOL_MENU_WOLFRAM_ENABLED',
+            'WEB_SEARCH_ENABLED': 'TOOL_MENU_WEB_SEARCH_ENABLED',
+        }
         title_keys = {'CURRENT_PROJECT', 'DEFAULT_PROJECT_LABEL'}
         system_prompt_keys = {'SYSTEM_PROMPTS_JSON', 'ACTIVE_SYSTEM_PROMPT_ID'}
         model_group_key = 'GROUP_MODELS_BY_PROVIDER'
+
+        runtime_attr_map = {
+            'TOOL_MENU_IMAGE_ENABLED': 'image_tool_enabled',
+            'TOOL_MENU_MUSIC_ENABLED': 'music_tool_enabled',
+            'TOOL_MENU_READ_ALOUD_ENABLED': 'read_aloud_tool_enabled',
+            'TOOL_MENU_SEARCH_ENABLED': 'search_tool_enabled',
+            'TOOL_MENU_TEXT_EDIT_ENABLED': 'text_edit_tool_enabled',
+            'TOOL_MENU_WOLFRAM_ENABLED': 'wolfram_tool_enabled',
+            'TOOL_MENU_WEB_SEARCH_ENABLED': 'web_search_enabled',
+        }
+
+        visibility_keys = set(visibility_to_runtime.keys())
 
         if event.data.get('batch'):
             changes = event.data.get('changes', {})
@@ -993,9 +1017,14 @@ class OpenAIGTKClient(Gtk.Window):
             system_message_value = None
             for key, change in changes.items():
                 value = change.get('new')
-                attr = key.lower()
-                if hasattr(self, attr):
-                    setattr(self, attr, value)
+                if key in runtime_attr_map:
+                    setattr(self, runtime_attr_map[key], value)
+                elif key in visibility_keys:
+                    pass
+                else:
+                    attr = key.lower()
+                    if hasattr(self, attr):
+                        setattr(self, attr, value)
                 if key in renderer_keys:
                     needs_renderer_update = True
                 if key in recolor_keys:
@@ -1009,9 +1038,19 @@ class OpenAIGTKClient(Gtk.Window):
                         tool_key_map[key],
                         bool(value)
                     )
-                    if key == 'TEXT_EDIT_TOOL_ENABLED':
+                    if key == 'TOOL_MENU_TEXT_EDIT_ENABLED':
                         GLib.idle_add(self._refresh_attach_button_label)
                 if key in tool_indicator_keys:
+                    needs_tool_indicator_update = True
+                if key in visibility_to_runtime and not value:
+                    runtime_key = visibility_to_runtime[key]
+                    runtime_attr = runtime_key.lower()
+                    if hasattr(self, runtime_attr):
+                        setattr(self, runtime_attr, False)
+                    self.settings.set(runtime_key, False, emit_event=False)
+                    tool_name = tool_key_map.get(runtime_key)
+                    if tool_name:
+                        self.controller.tool_service.enable_tool(tool_name, False)
                     needs_tool_indicator_update = True
             if needs_renderer_update:
                 def apply_renderer_updates():
@@ -1039,9 +1078,14 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Update local attribute for settings that affect UI
         if key:
-            attr = key.lower()
-            if hasattr(self, attr):
-                setattr(self, attr, value)
+            if key in runtime_attr_map:
+                setattr(self, runtime_attr_map[key], value)
+            elif key in visibility_keys:
+                pass
+            else:
+                attr = key.lower()
+                if hasattr(self, attr):
+                    setattr(self, attr, value)
 
         # Handle specific settings that need UI updates
         if key in renderer_keys:
@@ -1056,10 +1100,21 @@ class OpenAIGTKClient(Gtk.Window):
         elif key in tool_key_map:
             self.controller.tool_service.enable_tool(tool_key_map[key], bool(value))
             GLib.idle_add(self._update_tool_indicators)
-            if key == 'TEXT_EDIT_TOOL_ENABLED':
+            if key == 'TOOL_MENU_TEXT_EDIT_ENABLED':
                 GLib.idle_add(self._refresh_attach_button_label)
-        elif key == 'WEB_SEARCH_ENABLED':
+        elif key == 'TOOL_MENU_WEB_SEARCH_ENABLED':
             GLib.idle_add(self._update_tool_indicators)
+        elif key in visibility_to_runtime and not value:
+            runtime_key = visibility_to_runtime[key]
+            runtime_attr = runtime_key.lower()
+            if hasattr(self, runtime_attr):
+                setattr(self, runtime_attr, False)
+            self.settings.set(runtime_key, False, emit_event=False)
+            tool_name = tool_key_map.get(runtime_key)
+            if tool_name:
+                self.controller.tool_service.enable_tool(tool_name, False)
+            GLib.idle_add(self._update_tool_indicators)
+
         elif key == 'SYSTEM_MESSAGE':
             self.controller.update_system_message(value)
         if key in title_keys:
@@ -1571,7 +1626,9 @@ class OpenAIGTKClient(Gtk.Window):
                 read_aloud=bool(getattr(self, "read_aloud_tool_enabled", False)),
                 search=bool(getattr(self, "search_tool_enabled", False)),
                 text_edit=bool(getattr(self, "text_edit_tool_enabled", False)),
+                wolfram=bool(getattr(self, "wolfram_tool_enabled", False)),
             )
+
 
     # -----------------------------------------------------------------------
     # System prompt management
@@ -1767,6 +1824,11 @@ class OpenAIGTKClient(Gtk.Window):
             handlers["text_get_handler"] = lambda target: self.controller.handle_text_get(target)
             handlers["text_edit_handler"] = lambda target, operation, text, summary=None, search=None: \
                 self.controller.handle_apply_text_edit(target, operation, text, summary, search)
+
+        if ts.is_tool_enabled('wolfram') and ts.supports_tool_calling(model, self.model_provider_map, self.custom_models):
+            handlers["wolfram_handler"] = lambda query: self.controller.handle_wolfram_tool(query)
+
+
         
         return handlers
 
@@ -1872,6 +1934,7 @@ class OpenAIGTKClient(Gtk.Window):
         current_api_keys['grok'] = os.environ.get('GROK_API_KEY', self.api_keys.get('grok', ''))
         current_api_keys['claude'] = os.environ.get('CLAUDE_API_KEY', self.api_keys.get('claude', ''))
         current_api_keys['perplexity'] = os.environ.get('PERPLEXITY_API_KEY', self.api_keys.get('perplexity', ''))
+        current_api_keys['wolfram'] = self.api_keys.get('wolfram', '')
         # Include all custom keys (keys that aren't in API_KEY_FIELDS)
         for key_name, key_value in self.api_keys.items():
             if key_name not in API_KEY_FIELDS:
@@ -1983,10 +2046,31 @@ class OpenAIGTKClient(Gtk.Window):
         current_model = self._get_model_id_from_combo()
         card = get_card(current_model, self.custom_models)
         tool_use_supported = bool(card and card.supports_tools() and card.is_chat_model())
-        dialog = ToolsDialog(self, **{k.lower(): self.settings.get(k)
-                               for k in SETTINGS_CONFIG.keys()},
-                               tool_use_supported=tool_use_supported,
-                               current_model=current_model)
+        dialog_settings = {k.lower(): self.settings.get(k) for k in SETTINGS_CONFIG.keys()}
+        dialog_settings.update({
+            "tool_visibility_image": bool(self.settings.get("IMAGE_TOOL_ENABLED", False)),
+            "tool_visibility_music": bool(self.settings.get("MUSIC_TOOL_ENABLED", False)),
+            "tool_visibility_read_aloud": bool(self.settings.get("READ_ALOUD_TOOL_ENABLED", False)),
+            "tool_visibility_search": bool(self.settings.get("SEARCH_TOOL_ENABLED", False)),
+            "tool_visibility_text_edit": bool(self.settings.get("TEXT_EDIT_TOOL_ENABLED", False)),
+            "tool_visibility_web_search": bool(self.settings.get("WEB_SEARCH_ENABLED", False)),
+            "tool_visibility_wolfram": bool(self.settings.get("WOLFRAM_TOOL_ENABLED", False)),
+        })
+        dialog_settings.update({
+            "image_tool_enabled": bool(getattr(self, "image_tool_enabled", False)),
+            "music_tool_enabled": bool(getattr(self, "music_tool_enabled", False)),
+            "read_aloud_tool_enabled": bool(getattr(self, "read_aloud_tool_enabled", False)),
+            "search_tool_enabled": bool(getattr(self, "search_tool_enabled", False)),
+            "text_edit_tool_enabled": bool(getattr(self, "text_edit_tool_enabled", False)),
+            "web_search_enabled": bool(getattr(self, "web_search_enabled", False)),
+            "wolfram_tool_enabled": bool(getattr(self, "wolfram_tool_enabled", False)),
+        })
+        dialog = ToolsDialog(
+            self,
+            **dialog_settings,
+            tool_use_supported=tool_use_supported,
+            current_model=current_model,
+        )
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             tool_settings = dialog.get_tool_settings()
@@ -1996,8 +2080,29 @@ class OpenAIGTKClient(Gtk.Window):
             # Enforce mutual exclusivity: if read_aloud_tool is enabled, disable auto-read
             if tool_settings.get('read_aloud_tool_enabled') and self.settings.get('READ_ALOUD_ENABLED', False):
                 self.settings.set('READ_ALOUD_ENABLED', False, emit_event=False)
-            # Persist all settings, including the updated tool flags.
-            self.settings.set_many(tool_settings, emit_event=True, normalize_keys=True)
+            # Apply tool enablement to the tool service without persisting settings.
+            tool_key_map = {
+                'image_tool_enabled': 'image',
+                'music_tool_enabled': 'music',
+                'read_aloud_tool_enabled': 'read_aloud',
+                'search_tool_enabled': 'search',
+                'text_edit_tool_enabled': 'text_edit',
+                'wolfram_tool_enabled': 'wolfram',
+            }
+            for key, tool_name in tool_key_map.items():
+                self.controller.tool_service.enable_tool(tool_name, bool(tool_settings.get(key, False)))
+            self._update_tool_indicators()
+            # Persist tool menu toggles separately from settings visibility.
+            runtime_settings = {
+                'TOOL_MENU_IMAGE_ENABLED': tool_settings.get('image_tool_enabled', False),
+                'TOOL_MENU_MUSIC_ENABLED': tool_settings.get('music_tool_enabled', False),
+                'TOOL_MENU_READ_ALOUD_ENABLED': tool_settings.get('read_aloud_tool_enabled', False),
+                'TOOL_MENU_SEARCH_ENABLED': tool_settings.get('search_tool_enabled', False),
+                'TOOL_MENU_TEXT_EDIT_ENABLED': tool_settings.get('text_edit_tool_enabled', False),
+                'TOOL_MENU_WOLFRAM_ENABLED': tool_settings.get('wolfram_tool_enabled', False),
+                'TOOL_MENU_WEB_SEARCH_ENABLED': tool_settings.get('web_search_enabled', False),
+            }
+            self.settings.set_many(runtime_settings, emit_event=True, normalize_keys=True)
             self.settings.save()
         dialog.destroy()
 

@@ -306,6 +306,7 @@ class CustomProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ):
         api_type = (self.api_type or "chat.completions").lower()
         card = get_card(model)
@@ -326,6 +327,7 @@ class CustomProvider(AIProvider):
                 search_tool_handler=search_tool_handler,
                 text_get_handler=text_get_handler,
                 text_edit_handler=text_edit_handler,
+                wolfram_handler=wolfram_handler,
             )
         
         if api_type == "tts":
@@ -393,6 +395,7 @@ class CustomProvider(AIProvider):
             search_tool_handler,
             text_get_handler,
             text_edit_handler,
+            wolfram_handler,
         )
         
         # Build tool declarations for custom provider (uses OpenAI-compatible format)
@@ -480,6 +483,7 @@ class CustomProvider(AIProvider):
                 search_handler=search_tool_handler,
                 text_get_handler=text_get_handler,
                 text_edit_handler=text_edit_handler,
+                wolfram_handler=wolfram_handler,
             )
             
             for tc in tool_calls:
@@ -848,6 +852,7 @@ class CustomProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ):
         # Use base endpoint to avoid appending /responses to an endpoint that already has /chat/completions
         base = self._get_base_endpoint()
@@ -864,6 +869,7 @@ class CustomProvider(AIProvider):
             search_tool_handler,
             text_get_handler,
             text_edit_handler,
+            wolfram_handler,
         )
         
         # Build tools array
@@ -923,6 +929,7 @@ class CustomProvider(AIProvider):
             search_handler=search_tool_handler,
             text_get_handler=text_get_handler,
             text_edit_handler=text_edit_handler,
+            wolfram_handler=wolfram_handler,
         )
         
         max_tool_rounds = 3
@@ -1568,6 +1575,7 @@ class OpenAIProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ) -> str:
         """
         Generate a response using the OpenAI Responses API.
@@ -1628,6 +1636,7 @@ class OpenAIProvider(AIProvider):
             search_tool_handler,
             text_get_handler,
             text_edit_handler,
+            wolfram_handler,
         )
         
         # Build tools array
@@ -1674,6 +1683,7 @@ class OpenAIProvider(AIProvider):
             search_handler=search_tool_handler,
             text_get_handler=text_get_handler,
             text_edit_handler=text_edit_handler,
+            wolfram_handler=wolfram_handler,
         )
         
         max_tool_rounds = 3
@@ -1906,6 +1916,7 @@ class OpenAIProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ) -> str:
         """
         Generate a response using chat.completions for reasoning models (o1, o3, o4).
@@ -1969,6 +1980,7 @@ class OpenAIProvider(AIProvider):
                 search_tool_handler,
                 text_get_handler,
                 text_edit_handler,
+                wolfram_handler,
             )
         
         tools = build_tools_for_provider(enabled_tools, "openai") if enabled_tools else []
@@ -1993,6 +2005,7 @@ class OpenAIProvider(AIProvider):
             search_handler=search_tool_handler,
             text_get_handler=text_get_handler,
             text_edit_handler=text_edit_handler,
+            wolfram_handler=wolfram_handler,
         )
         
         tool_aware_messages = formatted_messages.copy()
@@ -2060,6 +2073,7 @@ class OpenAIProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ):
         """
         Generate a chat completion using the most appropriate API.
@@ -2101,6 +2115,7 @@ class OpenAIProvider(AIProvider):
                     search_tool_handler=search_tool_handler,
                     text_get_handler=text_get_handler,
                     text_edit_handler=text_edit_handler,
+                    wolfram_handler=wolfram_handler,
                 )
         
         # Default path: use Responses API for everything else
@@ -2119,6 +2134,7 @@ class OpenAIProvider(AIProvider):
             search_tool_handler=search_tool_handler,
             text_get_handler=text_get_handler,
             text_edit_handler=text_edit_handler,
+            wolfram_handler=wolfram_handler,
         )
     
     def generate_image(self, prompt, chat_id, model="dall-e-3", image_data=None):
@@ -2512,6 +2528,7 @@ class GrokProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ) -> str:
         """
         Generate a response using xAI's Responses API for Grok models.
@@ -2531,6 +2548,7 @@ class GrokProvider(AIProvider):
             search_tool_handler,
             text_get_handler,
             text_edit_handler,
+            wolfram_handler,
         )
         tools = self._build_responses_tools(enabled_tools, web_search_enabled, model)
 
@@ -2569,6 +2587,7 @@ class GrokProvider(AIProvider):
             search_handler=search_tool_handler,
             text_get_handler=text_get_handler,
             text_edit_handler=text_edit_handler,
+            wolfram_handler=wolfram_handler,
         )
 
         max_tool_rounds = 3
@@ -2669,6 +2688,7 @@ class GrokProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ):
         """
         Generate a chat completion using Grok text models.
@@ -2699,6 +2719,7 @@ class GrokProvider(AIProvider):
                 search_tool_handler=search_tool_handler,
                 text_get_handler=text_get_handler,
                 text_edit_handler=text_edit_handler,
+                wolfram_handler=wolfram_handler,
             )
 
         # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
@@ -2755,6 +2776,7 @@ class GrokProvider(AIProvider):
             search_tool_handler,
             text_get_handler,
             text_edit_handler,
+            wolfram_handler,
         )
         tools = build_tools_for_provider(enabled_tools, "grok")
         if tools:
@@ -2762,7 +2784,7 @@ class GrokProvider(AIProvider):
             params["tool_choice"] = "auto"
 
         # Simple one-shot path when no tools are involved.
-        if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
+        if not enabled_tools:
             print(f"[GrokProvider] Using chat.completions API for model: {model}")
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
@@ -2817,6 +2839,7 @@ class GrokProvider(AIProvider):
                 search_handler=search_tool_handler,
                 text_get_handler=text_get_handler,
                 text_edit_handler=text_edit_handler,
+                wolfram_handler=wolfram_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -2959,6 +2982,7 @@ class ClaudeProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ):
         """
         Generate a chat completion using Claude models via the OpenAI-compatible
@@ -3026,6 +3050,7 @@ class ClaudeProvider(AIProvider):
             search_tool_handler,
             text_get_handler,
             text_edit_handler,
+            wolfram_handler,
         )
         tools = build_tools_for_provider(enabled_tools, "claude")
         if tools:
@@ -3033,7 +3058,7 @@ class ClaudeProvider(AIProvider):
             params["tool_choice"] = "auto"
 
         # Simple one-shot path when no tools are involved.
-        if image_tool_handler is None and music_tool_handler is None and read_aloud_tool_handler is None:
+        if not enabled_tools:
             print(f"[ClaudeProvider] Using chat.completions API for model: {model}")
             response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content or ""
@@ -3088,6 +3113,7 @@ class ClaudeProvider(AIProvider):
                 search_handler=search_tool_handler,
                 text_get_handler=text_get_handler,
                 text_edit_handler=text_edit_handler,
+                wolfram_handler=wolfram_handler,
             )
             for tc in tool_calls:
                 if tc.type != "function":
@@ -3185,6 +3211,7 @@ class PerplexityProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ):
         """
         Generate a chat completion using Perplexity models via the OpenAI-compatible
@@ -3419,6 +3446,7 @@ class GeminiProvider(AIProvider):
         search_tool_handler=None,
         text_get_handler=None,
         text_edit_handler=None,
+        wolfram_handler=None,
     ):
         self._require_key()
         card = get_card(model)
@@ -3436,6 +3464,7 @@ class GeminiProvider(AIProvider):
             search_tool_handler,
             text_get_handler,
             text_edit_handler,
+            wolfram_handler,
         )
 
         # Gemini native API doesn't support combining google_search with function calling
@@ -3499,6 +3528,7 @@ class GeminiProvider(AIProvider):
                 search_handler=search_tool_handler,
                 text_get_handler=text_get_handler,
                 text_edit_handler=text_edit_handler,
+                wolfram_handler=wolfram_handler,
             )
             tool_segments = []
             for tc in tool_calls:

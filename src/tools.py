@@ -254,6 +254,26 @@ MEMORY_RETRIEVAL_TOOL_SPEC = ToolSpec(
     },
 )
 
+WOLFRAM_TOOL_SPEC = ToolSpec(
+    name="wolfram_alpha",
+    description=(
+        "Access Wolfram Alpha to answer questions about math, science, geography, history, and more. "
+        "Use this for factual queries, calculations, unit conversions, and solving equations."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The natural language query for Wolfram Alpha.",
+            },
+        },
+        "required": ["query"],
+    },
+    prompt_appendix="Use wolfram_alpha for factual and mathematical queries.",
+)
+
+
 # Registry mapping tool name to spec for easy lookup.
 TOOL_REGISTRY: Dict[str, ToolSpec] = {
     IMAGE_TOOL_SPEC.name: IMAGE_TOOL_SPEC,
@@ -263,7 +283,9 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
     MEMORY_RETRIEVAL_TOOL_SPEC.name: MEMORY_RETRIEVAL_TOOL_SPEC,
     TEXT_GET_TOOL_SPEC.name: TEXT_GET_TOOL_SPEC,
     APPLY_TEXT_EDIT_TOOL_SPEC.name: APPLY_TEXT_EDIT_TOOL_SPEC,
+    WOLFRAM_TOOL_SPEC.name: WOLFRAM_TOOL_SPEC,
 }
+
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +387,13 @@ def append_tool_guidance(
                 "",
                 settings_manager=settings_manager
             )
+        elif tool_name == "wolfram_alpha":
+            appendix = _get_setting_value(
+                "WOLFRAM_TOOL_PROMPT_APPENDIX",
+                "",
+                settings_manager=settings_manager
+            )
+
         
         # Fallback to spec if available (though now specs default to empty)
         if not appendix:
@@ -455,6 +484,8 @@ class ToolContext:
     memory_handler: Optional[Callable[[str], str]] = None  # (query) -> result
     text_get_handler: Optional[Callable[[str], str]] = None
     text_edit_handler: Optional[Callable[[str, str, str, Optional[str], Optional[str]], str]] = None  # (target, op, text, summary, search)
+    wolfram_handler: Optional[Callable[[str], str]] = None
+
 
 
 def run_tool_call(
@@ -566,6 +597,17 @@ def run_tool_call(
             print(f"Error in text_edit_handler: {e}")
             return f"Error applying text edit: {e}"
 
+    elif tool_name == "wolfram_alpha":
+        if context.wolfram_handler is None:
+            return "Error: wolfram tool is not available."
+        query = args.get("query", "")
+        try:
+            return context.wolfram_handler(query)
+        except Exception as e:
+            print(f"Error in wolfram_handler: {e}")
+            return f"Error querying Wolfram Alpha: {e}"
+
+
     else:
         return f"Error: unknown tool '{tool_name}' requested."
 
@@ -614,7 +656,9 @@ def build_enabled_tools_from_handlers(
     search_handler=None,
     text_get_handler=None,
     text_edit_handler=None,
+    wolfram_handler=None,
 ) -> Set[str]:
+
     """
     Build the set of enabled tool names based on which handlers are provided.
     
@@ -634,7 +678,10 @@ def build_enabled_tools_from_handlers(
         enabled.add("text_get")
     if text_edit_handler is not None:
         enabled.add("apply_text_edit")
+    if wolfram_handler is not None:
+        enabled.add("wolfram_alpha")
     return enabled
+
 
 
 def process_tool_result(result: str, snippets: List[str]) -> str:
@@ -678,7 +725,9 @@ class ToolManager:
         read_aloud_tool_enabled: bool = False,
         search_tool_enabled: bool = False,
         text_edit_tool_enabled: bool = False,
+        wolfram_tool_enabled: bool = False,
     ):
+
         """
         Initialize the ToolManager.
 
@@ -700,6 +749,8 @@ class ToolManager:
         self.read_aloud_tool_enabled = read_aloud_tool_enabled
         self.search_tool_enabled = search_tool_enabled
         self.text_edit_tool_enabled = text_edit_tool_enabled
+        self.wolfram_tool_enabled = wolfram_tool_enabled
+
 
     def get_provider_name_for_model(
         self,
@@ -846,6 +897,8 @@ class ToolManager:
         if not self.text_edit_tool_enabled:
             return False
         return self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
+
+
 
     def supports_tool_calling(
         self,

@@ -71,6 +71,8 @@ class SettingsRepository:
         
         # Apply legacy TTS settings migration
         self._migrate_legacy_tts_settings()
+        # Apply tool menu migration defaults
+        self._migrate_tool_menu_settings()
     
     def _migrate_legacy_tts_settings(self) -> None:
         """Migrate legacy TTS settings to unified settings."""
@@ -95,6 +97,21 @@ class SettingsRepository:
             legacy_template = self._settings.get('READ_ALOUD_AUDIO_PROMPT_TEMPLATE', '')
             if legacy_template:
                 self._settings['TTS_PROMPT_TEMPLATE'] = legacy_template
+
+    def _migrate_tool_menu_settings(self) -> None:
+        """Default tool menu toggles to visibility settings when missing."""
+        mapping = {
+            'TOOL_MENU_IMAGE_ENABLED': 'IMAGE_TOOL_ENABLED',
+            'TOOL_MENU_MUSIC_ENABLED': 'MUSIC_TOOL_ENABLED',
+            'TOOL_MENU_WEB_SEARCH_ENABLED': 'WEB_SEARCH_ENABLED',
+            'TOOL_MENU_READ_ALOUD_ENABLED': 'READ_ALOUD_TOOL_ENABLED',
+            'TOOL_MENU_SEARCH_ENABLED': 'SEARCH_TOOL_ENABLED',
+            'TOOL_MENU_TEXT_EDIT_ENABLED': 'TEXT_EDIT_TOOL_ENABLED',
+            'TOOL_MENU_WOLFRAM_ENABLED': 'WOLFRAM_TOOL_ENABLED',
+        }
+        for runtime_key, visibility_key in mapping.items():
+            if runtime_key not in self._explicit_keys:
+                self._settings[runtime_key] = bool(self._settings.get(visibility_key, False))
     
     def get_all(self) -> Dict[str, Any]:
         """

@@ -67,7 +67,7 @@ def _get_chat_history_repo():
 DEFAULT_SETTINGS = {key: config['default'] for key, config in SETTINGS_CONFIG.items()}
 
 # Known API key fields we persist in a separate JSON file under PARENT_DIR.
-API_KEY_FIELDS = ['openai', 'gemini', 'grok', 'claude', 'perplexity']
+API_KEY_FIELDS = ['openai', 'gemini', 'grok', 'claude', 'perplexity', 'wolfram']
 
 def get_api_key_env_vars():
     """

@@ -35,6 +35,7 @@ from services import (
     ImageGenerationService,
     AudioService,
     ToolService,
+    WolframService,
 )
 from settings import SettingsManager
 from events import EventBus, EventType, Event, get_event_bus
@@ -136,6 +137,7 @@ class ChatController:
             event_bus=self._event_bus,
         )
         self._audio_service = AudioService(event_bus=self._event_bus)
+        self._wolfram_service = WolframService()
         
         # Load settings for frequently accessed attributes
         self.system_message = self._settings_manager.get(
@@ -180,11 +182,12 @@ class ChatController:
         
         # Tool manager
         self.tool_manager = ToolManager(
-            image_tool_enabled=self._settings_manager.get('IMAGE_TOOL_ENABLED', True),
-            music_tool_enabled=self._settings_manager.get('MUSIC_TOOL_ENABLED', False),
-            read_aloud_tool_enabled=self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False),
-            search_tool_enabled=self._settings_manager.get('SEARCH_TOOL_ENABLED', False),
-            text_edit_tool_enabled=self._settings_manager.get('TEXT_EDIT_TOOL_ENABLED', False),
+            image_tool_enabled=self._settings_manager.get('TOOL_MENU_IMAGE_ENABLED', self._settings_manager.get('IMAGE_TOOL_ENABLED', True)),
+            music_tool_enabled=self._settings_manager.get('TOOL_MENU_MUSIC_ENABLED', self._settings_manager.get('MUSIC_TOOL_ENABLED', False)),
+            read_aloud_tool_enabled=self._settings_manager.get('TOOL_MENU_READ_ALOUD_ENABLED', self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False)),
+            search_tool_enabled=self._settings_manager.get('TOOL_MENU_SEARCH_ENABLED', self._settings_manager.get('SEARCH_TOOL_ENABLED', False)),
+            text_edit_tool_enabled=self._settings_manager.get('TOOL_MENU_TEXT_EDIT_ENABLED', self._settings_manager.get('TEXT_EDIT_TOOL_ENABLED', False)),
+            wolfram_tool_enabled=self._settings_manager.get('TOOL_MENU_WOLFRAM_ENABLED', self._settings_manager.get('WOLFRAM_TOOL_ENABLED', False)),
         )
         
         # Initialize tool service with event bus
@@ -1792,6 +1795,30 @@ class ChatController:
     # High-level orchestration methods
     # -----------------------------------------------------------------------
 
+    def handle_wolfram_tool(self, query: str) -> str:
+        """
+        Handle Wolfram Alpha tool calls.
+
+        Parameters
+        ----------
+        query : str
+            The natural language query.
+
+        Returns
+        -------
+        str
+            The text result from Wolfram Alpha.
+        """
+        app_id = self._settings_manager.get("WOLFRAM_APP_ID", "")
+        # Fallback to API keys repository if not in settings
+
+        if not app_id:
+            from utils import load_api_keys
+            keys = load_api_keys()
+            app_id = keys.get("wolfram", "")
+            
+        return self._wolfram_service.query(query, app_id)
+
     def get_provider_for_model(self, model: str) -> Optional[Any]:
         """
         Get or initialize the appropriate provider for a model.
@@ -2176,7 +2203,10 @@ class ChatController:
                 
                 # Add tool handlers and web search for non-perplexity
                 if provider_name != 'perplexity':
-                    kwargs["web_search_enabled"] = self._settings_manager.get('WEB_SEARCH_ENABLED', False)
+                    kwargs["web_search_enabled"] = self._settings_manager.get(
+                        'TOOL_MENU_WEB_SEARCH_ENABLED',
+                        self._settings_manager.get('WEB_SEARCH_ENABLED', False)
+                    )
                     if tool_handlers:
                         kwargs.update(tool_handlers)
                 
@@ -2414,11 +2444,12 @@ class ChatController:
     def update_tool_manager(self) -> None:
         """Update the ToolManager with current settings."""
         self.tool_manager = ToolManager(
-            image_tool_enabled=self._settings_manager.get('IMAGE_TOOL_ENABLED', True),
-            music_tool_enabled=self._settings_manager.get('MUSIC_TOOL_ENABLED', False),
-            read_aloud_tool_enabled=self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False),
-            search_tool_enabled=self._settings_manager.get('SEARCH_TOOL_ENABLED', False),
-            text_edit_tool_enabled=self._settings_manager.get('TEXT_EDIT_TOOL_ENABLED', False),
+            image_tool_enabled=self._settings_manager.get('TOOL_MENU_IMAGE_ENABLED', self._settings_manager.get('IMAGE_TOOL_ENABLED', True)),
+            music_tool_enabled=self._settings_manager.get('TOOL_MENU_MUSIC_ENABLED', self._settings_manager.get('MUSIC_TOOL_ENABLED', False)),
+            read_aloud_tool_enabled=self._settings_manager.get('TOOL_MENU_READ_ALOUD_ENABLED', self._settings_manager.get('READ_ALOUD_TOOL_ENABLED', False)),
+            search_tool_enabled=self._settings_manager.get('TOOL_MENU_SEARCH_ENABLED', self._settings_manager.get('SEARCH_TOOL_ENABLED', False)),
+            text_edit_tool_enabled=self._settings_manager.get('TOOL_MENU_TEXT_EDIT_ENABLED', self._settings_manager.get('TEXT_EDIT_TOOL_ENABLED', False)),
+            wolfram_tool_enabled=self._settings_manager.get('TOOL_MENU_WOLFRAM_ENABLED', self._settings_manager.get('WOLFRAM_TOOL_ENABLED', False)),
         )
         # Update tool service with new tool manager and event bus
         self._tool_service = ToolService(

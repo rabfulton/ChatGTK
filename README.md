@@ -16,7 +16,7 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - Text to Speech using what ever model and voice you choose
 - Real-time voice conversation support using OpenAI's realtime models
 - Reasoning level adjustment for capable models
-- Tool use including music control, image generation, web search, and a read aloud tool that lets your assistant decide when to use TTS
+- Tool use including music control, image generation, web search, Wolfram Alpha queries, and a read aloud tool that lets your assistant decide when to use TTS
 - Multi-provider support for OpenAI, Gemini, xAI, Perplexity, Anthropic and 3rd parties
 
 ## Installation from AUR
@@ -253,6 +253,12 @@ Document Mode provides a focused editing environment for creating and refining l
     - Diff edits use the system `patch` utility; ensure it is installed.
     - The target selection is per‑chat and restored when reopening the chat.
     - Messages that apply edits include an undo button in the header to revert the last tool edit.
+
+- **Wolfram Alpha tool (`wolfram_alpha`)**
+  - Disabled by default; enable via **Enable Wolfram Alpha Tool** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.
+  - Requires a Wolfram Alpha App ID (Settings → API Keys → Wolfram Alpha App ID).
+  - Best for math, unit conversion, factual queries, and scientific data where Wolfram Alpha has structured knowledge.
+  - The assistant can call the tool automatically and will summarize the most useful parts of the result.
 
 - **Web search (provider-native tools)**
   - Disabled by default; enable via **Enable Web Search** in the **Tools** dialog (top bar → *Tools*) or **Settings → Tool Options**.

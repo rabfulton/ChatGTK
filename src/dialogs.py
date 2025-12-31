@@ -45,8 +45,10 @@ from config import (
     DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX,
     DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX,
     DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX,
+    DEFAULT_WOLFRAM_TOOL_PROMPT_APPENDIX,
     DEFAULT_SHORTCUTS,
 )
+
 from ai_providers import CustomProvider
 from ui.markdown_toolbar import MarkdownActions, MarkdownToolbar
 
@@ -239,7 +241,8 @@ class CustomModelDialog(Gtk.Dialog):
             'gemini': 'Gemini',
             'grok': 'Grok',
             'claude': 'Claude',
-            'perplexity': 'Perplexity'
+            'perplexity': 'Perplexity',
+            'wolfram': 'Wolfram',
         }
         for key_name in API_KEY_FIELDS:
             if api_keys.get(key_name):
@@ -452,7 +455,7 @@ class CustomModelDialog(Gtk.Dialog):
                 result["voice"] = voice
             if voices:
                 result["voices"] = voices
-        
+
         return result
 
     def _get_voice_options(self):
@@ -960,7 +963,8 @@ class ModelCardEditorDialog(Gtk.Dialog):
 # Helper: build the API keys editor (reused in SettingsDialog and APIKeyDialog)
 # ---------------------------------------------------------------------------
 
-def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key='', perplexity_key='', custom_keys=None):
+def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key='', perplexity_key='', wolfram_key='', custom_keys=None):
+
     """
     Build and return a Gtk.Box containing API key entry fields.
     Also returns references to the entry widgets in a dict.
@@ -990,8 +994,8 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
         label = Gtk.Label(label=label_text, xalign=0)
-        label.set_hexpand(False)  # Don't expand, use fixed width via size group
-        # Add label to size group for uniform width
+        label.set_hexpand(False)
+        # Use SizeGroup to align labels
         label_size_group.add_widget(label)
         entry = Gtk.Entry()
         entry.set_hexpand(True)  # Entry expands to fill remaining space
@@ -1001,9 +1005,10 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
         entry.set_text(value)
         # Add entry to size group for uniform width
         entry_size_group.add_widget(entry)
-        hbox.pack_start(label, False, False, 0)  # Pack label with False for expand
-        hbox.pack_start(entry, True, True, 0)  # Entry expands
-        # Add delete button for custom keys (will be connected in SettingsDialog)
+        
+        hbox.pack_start(label, False, False, 0)
+        hbox.pack_start(entry, True, True, 0)
+        
         if is_custom:
             delete_btn = Gtk.Button.new_from_icon_name("edit-delete", Gtk.IconSize.BUTTON)
             delete_btn.set_tooltip_text("Delete this custom key")
@@ -1027,6 +1032,9 @@ def build_api_keys_editor(openai_key='', gemini_key='', grok_key='', claude_key=
 
     # Perplexity API Key
     _add_key_row('perplexity', 'Perplexity API Key', perplexity_key, 'pplx-...')
+
+    # Wolfram Alpha App ID
+    _add_key_row('wolfram', 'Wolfram Alpha App ID', wolfram_key, 'XXXXXX-XXXXXXXXXX')
 
     # Custom keys
     for key_name, key_value in custom_keys.items():
@@ -2116,7 +2124,7 @@ class SettingsDialog(Gtk.Dialog):
         row.set_activatable(False)
         list_box.add(row)
 
-        # ---- Music Tool section ----
+        # ---- Web Search Tool section ----
         header_row = Gtk.ListBoxRow()
         _add_listbox_row_margins(header_row)
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -2177,6 +2185,44 @@ class SettingsDialog(Gtk.Dialog):
         self.switch_text_edit_tool_settings.set_active(current_text_edit_tool_enabled)
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.switch_text_edit_tool_settings, False, True, 0)
+        list_box.add(row)
+
+        # --- Separator ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # ---- Wolfram Alpha Tool section ----
+        header_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(header_row)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_row.add(header_box)
+        header_label = Gtk.Label()
+        header_label.set_xalign(0)
+        header_label.set_markup("<b>Wolfram Alpha Tool</b>")
+        header_box.pack_start(header_label, True, True, 0)
+        list_box.add(header_row)
+
+        # Enable Wolfram Alpha Tool
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Wolfram Alpha Tool", xalign=0)
+        label.set_hexpand(True)
+        self.switch_wolfram_tool_settings = Gtk.Switch()
+        current_wolfram_tool_enabled = bool(getattr(self, "wolfram_tool_enabled", False))
+        self.switch_wolfram_tool_settings.set_active(current_wolfram_tool_enabled)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_wolfram_tool_settings, False, True, 0)
         list_box.add(row)
 
         # --- Separator ---
@@ -3304,6 +3350,7 @@ class SettingsDialog(Gtk.Dialog):
             DEFAULT_READ_ALOUD_TOOL_PROMPT_APPENDIX,
             DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX,
             DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX,
+            DEFAULT_WOLFRAM_TOOL_PROMPT_APPENDIX,
             DEFAULT_COMPACTION_PROMPT
         )
         from config import SETTINGS_CONFIG
@@ -3350,6 +3397,12 @@ class SettingsDialog(Gtk.Dialog):
                 "Guidance appended when the text edit tool is enabled.",
                 "text_edit_tool_prompt_appendix",
                 DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX
+            ),
+            (
+                "Wolfram Tool Guidance",
+                "Guidance appended when the Wolfram Alpha tool is enabled.",
+                "wolfram_tool_prompt_appendix",
+                DEFAULT_WOLFRAM_TOOL_PROMPT_APPENDIX
             ),
             (
                 "Memory Context Guidance",
@@ -4182,6 +4235,7 @@ class SettingsDialog(Gtk.Dialog):
             grok_key=standard_keys.get('grok', ''),
             claude_key=standard_keys.get('claude', ''),
             perplexity_key=standard_keys.get('perplexity', ''),
+            wolfram_key=standard_keys.get('wolfram', ''),
             custom_keys=custom_keys,
         )
         
@@ -4794,6 +4848,7 @@ class SettingsDialog(Gtk.Dialog):
             'read_aloud_tool_prompt_appendix': get_buf_text('read_aloud_tool_prompt_appendix'),
             'search_tool_prompt_appendix': get_buf_text('search_tool_prompt_appendix'),
             'text_edit_tool_prompt_appendix': get_buf_text('text_edit_tool_prompt_appendix'),
+            'wolfram_tool_prompt_appendix': get_buf_text('wolfram_tool_prompt_appendix'),
             'memory_prompt_appendix': get_buf_text('memory_prompt_appendix'),
             # Keyboard shortcuts
             'keyboard_shortcuts': json.dumps(getattr(self, '_shortcuts', {})),
@@ -4812,6 +4867,7 @@ class SettingsDialog(Gtk.Dialog):
             'grok': self.api_key_entries['grok'].get_text().strip(),
             'claude': self.api_key_entries['claude'].get_text().strip(),
             'perplexity': self.api_key_entries['perplexity'].get_text().strip(),
+            'wolfram': self.api_key_entries['wolfram'].get_text().strip(),
         }
         # Add custom keys
         from utils import API_KEY_FIELDS
@@ -5027,6 +5083,7 @@ class ToolsDialog(Gtk.Dialog):
         self.is_gemini = card and card.provider == "gemini" if card else False
         model_id = card.id if card else (current_model or "")
         self.is_grok3 = model_id.lower() in ("grok-3", "grok-3-mini")
+        self._tool_visibility = self._build_tool_visibility()
 
         box = self.get_content_area()
         box.set_spacing(6)
@@ -5040,94 +5097,130 @@ class ToolsDialog(Gtk.Dialog):
         box.pack_start(list_box, True, True, 0)
 
         # Enable/disable image tool for text models
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Image Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_image_tool = Gtk.Switch()
-        current_image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
-        self.switch_image_tool.set_active(current_image_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_image_tool, False, True, 0)
-        list_box.add(row)
+        if self._tool_visibility.get("image", False):
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add(hbox)
+            label = Gtk.Label(label="Enable Image Tool", xalign=0)
+            label.set_hexpand(True)
+            self.switch_image_tool = Gtk.Switch()
+            current_image_tool_enabled = bool(getattr(self, "image_tool_enabled", True))
+            self.switch_image_tool.set_active(current_image_tool_enabled)
+            hbox.pack_start(label, True, True, 0)
+            hbox.pack_start(self.switch_image_tool, False, True, 0)
+            list_box.add(row)
+        else:
+            self.switch_image_tool = None
 
         # Enable/disable music control tool for text models
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Music Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_music_tool = Gtk.Switch()
-        current_music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
-        self.switch_music_tool.set_active(current_music_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_music_tool, False, True, 0)
-        list_box.add(row)
+        if self._tool_visibility.get("music", False):
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add(hbox)
+            label = Gtk.Label(label="Enable Music Tool", xalign=0)
+            label.set_hexpand(True)
+            self.switch_music_tool = Gtk.Switch()
+            current_music_tool_enabled = bool(getattr(self, "music_tool_enabled", False))
+            self.switch_music_tool.set_active(current_music_tool_enabled)
+            hbox.pack_start(label, True, True, 0)
+            hbox.pack_start(self.switch_music_tool, False, True, 0)
+            list_box.add(row)
+        else:
+            self.switch_music_tool = None
 
         # Enable/disable provider-native web search tools for text models
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Web Search", xalign=0)
-        label.set_hexpand(True)
-        self.switch_web_search = Gtk.Switch()
-        current_web_search_enabled = bool(getattr(self, "web_search_enabled", False))
-        self.switch_web_search.set_active(current_web_search_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_web_search, False, True, 0)
-        list_box.add(row)
+        if self._tool_visibility.get("web_search", False):
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add(hbox)
+            label = Gtk.Label(label="Enable Web Search", xalign=0)
+            label.set_hexpand(True)
+            self.switch_web_search = Gtk.Switch()
+            current_web_search_enabled = bool(getattr(self, "web_search_enabled", False))
+            self.switch_web_search.set_active(current_web_search_enabled)
+            hbox.pack_start(label, True, True, 0)
+            hbox.pack_start(self.switch_web_search, False, True, 0)
+            list_box.add(row)
+        else:
+            self.switch_web_search = None
 
         # Enable/disable read aloud tool for text models
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Read Aloud Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_read_aloud_tool = Gtk.Switch()
-        current_read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
-        self.switch_read_aloud_tool.set_active(current_read_aloud_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
-        list_box.add(row)
+        if self._tool_visibility.get("read_aloud", False):
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add(hbox)
+            label = Gtk.Label(label="Enable Read Aloud Tool", xalign=0)
+            label.set_hexpand(True)
+            self.switch_read_aloud_tool = Gtk.Switch()
+            current_read_aloud_tool_enabled = bool(getattr(self, "read_aloud_tool_enabled", False))
+            self.switch_read_aloud_tool.set_active(current_read_aloud_tool_enabled)
+            hbox.pack_start(label, True, True, 0)
+            hbox.pack_start(self.switch_read_aloud_tool, False, True, 0)
+            list_box.add(row)
+        else:
+            self.switch_read_aloud_tool = None
 
         # Enable/disable search/memory tool for text models
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Search Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_search_tool = Gtk.Switch()
-        current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
-        self.switch_search_tool.set_active(current_search_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_search_tool, False, True, 0)
-        list_box.add(row)
+        if self._tool_visibility.get("search", False):
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add(hbox)
+            label = Gtk.Label(label="Enable Search Tool", xalign=0)
+            label.set_hexpand(True)
+            self.switch_search_tool = Gtk.Switch()
+            current_search_tool_enabled = bool(getattr(self, "search_tool_enabled", False))
+            self.switch_search_tool.set_active(current_search_tool_enabled)
+            hbox.pack_start(label, True, True, 0)
+            hbox.pack_start(self.switch_search_tool, False, True, 0)
+            list_box.add(row)
+        else:
+            self.switch_search_tool = None
 
         # Enable/disable text edit tool for text models
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Text Edit Tool", xalign=0)
-        label.set_hexpand(True)
-        self.switch_text_edit_tool = Gtk.Switch()
-        current_text_edit_tool_enabled = bool(getattr(self, "text_edit_tool_enabled", False))
-        self.switch_text_edit_tool.set_active(current_text_edit_tool_enabled)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_text_edit_tool, False, True, 0)
-        list_box.add(row)
+        if self._tool_visibility.get("text_edit", False):
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add(hbox)
+            label = Gtk.Label(label="Enable Text Edit Tool", xalign=0)
+            label.set_hexpand(True)
+            self.switch_text_edit_tool = Gtk.Switch()
+            current_text_edit_tool_enabled = bool(getattr(self, "text_edit_tool_enabled", False))
+            self.switch_text_edit_tool.set_active(current_text_edit_tool_enabled)
+            hbox.pack_start(label, True, True, 0)
+            hbox.pack_start(self.switch_text_edit_tool, False, True, 0)
+            list_box.add(row)
+        else:
+            self.switch_text_edit_tool = None
+
+        # Enable/disable Wolfram Alpha tool
+        if self._tool_visibility.get("wolfram", False):
+            row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(row)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add(hbox)
+            label = Gtk.Label(label="Enable Wolfram Alpha Tool", xalign=0)
+            label.set_hexpand(True)
+            self.switch_wolfram_tool = Gtk.Switch()
+            current_wolfram_tool_enabled = bool(getattr(self, "wolfram_tool_enabled", False))
+            self.switch_wolfram_tool.set_active(current_wolfram_tool_enabled)
+            hbox.pack_start(label, True, True, 0)
+            hbox.pack_start(self.switch_wolfram_tool, False, True, 0)
+            list_box.add(row)
+        else:
+            self.switch_wolfram_tool = None
+
 
         # For Gemini models, disable other tools when web search is enabled
-        if self.is_gemini:
+        if self.is_gemini and self.switch_web_search is not None:
             self.switch_web_search.connect("notify::active", self._on_gemini_web_search_toggled)
             self._on_gemini_web_search_toggled(self.switch_web_search, None)
-        if self.is_grok3:
+        if self.is_grok3 and self.switch_web_search is not None:
             self.switch_web_search.connect("notify::active", self._on_grok_web_search_toggled)
 
         if not self.tool_use_supported:
@@ -5188,7 +5281,7 @@ class ToolsDialog(Gtk.Dialog):
             box.pack_start(frame, False, False, 0)
 
         # Grok-3 web search limitation notice
-        if self.is_grok3:
+        if self.is_grok3 and self.switch_web_search is not None:
             frame = Gtk.Frame()
             frame.set_shadow_type(Gtk.ShadowType.IN)
             frame.set_margin_top(6)
@@ -5227,17 +5320,21 @@ class ToolsDialog(Gtk.Dialog):
     def _on_gemini_web_search_toggled(self, switch, _pspec):
         """Disable other tools when web search is enabled for Gemini."""
         web_search_active = switch.get_active()
-        self.switch_image_tool.set_sensitive(not web_search_active)
-        self.switch_music_tool.set_sensitive(not web_search_active)
-        self.switch_read_aloud_tool.set_sensitive(not web_search_active)
-        self.switch_search_tool.set_sensitive(not web_search_active)
-        self.switch_text_edit_tool.set_sensitive(not web_search_active)
+        self._set_switch_sensitive("switch_image_tool", not web_search_active)
+        self._set_switch_sensitive("switch_music_tool", not web_search_active)
+        self._set_switch_sensitive("switch_read_aloud_tool", not web_search_active)
+        self._set_switch_sensitive("switch_search_tool", not web_search_active)
+        self._set_switch_sensitive("switch_text_edit_tool", not web_search_active)
+        self._set_switch_sensitive("switch_wolfram_tool", not web_search_active)
+
         if web_search_active:
-            self.switch_image_tool.set_active(False)
-            self.switch_music_tool.set_active(False)
-            self.switch_read_aloud_tool.set_active(False)
-            self.switch_search_tool.set_active(False)
-            self.switch_text_edit_tool.set_active(False)
+            self._set_switch_active("switch_image_tool", False)
+            self._set_switch_active("switch_music_tool", False)
+            self._set_switch_active("switch_read_aloud_tool", False)
+            self._set_switch_active("switch_search_tool", False)
+            self._set_switch_active("switch_text_edit_tool", False)
+            self._set_switch_active("switch_wolfram_tool", False)
+
 
     def _on_grok_web_search_toggled(self, switch, _pspec):
         """Show a warning when web search is enabled for Grok-3 models."""
@@ -5247,13 +5344,42 @@ class ToolsDialog(Gtk.Dialog):
     def get_tool_settings(self):
         """Return the tool settings from the dialog."""
         return {
-            "image_tool_enabled": self.switch_image_tool.get_active(),
-            "music_tool_enabled": self.switch_music_tool.get_active(),
-            "web_search_enabled": self.switch_web_search.get_active(),
-            "read_aloud_tool_enabled": self.switch_read_aloud_tool.get_active(),
-            "search_tool_enabled": self.switch_search_tool.get_active(),
-            "text_edit_tool_enabled": self.switch_text_edit_tool.get_active(),
+            "image_tool_enabled": self._get_switch_state("switch_image_tool"),
+            "music_tool_enabled": self._get_switch_state("switch_music_tool"),
+            "web_search_enabled": self._get_switch_state("switch_web_search"),
+            "read_aloud_tool_enabled": self._get_switch_state("switch_read_aloud_tool"),
+            "search_tool_enabled": self._get_switch_state("switch_search_tool"),
+            "text_edit_tool_enabled": self._get_switch_state("switch_text_edit_tool"),
+            "wolfram_tool_enabled": self._get_switch_state("switch_wolfram_tool"),
         }
+
+    def _build_tool_visibility(self):
+        """Return a dict of tool visibility gated by settings."""
+        return {
+            "image": bool(getattr(self, "tool_visibility_image", getattr(self, "image_tool_enabled", False))),
+            "music": bool(getattr(self, "tool_visibility_music", getattr(self, "music_tool_enabled", False))),
+            "web_search": bool(getattr(self, "tool_visibility_web_search", getattr(self, "web_search_enabled", False))),
+            "read_aloud": bool(getattr(self, "tool_visibility_read_aloud", getattr(self, "read_aloud_tool_enabled", False))),
+            "search": bool(getattr(self, "tool_visibility_search", getattr(self, "search_tool_enabled", False))),
+            "text_edit": bool(getattr(self, "tool_visibility_text_edit", getattr(self, "text_edit_tool_enabled", False))),
+            "wolfram": bool(getattr(self, "tool_visibility_wolfram", getattr(self, "wolfram_tool_enabled", False))),
+        }
+
+    def _get_switch_state(self, attr: str) -> bool:
+        switch = getattr(self, attr, None)
+        if switch is None:
+            return False
+        return bool(switch.get_active())
+
+    def _set_switch_sensitive(self, attr: str, sensitive: bool) -> None:
+        switch = getattr(self, attr, None)
+        if switch is not None:
+            switch.set_sensitive(sensitive)
+
+    def _set_switch_active(self, attr: str, active: bool) -> None:
+        switch = getattr(self, attr, None)
+        if switch is not None:
+            switch.set_active(active)
 
 
 # ---------------------------------------------------------------------------
@@ -5749,7 +5875,16 @@ class ShortcutsHelpDialog(Gtk.Dialog):
 class APIKeyDialog(Gtk.Dialog):
     """Dialog for managing API keys for different providers."""
 
-    def __init__(self, parent, openai_key='', gemini_key='', grok_key='', claude_key='', perplexity_key=''):
+    def __init__(
+        self,
+        parent,
+        openai_key='',
+        gemini_key='',
+        grok_key='',
+        claude_key='',
+        perplexity_key='',
+        wolfram_key='',
+    ):
         super().__init__(title="API Keys", transient_for=parent, flags=0)
         self.set_modal(True)
         self.set_default_size(500, 300)
@@ -5763,6 +5898,7 @@ class APIKeyDialog(Gtk.Dialog):
             grok_key=grok_key,
             claude_key=claude_key,
             perplexity_key=perplexity_key,
+            wolfram_key=wolfram_key,
         )
         box.pack_start(list_box, True, True, 0)
 
@@ -5779,6 +5915,7 @@ class APIKeyDialog(Gtk.Dialog):
             'grok': self.entries['grok'].get_text().strip(),
             'claude': self.entries['claude'].get_text().strip(),
             'perplexity': self.entries['perplexity'].get_text().strip(),
+            'wolfram': self.entries['wolfram'].get_text().strip(),
         }
 
 

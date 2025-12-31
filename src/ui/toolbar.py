@@ -110,7 +110,7 @@ class Toolbar(UIComponent):
         
         return box
     
-    def update_tool_indicators(self, image=False, music=False, web_search=False, read_aloud=False, search=False, text_edit=False):
+    def update_tool_indicators(self, image=False, music=False, web_search=False, read_aloud=False, search=False, text_edit=False, wolfram=False):
         """Update the active tools indicator."""
         indicators = []
         if image:
@@ -125,6 +125,8 @@ class Toolbar(UIComponent):
             indicators.append("S")
         if text_edit:
             indicators.append("E")
+        if wolfram:
+            indicators.append("α")
         
         if indicators:
             self.tools_indicator.set_text(" · ".join(indicators))
@@ -137,6 +139,7 @@ class Toolbar(UIComponent):
                         ("Read Aloud", read_aloud),
                         ("Search", search),
                         ("Text Edit", text_edit),
+                        ("Wolfram", wolfram),
                     ] if a
                 ])
             )

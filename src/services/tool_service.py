@@ -43,6 +43,7 @@ class ToolService:
         memory_handler: Optional[Callable] = None,
         text_get_handler: Optional[Callable] = None,
         text_edit_handler: Optional[Callable] = None,
+        wolfram_handler: Optional[Callable] = None,
         event_bus: Optional[EventBus] = None,
         settings_manager=None,
     ):
@@ -77,6 +78,7 @@ class ToolService:
             'memory': memory_handler,
             'text_get': text_get_handler,
             'text_edit': text_edit_handler,
+            'wolfram': wolfram_handler,
         }
         self._event_bus = event_bus
         self._settings_manager = settings_manager
@@ -126,8 +128,9 @@ class ToolService:
                 memory_handler=self._handlers.get('memory'),
                 text_get_handler=self._handlers.get('text_get'),
                 text_edit_handler=self._handlers.get('text_edit'),
+                wolfram_handler=self._handlers.get('wolfram'),
             )
-            
+
             # Execute tool
             result = run_tool_call(tool_name, args, context)
             
@@ -193,6 +196,9 @@ class ToolService:
         
         if self._tool_manager.text_edit_tool_enabled and self._handlers.get('text_edit'):
             available.append('apply_text_edit')
+
+        if self._tool_manager.wolfram_tool_enabled and self._handlers.get('wolfram'):
+            available.append('wolfram_alpha')
         
         return available
     
@@ -234,6 +240,8 @@ class ToolService:
         if self._tool_manager.text_edit_tool_enabled:
             enabled_tools.add('text_get')
             enabled_tools.add('apply_text_edit')
+        if self._tool_manager.wolfram_tool_enabled:
+            enabled_tools.add('wolfram_alpha')
         
         if not enabled_tools:
             return []
@@ -284,6 +292,11 @@ class ToolService:
                 "You can search chat history using the search_memory tool. "
                 "Provide a keyword and optionally specify 'current' or 'history' as the source."
             )
+
+        if 'wolfram_alpha' in available_tools:
+            guidance_parts.append(
+                "You can use the wolfram_alpha tool for factual queries and calculations."
+            )
         
         return "\n\n".join(guidance_parts) if guidance_parts else None
     
@@ -322,6 +335,7 @@ class ToolService:
         music_handler: Optional[Callable] = None,
         read_aloud_handler: Optional[Callable] = None,
         search_handler: Optional[Callable] = None,
+        wolfram_handler: Optional[Callable] = None,
     ) -> None:
         """
         Update tool handlers.
@@ -336,6 +350,8 @@ class ToolService:
             New read aloud handler (None to keep existing).
         search_handler : Optional[Callable]
             New search handler (None to keep existing).
+        wolfram_handler : Optional[Callable]
+            New wolfram handler (None to keep existing).
         """
         if image_handler is not None:
             self._handlers['image'] = image_handler
@@ -345,6 +361,9 @@ class ToolService:
             self._handlers['read_aloud'] = read_aloud_handler
         if search_handler is not None:
             self._handlers['search'] = search_handler
+        if wolfram_handler is not None:
+            self._handlers['wolfram'] = wolfram_handler
+
     
     def enable_tool(self, tool_name: str, enabled: bool = True) -> None:
         """
@@ -367,6 +386,9 @@ class ToolService:
             self._tool_manager.search_tool_enabled = enabled
         elif tool_name == 'text_edit':
             self._tool_manager.text_edit_tool_enabled = enabled
+        elif tool_name == 'wolfram':
+            self._tool_manager.wolfram_tool_enabled = enabled
+
     
     def is_tool_enabled(self, tool_name: str) -> bool:
         """
@@ -392,6 +414,8 @@ class ToolService:
             return self._tool_manager.search_tool_enabled
         elif tool_name == 'text_edit':
             return self._tool_manager.text_edit_tool_enabled
+        elif tool_name == 'wolfram':
+            return self._tool_manager.wolfram_tool_enabled
         return False
 
     # -------------------------------------------------------------------------
@@ -436,3 +460,7 @@ class ToolService:
         if self._document_mode_tools_only:
             return self._tool_manager.supports_tool_calling(model_name, model_provider_map, custom_models)
         return self._tool_manager.supports_text_edit_tools(model_name, model_provider_map, custom_models)
+
+    def supports_tool_calling(self, model_name: str, model_provider_map: Optional[Dict] = None, custom_models: Optional[Dict] = None) -> bool:
+        """Check if a model supports generic tool calling."""
+        return self._tool_manager.supports_tool_calling(model_name, model_provider_map, custom_models)
