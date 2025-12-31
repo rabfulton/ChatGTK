@@ -602,7 +602,7 @@ class MessageRenderer:
             elif seg.startswith('--- Table Start ---'):
                 table_content = re.sub(r'^--- Table Start ---\n?', '', seg)
                 table_content = re.sub(r'\n?--- Table End ---$', '', table_content).strip()
-                table_widget = self.create_table_widget(table_content)
+                table_widget = self.create_table_widget(table_content, text_color)
                 if table_widget:
                     container.pack_start(table_widget, False, False, 0)
                 else:
@@ -1106,7 +1106,7 @@ class MessageRenderer:
             current = current.get_parent()
         return getattr(widget, "message_index", None)
 
-    def create_table_widget(self, table_text: str) -> Optional[Gtk.Widget]:
+    def create_table_widget(self, table_text: str, text_color: str = None) -> Optional[Gtk.Widget]:
         """Convert markdown table text to a GTK grid widget."""
         if not table_text:
             return None
@@ -1124,7 +1124,7 @@ class MessageRenderer:
 
         data_lines = lines[2:]
         grid = Gtk.Grid()
-        grid.set_column_spacing(12)
+        grid.set_column_spacing(8)
         grid.set_row_spacing(6)
         grid.set_margin_start(6)
         grid.set_margin_end(6)
@@ -1132,11 +1132,23 @@ class MessageRenderer:
         grid.set_margin_bottom(6)
         grid.set_hexpand(True)
 
+        total_rows = 2 + len(data_lines)
+        total_cols = max(1, (len(header_cells) * 2) - 1)
+
         # Header row
         for col, header in enumerate(header_cells):
             alignment = alignments[col] if col < len(alignments) else 0
             widget = self._create_table_cell_widget(header, alignment, bold=True)
-            grid.attach(widget, col, 0, 1, 1)
+            grid.attach(widget, col * 2, 0, 1, 1)
+
+        # Header separator
+        header_separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        if text_color:
+            self._apply_css(
+                header_separator,
+                f"separator {{ background-color: {text_color}; color: {text_color}; min-height: 1px; opacity: 0.5; }}"
+            )
+        grid.attach(header_separator, 0, 1, total_cols, 1)
 
         # Data rows
         for row_idx, line in enumerate(data_lines, start=1):
@@ -1151,7 +1163,17 @@ class MessageRenderer:
             for col, cell in enumerate(cells):
                 alignment = alignments[col] if col < len(alignments) else 0
                 widget = self._create_table_cell_widget(cell, alignment)
-                grid.attach(widget, col, row_idx, 1, 1)
+                grid.attach(widget, col * 2, row_idx + 1, 1, 1)
+
+        # Vertical separators between columns
+        for col in range(len(header_cells) - 1):
+            v_separator = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+            if text_color:
+                self._apply_css(
+                    v_separator,
+                    f"separator {{ background-color: {text_color}; color: {text_color}; min-width: 1px; opacity: 0.5; }}"
+                )
+            grid.attach(v_separator, col * 2 + 1, 0, 1, total_rows)
 
         frame = Gtk.Frame()
         frame.set_shadow_type(Gtk.ShadowType.IN)
