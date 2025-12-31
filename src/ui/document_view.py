@@ -96,6 +96,7 @@ class DocumentView(UIComponent):
         edit_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         edit_scrolled.set_vexpand(True)
         edit_scrolled.set_hexpand(True)
+        self._edit_scrolled = edit_scrolled
         
         self._text_view = GtkSource.View()
         self._text_view.set_wrap_mode(Gtk.WrapMode.WORD)
@@ -344,13 +345,17 @@ class DocumentView(UIComponent):
         self._in_preview_mode = button.get_active()
         self._preview_toggle.set_label("Edit" if self._in_preview_mode else "Preview")
         if self._in_preview_mode:
+            self._pending_preview_scroll_percent = self._get_scroll_percent(self._edit_scrolled)
             # Save current content and render preview
             self._current_content = self.get_content()
             self._render_preview()
             self._mode_stack.set_visible_child_name("preview")
         else:
+            self._cancel_preview_scroll_sync()
             self._mode_stack.set_visible_child_name("edit")
             self._text_view.grab_focus()
+            preview_percent = self._get_scroll_percent(self._preview_scrolled)
+            GLib.idle_add(self._apply_scroll_percent, self._edit_scrolled, preview_percent)
         if self._preview_toggled_callback:
             self._preview_toggled_callback(self._in_preview_mode)
     
@@ -414,6 +419,65 @@ class DocumentView(UIComponent):
             on_block_rendered=self._register_preview_anchor,
         )
         self._preview_box.show_all()
+        self._sync_preview_scroll()
+
+    def _sync_preview_scroll(self) -> None:
+        """Apply the pending edit scroll percent to the preview and resync after layout."""
+        percent = getattr(self, "_pending_preview_scroll_percent", None)
+        if percent is None:
+            return
+        self._apply_scroll_percent(self._preview_scrolled, percent)
+        if not hasattr(self, "_preview_size_allocate_handler_id"):
+            self._preview_size_allocate_handler_id = None
+        if not self._preview_size_allocate_handler_id:
+            self._preview_size_allocate_handler_id = self._preview_box.connect(
+                "size-allocate", self._on_preview_size_allocate
+            )
+        if not hasattr(self, "_preview_scroll_sync_timeout"):
+            self._preview_scroll_sync_timeout = None
+        if not self._preview_scroll_sync_timeout:
+            self._preview_scroll_sync_timeout = GLib.timeout_add(1500, self._cancel_preview_scroll_sync)
+
+    def _on_preview_size_allocate(self, _widget, _allocation) -> None:
+        """Re-apply preview scroll during layout changes (e.g., image load)."""
+        percent = getattr(self, "_pending_preview_scroll_percent", None)
+        if percent is None:
+            return
+        self._apply_scroll_percent(self._preview_scrolled, percent)
+
+    def _cancel_preview_scroll_sync(self) -> bool:
+        """Stop resyncing preview scroll after layout settles."""
+        if hasattr(self, "_preview_size_allocate_handler_id") and self._preview_size_allocate_handler_id:
+            self._preview_box.disconnect(self._preview_size_allocate_handler_id)
+            self._preview_size_allocate_handler_id = None
+        if hasattr(self, "_preview_scroll_sync_timeout") and self._preview_scroll_sync_timeout:
+            GLib.source_remove(self._preview_scroll_sync_timeout)
+            self._preview_scroll_sync_timeout = None
+        self._pending_preview_scroll_percent = None
+        return False
+
+    def _get_scroll_percent(self, scrolled: Gtk.ScrolledWindow) -> float:
+        """Return the current vertical scroll position as a percent."""
+        if not scrolled:
+            return 0.0
+        adj = scrolled.get_vadjustment()
+        upper = adj.get_upper()
+        page_size = adj.get_page_size()
+        denom = max(upper - page_size, 1.0)
+        return max(0.0, min(1.0, (adj.get_value() - adj.get_lower()) / denom))
+
+    def _apply_scroll_percent(self, scrolled: Gtk.ScrolledWindow, percent: float) -> bool:
+        """Apply a vertical scroll percent to a scrolled window."""
+        if not scrolled:
+            return False
+        adj = scrolled.get_vadjustment()
+        upper = adj.get_upper()
+        page_size = adj.get_page_size()
+        lower = adj.get_lower()
+        denom = max(upper - page_size, 1.0)
+        value = lower + (percent * denom)
+        adj.set_value(max(lower, min(value, upper - page_size)))
+        return False
 
     def _on_preview_block_updated(self, _message_index: int, new_text: str) -> None:
         """Apply a preview block edit back into the document content."""
