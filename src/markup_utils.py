@@ -46,8 +46,11 @@ def _is_table_separator(line):
     stripped = line.strip().strip('|')
     if not stripped:
         return False
-    pattern = re.compile(r'^(:?-{3,}:?\s*)(\|\s*:?-{3,}:?\s*)*$')
-    return bool(pattern.match(stripped))
+    cells = [cell.strip() for cell in stripped.split('|')]
+    if not cells:
+        return False
+    pattern = re.compile(r'^:?-{3,}:?$')
+    return all(bool(pattern.match(cell)) for cell in cells)
 
 def _is_table_row(line):
     """Return True if the line represents a markdown row (not separator)."""
