@@ -1364,8 +1364,7 @@ class OpenAIGTKClient(Gtk.Window):
     def _update_document_undo_redo_state(self) -> None:
         """Update undo/redo button states."""
         if self.controller.has_document():
-            self._document_view.set_undo_enabled(self.controller.document_service.can_undo)
-            self._document_view.set_redo_enabled(self.controller.document_service.can_redo)
+            self._document_view.refresh_undo_redo_state()
 
     def _switch_to_document_view(self) -> None:
         """Switch to Document Mode view."""

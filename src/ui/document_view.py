@@ -122,6 +122,8 @@ class DocumentView(UIComponent):
             self._buffer.set_language(markdown_lang)
         self._text_view.set_buffer(self._buffer)
         self._buffer.connect('changed', self._on_buffer_changed)
+        self._buffer.connect('notify::can-undo', lambda *_args: self._refresh_undo_redo_state())
+        self._buffer.connect('notify::can-redo', lambda *_args: self._refresh_undo_redo_state())
         self._markdown_actions = MarkdownActions(self._text_view)
         
         edit_scrolled.add(self._text_view)
@@ -146,6 +148,8 @@ class DocumentView(UIComponent):
         toolbar = self._build_toolbar()
         container.pack_start(toolbar, False, False, 0)
         container.pack_start(self._mode_stack, True, True, 0)
+
+        self._refresh_undo_redo_state()
         
         return container
     
@@ -193,14 +197,14 @@ class DocumentView(UIComponent):
         self._undo_btn = Gtk.Button()
         self._undo_btn.set_image(Gtk.Image.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
         self._undo_btn.set_tooltip_text("Undo (Ctrl+Z)")
-        self._undo_btn.connect("clicked", lambda w: self._on_undo() if self._on_undo else None)
+        self._undo_btn.connect("clicked", lambda w: self._undo())
         right_box.pack_start(self._undo_btn, False, False, 0)
         
         # Redo button
         self._redo_btn = Gtk.Button()
         self._redo_btn.set_image(Gtk.Image.new_from_icon_name("edit-redo-symbolic", Gtk.IconSize.SMALL_TOOLBAR))
-        self._redo_btn.set_tooltip_text("Redo (Ctrl+Shift+Z)")
-        self._redo_btn.connect("clicked", lambda w: self._on_redo() if self._on_redo else None)
+        self._redo_btn.set_tooltip_text("Redo (Ctrl+Shift+Z / Ctrl+Y)")
+        self._redo_btn.connect("clicked", lambda w: self._redo())
         right_box.pack_start(self._redo_btn, False, False, 0)
         
         # Separator
@@ -480,11 +484,28 @@ class DocumentView(UIComponent):
         if self._on_content_changed:
             content = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
             self._on_content_changed(content)
+        self._refresh_undo_redo_state()
+
+    def _undo(self) -> None:
+        """Undo using GtkSourceView's buffer history."""
+        if self._buffer.can_undo():
+            self._buffer.undo()
+            self._text_view.grab_focus()
+        self._refresh_undo_redo_state()
+
+    def _redo(self) -> None:
+        """Redo using GtkSourceView's buffer history."""
+        if self._buffer.can_redo():
+            self._buffer.redo()
+            self._text_view.grab_focus()
+        self._refresh_undo_redo_state()
 
     def _on_key_press(self, widget, event) -> bool:
         """Handle key presses for document editor behaviors."""
         if self._in_preview_mode:
             return False
+        if self._handle_undo_redo_shortcuts(event):
+            return True
         if self._maybe_continue_list(event):
             return True
         return self._handle_markdown_shortcuts(event)
@@ -570,6 +591,25 @@ class DocumentView(UIComponent):
                     handler()
                     return True
 
+        return False
+
+    def _handle_undo_redo_shortcuts(self, event) -> bool:
+        """Handle undo/redo keyboard shortcuts."""
+        if not (event.state & Gdk.ModifierType.CONTROL_MASK):
+            return False
+        key_name = Gdk.keyval_name(event.keyval)
+        if not key_name:
+            return False
+        key_name = key_name.lower()
+        if key_name == "z":
+            if event.state & Gdk.ModifierType.SHIFT_MASK:
+                self._redo()
+            else:
+                self._undo()
+            return True
+        if key_name == "y":
+            self._redo()
+            return True
         return False
 
     def _maybe_continue_list(self, event) -> bool:
@@ -669,6 +709,7 @@ class DocumentView(UIComponent):
                 self._render_preview()
         finally:
             self._updating_programmatically = False
+        self._refresh_undo_redo_state()
     
     def get_content(self) -> str:
         """Get the current document content."""
@@ -706,6 +747,17 @@ class DocumentView(UIComponent):
     def set_redo_enabled(self, enabled: bool) -> None:
         """Enable/disable the redo button."""
         self._redo_btn.set_sensitive(enabled)
+
+    def refresh_undo_redo_state(self) -> None:
+        """Sync undo/redo button states from the GtkSource buffer."""
+        self._refresh_undo_redo_state()
+
+    def _refresh_undo_redo_state(self) -> None:
+        """Internal helper to update undo/redo button sensitivity."""
+        if not hasattr(self, "_buffer") or not self._buffer:
+            return
+        self._undo_btn.set_sensitive(self._buffer.can_undo())
+        self._redo_btn.set_sensitive(self._buffer.can_redo())
     
     def focus_editor(self) -> None:
         """Focus the document editor."""
