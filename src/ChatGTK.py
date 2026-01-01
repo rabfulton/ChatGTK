@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+_script_start = __import__('time').perf_counter()
 import os
 from types import SimpleNamespace
 os.environ['AUDIODEV'] = 'pulse'  # Force use of PulseAudio
@@ -333,7 +334,8 @@ class OpenAIGTKClient(Gtk.Window):
             self.refresh_history_list()
             self.apply_sidebar_styles()
             elapsed_ms = (time.perf_counter() - self._startup_t0) * 1000
-            print(f"[Startup] ready in {elapsed_ms:.1f}ms")
+            total_ms = (time.perf_counter() - _script_start) * 1000
+            print(f"[Startup] ready in {elapsed_ms:.0f}ms (total {total_ms:.0f}ms incl. imports)")
             return False
         GLib.idle_add(refresh_history)
 
@@ -399,8 +401,12 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _init_providers_deferred(self) -> bool:
         """Initialize providers after UI is shown."""
-        self.controller.initialize_providers_from_env()
-        self.fetch_models_async()
+        # Run in thread to avoid blocking UI with slow keyring access
+        import threading
+        def init():
+            self.controller.initialize_providers_from_env()
+            GLib.idle_add(self.fetch_models_async)
+        threading.Thread(target=init, daemon=True).start()
         return False
 
     def _get_whitelist_models(self) -> tuple[list, dict]:

@@ -50,6 +50,7 @@ Or use your package manager to install the dependencies.
 - You optionally require `texlive` and `dvipng` if you want mathematics to render nicely.
 - Install `beets` and `playerctl` if you want the music control functionality.
 - Install `qdrant-client`, `qdrant` if you want to try the vector database for memory system.
+- Install `keyring` if you want to store API keys in your system keyring instead of a plaintext file.
 
 Launch the application by running:
 ```bash
@@ -361,5 +362,6 @@ install `texlive-fontsrecommended` from your package manager.
 - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
 - `qdrant-client`, `qdrant` Optional vector database for memory system
 - `sentence-transformers` Optional to support local embedding model for memory system
+- `keyring` Optional to store API keys in system keyring instead of plaintext file
 
 <a href="https://www.buymeacoffee.com/rabfulton" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>

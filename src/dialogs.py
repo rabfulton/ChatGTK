@@ -4223,6 +4223,8 @@ class SettingsDialog(Gtk.Dialog):
     # API Keys page
     # -----------------------------------------------------------------------
     def _build_api_keys_page(self):
+        from repositories import KEYRING_AVAILABLE
+        
         keys = self.initial_api_keys
         # Separate standard keys from custom keys
         from utils import API_KEY_FIELDS
@@ -4253,6 +4255,39 @@ class SettingsDialog(Gtk.Dialog):
                 if hasattr(row, 'delete_button'):
                     row.delete_button.connect("clicked", lambda w, r=row, k=row.custom_key_name: self._on_delete_custom_key(w, r, k))
         
+        # Add "Show API keys" checkbox row
+        show_keys_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(show_keys_row, top=12, bottom=4)
+        show_keys_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        show_keys_row.add(show_keys_hbox)
+        self.chk_show_api_keys = Gtk.CheckButton(label="Show API keys")
+        self.chk_show_api_keys.set_tooltip_text("Toggle visibility of API key values")
+        self.chk_show_api_keys.connect("toggled", self._on_show_api_keys_toggled)
+        show_keys_hbox.pack_start(self.chk_show_api_keys, False, False, 0)
+        list_box.add(show_keys_row)
+        
+        # Add "Use system keyring" checkbox row
+        keyring_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(keyring_row, top=4, bottom=4)
+        keyring_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        keyring_row.add(keyring_hbox)
+        self.chk_use_keyring = Gtk.CheckButton(label="Store API keys in system keyring")
+        use_keyring = getattr(self, 'use_system_keyring', False) or getattr(self, 'USE_SYSTEM_KEYRING', False)
+        self.chk_use_keyring.set_active(bool(use_keyring))
+        if KEYRING_AVAILABLE:
+            self.chk_use_keyring.set_tooltip_text(
+                "Store API keys in your system keyring instead of a plaintext file. "
+                "A keyring unlock prompt may appear depending on your OS."
+            )
+            self.chk_use_keyring.connect("toggled", self._on_use_keyring_toggled)
+        else:
+            self.chk_use_keyring.set_sensitive(False)
+            self.chk_use_keyring.set_tooltip_text(
+                "Keyring support unavailable. Install the 'keyring' Python package to enable."
+            )
+        keyring_hbox.pack_start(self.chk_use_keyring, False, False, 0)
+        list_box.add(keyring_row)
+        
         # Add "Add Custom Key" button row
         add_button_row = Gtk.ListBoxRow()
         _add_listbox_row_margins(add_button_row, top=12, bottom=4)
@@ -4280,6 +4315,100 @@ class SettingsDialog(Gtk.Dialog):
         list_box.add(button_row)
 
         self.stack.add_named(list_box, "API Keys")
+    
+    def _on_show_api_keys_toggled(self, widget):
+        """Toggle visibility of all API key entry fields."""
+        visible = widget.get_active()
+        for entry in self.api_key_entries.values():
+            entry.set_visibility(visible)
+    
+    def _on_use_keyring_toggled(self, widget):
+        """Handle toggling of keyring storage option."""
+        use_keyring = widget.get_active()
+        current = getattr(self, 'use_system_keyring', False) or getattr(self, 'USE_SYSTEM_KEYRING', False)
+        
+        if use_keyring == current:
+            return
+        
+        keys = self.get_api_keys()
+        key_count = sum(1 for v in keys.values() if v and not v.startswith('$'))
+        
+        if use_keyring:
+            msg_text = "Move API keys to system keyring?"
+            msg_secondary = (
+                f"{key_count} key(s) will be moved to your system keyring and "
+                "removed from the plaintext file. Environment variable references "
+                "will be preserved."
+            )
+        else:
+            msg_text = "Move API keys back to file?"
+            msg_secondary = (
+                f"{key_count} key(s) will be moved from your system keyring to "
+                "a plaintext file and removed from the keyring."
+            )
+        
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=msg_text,
+        )
+        dialog.format_secondary_text(msg_secondary)
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response != Gtk.ResponseType.YES:
+            widget.set_active(current)
+            return
+        
+        # Perform migration
+        from repositories import KeyringAPIKeysRepository
+        from config import API_KEYS_FILE
+        
+        try:
+            repo = KeyringAPIKeysRepository(API_KEYS_FILE, use_keyring=current)
+            # Update with current UI values before migration
+            for provider, entry in self.api_key_entries.items():
+                value = entry.get_text().strip()
+                if value:
+                    repo.set_key(provider, value)
+            
+            if use_keyring:
+                count = repo.migrate_to_keyring()
+            else:
+                count = repo.migrate_to_file()
+            
+            self.USE_SYSTEM_KEYRING = use_keyring
+            _set_setting_value(self._parent, 'USE_SYSTEM_KEYRING', use_keyring)
+            
+            # Reset the cached repo so future loads use the new setting
+            from utils import reset_api_keys_repo
+            reset_api_keys_repo()
+            
+            msg = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.INFO,
+                buttons=Gtk.ButtonsType.OK,
+                text="Migration Complete",
+            )
+            msg.format_secondary_text(f"{count} key(s) migrated successfully.")
+            msg.run()
+            msg.destroy()
+            
+        except Exception as e:
+            widget.set_active(current)
+            msg = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Migration Failed",
+            )
+            msg.format_secondary_text(str(e))
+            msg.run()
+            msg.destroy()
 
     # -----------------------------------------------------------------------
     # Voice preview handlers
@@ -5037,13 +5166,37 @@ class SettingsDialog(Gtk.Dialog):
 
     def _on_save_api_keys_clicked(self, widget):
         """
-        Persist the current API keys to the per-user API keys file.
+        Persist the current API keys to the per-user API keys file or keyring.
 
         This does not close the dialog; it simply writes the keys so they can
         be loaded automatically on the next run of the application.
         """
         keys = self.get_api_keys()
-        save_api_keys(keys)
+        use_keyring = self.chk_use_keyring.get_active()
+        
+        from repositories import KeyringAPIKeysRepository
+        from config import API_KEYS_FILE
+        
+        try:
+            repo = KeyringAPIKeysRepository(API_KEYS_FILE, use_keyring=use_keyring)
+            for provider, value in keys.items():
+                if value:
+                    repo.set_key(provider, value)
+                else:
+                    repo.delete_key(provider)
+            repo.save()
+        except Exception as e:
+            msg = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Error Saving API Keys",
+            )
+            msg.format_secondary_text(str(e))
+            msg.run()
+            msg.destroy()
+            return
 
         # Give the user a small confirmation message.
         msg = Gtk.MessageDialog(
@@ -5053,9 +5206,10 @@ class SettingsDialog(Gtk.Dialog):
             buttons=Gtk.ButtonsType.OK,
             text="API Keys Saved",
         )
+        location = "system keyring" if use_keyring else "file"
         msg.format_secondary_text(
-            "Your API keys have been saved and will be restored automatically "
-            "the next time you start ChatGTK."
+            f"Your API keys have been saved to {location} and will be restored "
+            "automatically the next time you start ChatGTK."
         )
         msg.run()
         msg.destroy()

@@ -439,6 +439,9 @@ SETTINGS_CONFIG = {
     # system tray instead of keeping it in the taskbar. A tray icon is shown
     # which can be used to restore or quit the application.
     'MINIMIZE_TO_TRAY_ENABLED': {'type': bool, 'default': False},
+    # When enabled, API keys are stored in the system keyring instead of plaintext JSON.
+    # Requires the optional 'keyring' package.
+    'USE_SYSTEM_KEYRING': {'type': bool, 'default': False},
     # --- Conversation Compaction Settings ---
     # When enabled, long conversations will be summarized to reduce token usage and costs.
     'COMPACTION_ENABLED': {'type': bool, 'default': False},

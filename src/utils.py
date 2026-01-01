@@ -42,9 +42,18 @@ def _get_api_keys_repo():
     """Get or create the API keys repository instance."""
     global _api_keys_repo
     if _api_keys_repo is None:
-        from repositories import APIKeysRepository
-        _api_keys_repo = APIKeysRepository()
+        from repositories import KeyringAPIKeysRepository
+        settings_repo = _get_settings_repo()
+        use_keyring = settings_repo.get('USE_SYSTEM_KEYRING', False)
+        if isinstance(use_keyring, str):
+            use_keyring = use_keyring.lower() in ('true', '1', 'yes')
+        _api_keys_repo = KeyringAPIKeysRepository(use_keyring=use_keyring)
     return _api_keys_repo
+
+def reset_api_keys_repo():
+    """Reset the API keys repository to pick up setting changes."""
+    global _api_keys_repo
+    _api_keys_repo = None
 
 def _get_model_cache_repo():
     """Get or create the model cache repository instance."""

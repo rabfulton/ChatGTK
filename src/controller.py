@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Set, Callable
 from repositories import (
     SettingsRepository,
     APIKeysRepository,
+    KeyringAPIKeysRepository,
     ChatHistoryRepository,
     ModelCacheRepository,
 )
@@ -102,7 +103,12 @@ class ChatController:
         """
         # Initialize repositories
         self._settings_repo = settings_repo or SettingsRepository()
-        self._api_keys_repo = api_keys_repo or APIKeysRepository()
+        if api_keys_repo is None:
+            use_keyring = self._settings_repo.get('USE_SYSTEM_KEYRING', False)
+            if isinstance(use_keyring, str):
+                use_keyring = use_keyring.lower() in ('true', '1', 'yes')
+            api_keys_repo = KeyringAPIKeysRepository(use_keyring=use_keyring)
+        self._api_keys_repo = api_keys_repo
         self._model_cache_repo = model_cache_repo or ModelCacheRepository()
         
         # Initialize projects repository
@@ -176,7 +182,7 @@ class ChatController:
         # Provider management
         self.providers: Dict[str, Any] = {}
         self.model_provider_map: Dict[str, str] = {}
-        self.api_keys: Dict[str, str] = self._api_keys_repo.get_all_raw()
+        self._api_keys: Optional[Dict[str, str]] = None  # Lazy loaded
         self.custom_models: Dict[str, Dict[str, Any]] = load_custom_models()
         self.custom_providers: Dict[str, Any] = {}
         
@@ -210,6 +216,17 @@ class ChatController:
     # -----------------------------------------------------------------------
     # Memory service management
     # -----------------------------------------------------------------------
+    
+    @property
+    def api_keys(self) -> Dict[str, str]:
+        """Lazy load API keys on first access."""
+        if self._api_keys is None:
+            self._api_keys = self._api_keys_repo.get_all_raw()
+        return self._api_keys
+    
+    @api_keys.setter
+    def api_keys(self, value: Dict[str, str]) -> None:
+        self._api_keys = value
 
     def _init_memory_service(self) -> None:
         """Initialize the memory service if dependencies are available and enabled."""
