@@ -612,8 +612,108 @@ class OpenAIGTKClient(Gtk.Window):
                 shortcuts[action] = default_key
         return shortcuts
 
+    def _is_descendant(self, widget, ancestor) -> bool:
+        """Return True if widget is a descendant of ancestor."""
+        current = widget
+        while current:
+            if current is ancestor:
+                return True
+            current = current.get_parent()
+        return False
+
+    def _focus_in_sidebar(self) -> bool:
+        """Return True if the current focus is inside the sidebar."""
+        if not hasattr(self, "sidebar"):
+            return False
+        focus = self.get_focus()
+        if not focus:
+            return False
+        return self._is_descendant(focus, self.sidebar)
+
+    def _get_conversation_scrolled_window(self):
+        """Return the scrolled window for the chat conversation, if available."""
+        widget = self.conversation_box
+        while widget and not isinstance(widget, Gtk.ScrolledWindow):
+            widget = widget.get_parent()
+        return widget
+
+    def _scroll_conversation_by_page(self, direction: int) -> bool:
+        """Scroll the conversation view by one page."""
+        if self._in_document_mode:
+            return False
+        scrolled = self._get_conversation_scrolled_window()
+        if not scrolled:
+            return False
+        adj = scrolled.get_vadjustment()
+        if not adj:
+            return False
+        page_size = adj.get_page_size() or 0
+        if page_size <= 0:
+            return False
+        new_value = adj.get_value() + (page_size * direction)
+        max_value = max(adj.get_upper() - page_size, 0)
+        if new_value < 0:
+            new_value = 0
+        elif new_value > max_value:
+            new_value = max_value
+        adj.set_value(new_value)
+        return True
+
+    def _scroll_conversation_to_message(self, direction: int) -> bool:
+        """Scroll to the next/previous message widget in the conversation."""
+        if self._in_document_mode:
+            return False
+        scrolled = self._get_conversation_scrolled_window()
+        if not scrolled:
+            return False
+        adj = scrolled.get_vadjustment()
+        if not adj or not self.message_widgets:
+            return False
+        current = adj.get_value()
+        targets = []
+        for widget in self.message_widgets:
+            result = widget.translate_coordinates(self.conversation_box, 0, 0)
+            if result:
+                _x, y = result
+                targets.append(y)
+        if not targets:
+            return False
+        targets.sort()
+        if direction > 0:
+            for y in targets:
+                if y > current + 1:
+                    adj.set_value(min(y, adj.get_upper() - adj.get_page_size()))
+                    return True
+        else:
+            for y in reversed(targets):
+                if y < current - 1:
+                    adj.set_value(max(y, 0))
+                    return True
+        return False
+
+    def _handle_sidebar_navigation_key(self, event) -> bool:
+        """Redirect sidebar navigation keys to the conversation view."""
+        if not self._focus_in_sidebar():
+            return False
+        keyval = event.keyval
+        state = event.state
+        no_modifiers = not (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK))
+
+        if no_modifiers and keyval == Gdk.KEY_Page_Up:
+            return self._scroll_conversation_by_page(-1)
+        if no_modifiers and keyval == Gdk.KEY_Page_Down:
+            return self._scroll_conversation_by_page(1)
+
+        if no_modifiers and keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+            direction = -1 if (state & Gdk.ModifierType.SHIFT_MASK) else 1
+            self._scroll_conversation_to_message(direction)
+            return True
+        return False
+
     def _on_global_key_press(self, widget, event):
         """Handle global keyboard shortcuts."""
+        if self._handle_sidebar_navigation_key(event):
+            return True
         shortcuts = self._get_shortcuts()
         
         # Build current key combo string

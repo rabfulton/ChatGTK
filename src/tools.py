@@ -510,6 +510,8 @@ def run_tool_call(
     str
         The result of the tool call (e.g. an <img> tag or status message).
     """
+    if tool_name:
+        print(f"[ToolCall] {tool_name}")
     if tool_name == "generate_image":
         if context.image_handler is None:
             return "Error: image tool is not available."

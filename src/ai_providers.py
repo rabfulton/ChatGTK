@@ -1664,7 +1664,16 @@ class OpenAIProvider(AIProvider):
         if reasoning_effort:
             params["reasoning"] = {"effort": reasoning_effort}
         
-        print(f"[OpenAIProvider] Calling Responses API with {len(input_items)} input items, {len(tools)} tools")
+        tool_types = [t.get("type") for t in tools]
+        tool_names = [
+            t.get("name")
+            for t in tools
+            if t.get("type") == "function" and t.get("name")
+        ]
+        print(
+            f"[OpenAIProvider] Calling Responses API with {len(input_items)} input items, "
+            f"{len(tools)} tools (types={tool_types}, functions={tool_names})"
+        )
         
         # If no function tools are enabled, we can do a simple one-shot call
         if not enabled_tools:
