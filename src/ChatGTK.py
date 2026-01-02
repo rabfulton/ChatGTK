@@ -659,6 +659,24 @@ class OpenAIGTKClient(Gtk.Window):
         adj.set_value(new_value)
         return True
 
+    def _scroll_conversation_home_end(self, to_end: bool) -> bool:
+        """Scroll the conversation view to the top or bottom."""
+        if self._in_document_mode:
+            return False
+        scrolled = self._get_conversation_scrolled_window()
+        if not scrolled:
+            return False
+        adj = scrolled.get_vadjustment()
+        if not adj:
+            return False
+        page_size = adj.get_page_size() or 0
+        if to_end:
+            new_value = max(adj.get_upper() - page_size, 0)
+        else:
+            new_value = 0
+        adj.set_value(new_value)
+        return True
+
     def _scroll_conversation_to_message(self, direction: int) -> bool:
         """Scroll to the next/previous message widget in the conversation."""
         if self._in_document_mode:
@@ -703,6 +721,10 @@ class OpenAIGTKClient(Gtk.Window):
             return self._scroll_conversation_by_page(-1)
         if no_modifiers and keyval == Gdk.KEY_Page_Down:
             return self._scroll_conversation_by_page(1)
+        if no_modifiers and keyval == Gdk.KEY_Home:
+            return self._scroll_conversation_home_end(False)
+        if no_modifiers and keyval == Gdk.KEY_End:
+            return self._scroll_conversation_home_end(True)
 
         if no_modifiers and keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
             direction = -1 if (state & Gdk.ModifierType.SHIFT_MASK) else 1
