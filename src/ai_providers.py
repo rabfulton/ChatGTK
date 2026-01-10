@@ -4547,6 +4547,11 @@ def get_ai_provider(provider_name: str) -> AIProvider:
         'custom': CustomProvider,
     }
     
+    # Handle Ollama separately (lazy import to avoid circular dependency)
+    if provider_name == 'ollama':
+        from ollama_provider import OllamaProvider
+        return OllamaProvider()
+    
     provider_class = providers.get(provider_name)
     if not provider_class:
         raise ValueError(f"Unknown AI provider: {provider_name}")

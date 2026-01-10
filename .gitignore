@@ -25,3 +25,4 @@ PKGBUILD
 *.md
 broadway-chatgtk.sh
 pwa/
+models/

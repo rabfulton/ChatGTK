@@ -111,13 +111,14 @@ class ModelSelector(UIComponent):
 
             if self._group_by_provider:
                 provider_map = provider_map or {}
-                provider_order = ["openai", "gemini", "grok", "claude", "perplexity", "custom"]
+                provider_order = ["openai", "gemini", "grok", "claude", "perplexity", "ollama", "custom"]
                 provider_labels = {
                     "openai": "OpenAI",
                     "gemini": "Gemini",
                     "grok": "Grok",
                     "claude": "Claude",
                     "perplexity": "Perplexity",
+                    "ollama": "Ollama (Local)",
                     "custom": "Custom",
                     "other": "Other",
                 }

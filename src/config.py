@@ -72,6 +72,11 @@ CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
 # Memory database path (Qdrant embedded)
 MEMORY_DB_PATH = os.path.join(PARENT_DIR, "chat_memory")
 
+# Local models configuration file (for non-OpenAI-compatible backends like Ollama)
+LOCAL_MODELS_FILE = os.path.join(PARENT_DIR, "local_models.json")
+# Default root directory for local model files (sherpa-onnx, etc.)
+LOCAL_MODELS_DIR = os.path.join(PARENT_DIR, "models")
+
 # ---------------------------------------------------------------------------
 # Default Appendix Constants (formerly in tools.py)
 # ---------------------------------------------------------------------------
@@ -458,6 +463,14 @@ SETTINGS_CONFIG = {
     'SEARCH_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX},
     'TEXT_EDIT_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX},
     'WOLFRAM_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_WOLFRAM_TOOL_PROMPT_APPENDIX},
+    # --- Local Models Settings ---
+    # Master switch for Ollama backend integration.
+    'OLLAMA_ENABLED': {'type': bool, 'default': False},
+    # Ollama server base URL.
+    'OLLAMA_BASE_URL': {'type': str, 'default': 'http://localhost:11434'},
+    # Optional custom root directory for local model files (sherpa-onnx, etc.).
+    # If empty, uses the default LOCAL_MODELS_DIR.
+    'LOCAL_MODELS_ROOT': {'type': str, 'default': ''},
     # Keyboard shortcuts - JSON-encoded dict mapping action names to key combos
     'KEYBOARD_SHORTCUTS': {'type': str, 'default': ''},
     # Model shortcuts - JSON-encoded dict mapping model_1..model_5 to model IDs

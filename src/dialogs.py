@@ -1052,7 +1052,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Audio", "Tool Options", "Memory", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
+    CATEGORIES = ["General", "Audio", "Local Models", "Tool Options", "Memory", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
@@ -1128,6 +1128,8 @@ class SettingsDialog(Gtk.Dialog):
         # Build pages
         self._build_general_page()
         self._add_placeholder_page("Audio", "Loading audio settings...")
+        self._add_placeholder_page("Local Models", "Loading local models...")
+        self._local_models_page_built = False
         self._build_tool_options_page()
         self._add_placeholder_page("Memory", "Loading memory settings...")
         self._build_system_prompts_page()
@@ -1176,6 +1178,8 @@ class SettingsDialog(Gtk.Dialog):
                     self._ensure_audio_page()
                 elif cat == "Memory":
                     self._ensure_memory_page()
+                elif cat == "Local Models":
+                    self._ensure_local_models_page()
                 # Lazily construct the Model Whitelist page the first time it
                 # is selected so we don't block dialog opening on network I/O.
                 if cat == "Model Whitelist":
@@ -1825,6 +1829,231 @@ class SettingsDialog(Gtk.Dialog):
             self._replace_stack_page("Audio", page)
             self._audio_page_built = True
             self.stack.show_all()
+
+    def _ensure_local_models_page(self):
+        if not self._local_models_page_built:
+            page = self._build_local_models_page()
+            self._replace_stack_page("Local Models", page)
+            self._local_models_page_built = True
+            self.stack.show_all()
+
+    def _build_local_models_page(self):
+        """Build the Local Models settings page."""
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        scroll.add(list_box)
+
+        # --- Ollama Settings Section ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Enable Ollama", xalign=0)
+        label.set_hexpand(True)
+        label.set_tooltip_text("Connect to a local Ollama server for running LLMs")
+        self.switch_ollama_enabled = Gtk.Switch()
+        current_enabled = _get_setting_value(self._parent, 'OLLAMA_ENABLED', False)
+        self.switch_ollama_enabled.set_active(bool(current_enabled))
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.switch_ollama_enabled, False, True, 0)
+        list_box.add(row)
+
+        # Ollama Base URL
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="Ollama Server URL", xalign=0)
+        label.set_hexpand(True)
+        self.entry_ollama_url = Gtk.Entry()
+        current_url = _get_setting_value(self._parent, 'OLLAMA_BASE_URL', 'http://localhost:11434')
+        self.entry_ollama_url.set_text(current_url)
+        self.entry_ollama_url.set_placeholder_text("http://localhost:11434")
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.entry_ollama_url, False, True, 0)
+        list_box.add(row)
+
+        # Test Connection button row
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        self.lbl_ollama_status = Gtk.Label(label="Status: Not tested", xalign=0)
+        self.lbl_ollama_status.set_hexpand(True)
+        btn_test = Gtk.Button(label="Test Connection")
+        btn_test.connect("clicked", self._on_test_ollama_connection)
+        hbox.pack_start(self.lbl_ollama_status, True, True, 0)
+        hbox.pack_start(btn_test, False, True, 0)
+        list_box.add(row)
+
+        # --- Separator ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # --- Discovered Models Section ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="<b>Discovered Ollama Models</b>", xalign=0, use_markup=True)
+        label.set_hexpand(True)
+        btn_refresh = Gtk.Button(label="Refresh")
+        btn_refresh.connect("clicked", self._on_refresh_ollama_models)
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(btn_refresh, False, True, 0)
+        list_box.add(row)
+
+        # Models list (initially empty)
+        self.local_models_listbox = Gtk.ListBox()
+        self.local_models_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.local_models_listbox.set_margin_start(16)
+        row = Gtk.ListBoxRow()
+        row.add(self.local_models_listbox)
+        row.set_selectable(False)
+        list_box.add(row)
+
+        # Placeholder when no models
+        placeholder_row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(placeholder_row)
+        self.lbl_no_models = Gtk.Label(label="No models discovered. Click 'Refresh' to scan.", xalign=0)
+        self.lbl_no_models.get_style_context().add_class("dim-label")
+        placeholder_row.add(self.lbl_no_models)
+        self.local_models_listbox.add(placeholder_row)
+
+        # --- Separator ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # --- Help Links Section ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        row.add(vbox)
+        
+        lbl_help = Gtk.Label(label="<b>Help</b>", xalign=0, use_markup=True)
+        vbox.pack_start(lbl_help, False, False, 0)
+        
+        link_install = Gtk.LinkButton.new_with_label(
+            "https://ollama.com/download",
+            "Install Ollama"
+        )
+        link_install.set_halign(Gtk.Align.START)
+        vbox.pack_start(link_install, False, False, 0)
+        
+        link_models = Gtk.LinkButton.new_with_label(
+            "https://ollama.com/library",
+            "Browse Model Library"
+        )
+        link_models.set_halign(Gtk.Align.START)
+        vbox.pack_start(link_models, False, False, 0)
+        
+        list_box.add(row)
+
+        return scroll
+
+    def _on_test_ollama_connection(self, button):
+        """Test connection to the Ollama server."""
+        import threading
+        
+        url = self.entry_ollama_url.get_text().strip() or "http://localhost:11434"
+        self.lbl_ollama_status.set_text("Status: Testing...")
+        
+        def do_test():
+            try:
+                from services.local_models import OllamaBackend
+                backend = OllamaBackend(url)
+                health = backend.health_check()
+                
+                GLib.idle_add(
+                    lambda: self.lbl_ollama_status.set_text(
+                        f"Status: {'✓ Connected' if health.ok else '✗ ' + health.detail}"
+                    )
+                )
+            except Exception as e:
+                GLib.idle_add(
+                    lambda: self.lbl_ollama_status.set_text(f"Status: ✗ Error: {e}")
+                )
+        
+        threading.Thread(target=do_test, daemon=True).start()
+
+    def _on_refresh_ollama_models(self, button):
+        """Refresh the list of discovered Ollama models."""
+        import threading
+        
+        url = self.entry_ollama_url.get_text().strip() or "http://localhost:11434"
+        
+        def do_refresh():
+            try:
+                from services.local_models import OllamaBackend
+                backend = OllamaBackend(url)
+                models = backend.list_models()
+                GLib.idle_add(lambda: self._populate_ollama_models(models))
+            except Exception as e:
+                GLib.idle_add(
+                    lambda: self.lbl_ollama_status.set_text(f"Status: ✗ Refresh failed: {e}")
+                )
+        
+        threading.Thread(target=do_refresh, daemon=True).start()
+
+    def _populate_ollama_models(self, models):
+        """Populate the models list with discovered Ollama models."""
+        # Clear existing rows
+        for child in self.local_models_listbox.get_children():
+            self.local_models_listbox.remove(child)
+        
+        if not models:
+            placeholder_row = Gtk.ListBoxRow()
+            _add_listbox_row_margins(placeholder_row)
+            lbl = Gtk.Label(label="No models found. Make sure Ollama is running.", xalign=0)
+            lbl.get_style_context().add_class("dim-label")
+            placeholder_row.add(lbl)
+            self.local_models_listbox.add(placeholder_row)
+        else:
+            for entry in models:
+                row = Gtk.ListBoxRow()
+                _add_listbox_row_margins(row)
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+                row.add(hbox)
+                
+                # Model name
+                lbl_name = Gtk.Label(label=entry.display_name, xalign=0)
+                lbl_name.set_hexpand(True)
+                hbox.pack_start(lbl_name, True, True, 0)
+                
+                # Capabilities badge
+                caps = []
+                if entry.capabilities.vision:
+                    caps.append("👁 vision")
+                if caps:
+                    lbl_caps = Gtk.Label(label=" ".join(caps), xalign=1)
+                    lbl_caps.get_style_context().add_class("dim-label")
+                    hbox.pack_start(lbl_caps, False, True, 0)
+                
+                self.local_models_listbox.add(row)
+        
+        self.local_models_listbox.show_all()
+        self.lbl_ollama_status.set_text(f"Status: Found {len(models)} model(s)")
 
     def _connect_read_aloud_signals(self):
         if self._read_aloud_signals_connected:
@@ -4986,6 +5215,9 @@ class SettingsDialog(Gtk.Dialog):
                 action: combo.get_active_id() or ''
                 for action, combo in getattr(self, '_model_combos', {}).items()
             }),
+            # Local Models / Ollama settings
+            'ollama_enabled': self.switch_ollama_enabled.get_active() if hasattr(self, 'switch_ollama_enabled') else _get_setting_value(self._parent, 'OLLAMA_ENABLED', False),
+            'ollama_base_url': self.entry_ollama_url.get_text().strip() if hasattr(self, 'entry_ollama_url') else _get_setting_value(self._parent, 'OLLAMA_BASE_URL', 'http://localhost:11434'),
         }
 
     def get_api_keys(self):

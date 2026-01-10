@@ -781,6 +781,16 @@ class ChatController:
         
         Returns the provider instance, or None if the key was cleared.
         """
+        # Handle Ollama specially - it doesn't use api_key
+        if provider_name == 'ollama':
+            provider = self.providers.get(provider_name)
+            if provider is None:
+                provider = get_ai_provider(provider_name)
+            base_url = self._settings_manager.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+            provider.initialize(base_url)
+            self.providers[provider_name] = provider
+            return provider
+        
         api_key = (api_key or "").strip()
         self.api_keys[provider_name] = api_key
 
@@ -1932,12 +1942,16 @@ class ChatController:
         Returns
         -------
         str
-            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom').
+            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom', 'ollama').
         """
         from model_cards import get_card
         
         if not model:
             return 'openai'
+        
+        # Check for Ollama models (prefixed with "ollama:")
+        if model.startswith("ollama:"):
+            return 'ollama'
         
         # Model card is the single source of truth
         card = get_card(model, self.custom_models)
@@ -2305,7 +2319,15 @@ class ChatController:
 
     def _get_or_init_provider(self, model: str, provider_name: str) -> Any:
         """Get or initialize a provider for the given model."""
-        if provider_name == "custom":
+        if provider_name == "ollama":
+            # Initialize Ollama provider
+            if not hasattr(self, '_ollama_provider'):
+                from ollama_provider import OllamaProvider
+                self._ollama_provider = OllamaProvider()
+                base_url = self._settings_manager.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+                self._ollama_provider.initialize(base_url)
+            return self._ollama_provider
+        elif provider_name == "custom":
             provider = self.custom_providers.get(model)
             if not provider:
                 config = (self.custom_models or {}).get(model, {})

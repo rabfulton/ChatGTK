@@ -57,6 +57,18 @@ def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[Mo
         cfg = custom_models[model_id]
         base_card = _synthesize_card_from_custom(model_id, cfg)
     
+    # NEW: Synthesize a basic card for Ollama models if not found above
+    if not base_card and model_id.startswith("ollama:"):
+        # Default Ollama capabilities: assume it supports tools if used in ChatGTK
+        caps = Capabilities(text=True, tool_use=True)
+        base_card = ModelCard(
+            id=model_id,
+            provider="ollama",
+            display_name=model_id[7:], # Strip "ollama:" prefix
+            api_family="ollama",
+            capabilities=caps,
+        )
+    
     # Check for user overrides and apply them
     overrides = load_overrides()
     if model_id in overrides:
