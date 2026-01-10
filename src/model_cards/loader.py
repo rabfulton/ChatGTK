@@ -131,6 +131,8 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
         caps = Capabilities(text=False, image_gen=True)
     elif api_type == "tts":
         caps = Capabilities(text=False, audio_out=True)
+    elif api_type == "stt" or api_type == "audio.transcriptions":
+        caps = Capabilities(text=False, audio_in=True)
     elif api_type == "responses":
         # Responses API typically indicates a modern model with tool support
         caps = Capabilities(text=True, tool_use=True, vision=True)

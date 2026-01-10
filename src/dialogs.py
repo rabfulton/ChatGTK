@@ -1052,7 +1052,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Audio", "Tool Options", "Memory", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
+    CATEGORIES = ["General", "Audio", "Tool Options", "Memory", "System Prompts", "Custom Models", "Local Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)
@@ -1128,6 +1128,8 @@ class SettingsDialog(Gtk.Dialog):
         # Build pages
         self._build_general_page()
         self._add_placeholder_page("Audio", "Loading audio settings...")
+        self._add_placeholder_page("Local Models", "Loading local models...")
+        self._local_models_page_built = False
         self._build_tool_options_page()
         self._add_placeholder_page("Memory", "Loading memory settings...")
         self._build_system_prompts_page()
@@ -1176,6 +1178,8 @@ class SettingsDialog(Gtk.Dialog):
                     self._ensure_audio_page()
                 elif cat == "Memory":
                     self._ensure_memory_page()
+                elif cat == "Local Models":
+                    self._ensure_local_models_page()
                 # Lazily construct the Model Whitelist page the first time it
                 # is selected so we don't block dialog opening on network I/O.
                 if cat == "Model Whitelist":
@@ -1825,6 +1829,414 @@ class SettingsDialog(Gtk.Dialog):
             self._replace_stack_page("Audio", page)
             self._audio_page_built = True
             self.stack.show_all()
+
+    def _ensure_local_models_page(self):
+        if not self._local_models_page_built:
+            page = self._build_local_models_page()
+            self._replace_stack_page("Local Models", page)
+            self._local_models_page_built = True
+            self.stack.show_all()
+
+    def _build_local_models_page(self):
+        """Build the Local Models settings page."""
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        scroll.add(list_box)
+
+        # --- Introduction ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        intro_text = (
+            "Add local AI servers to ChatGTK. Select a preset below, select which models you wish to add, "
+            "then click **Add** to add the discovered models."
+        )
+        lbl_intro = Gtk.Label(label=intro_text, xalign=0, wrap=True)
+        lbl_intro.set_max_width_chars(60)
+        lbl_intro.get_style_context().add_class("dim-label")
+        row.add(lbl_intro)
+        row.set_selectable(False)
+        list_box.add(row)
+
+        # --- Quick Setup Section ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="<b>Quick Setup</b>", xalign=0, use_markup=True)
+        label.set_hexpand(True)
+        hbox.pack_start(label, True, True, 0)
+        list_box.add(row)
+
+        # Preset selector row
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add(hbox)
+        
+        # Preset dropdown
+        self.combo_preset = Gtk.ComboBoxText()
+        self.combo_preset.append("", "Select a local server...")
+        from config import LOCAL_SERVER_PRESETS
+        for key, preset in LOCAL_SERVER_PRESETS.items():
+            self.combo_preset.append(key, preset["display_name"])
+        self.combo_preset.set_active(0)
+        self.combo_preset.connect("changed", self._on_preset_changed)
+        self.combo_preset.set_hexpand(True)
+        hbox.pack_start(self.combo_preset, True, True, 0)
+        
+        # Test button
+        self.btn_test_preset = Gtk.Button(label="Test")
+        self.btn_test_preset.set_sensitive(False)
+        self.btn_test_preset.connect("clicked", self._on_test_preset)
+        hbox.pack_start(self.btn_test_preset, False, True, 0)
+        
+        # Add button
+        self.btn_add_preset = Gtk.Button(label="Add")
+        self.btn_add_preset.set_sensitive(False)
+        self.btn_add_preset.get_style_context().add_class("suggested-action")
+        self.btn_add_preset.connect("clicked", self._on_add_preset)
+        hbox.pack_start(self.btn_add_preset, False, True, 0)
+        
+        list_box.add(row)
+
+        # Status and hint row
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        row.add(vbox)
+        
+        self.lbl_preset_status = Gtk.Label(label="", xalign=0)
+        self.lbl_preset_status.get_style_context().add_class("dim-label")
+        vbox.pack_start(self.lbl_preset_status, False, False, 0)
+        
+        self.lbl_preset_hint = Gtk.Label(xalign=0, wrap=True, use_markup=True)
+        self.lbl_preset_hint.set_max_width_chars(60)
+        self.lbl_preset_hint.get_style_context().add_class("dim-label")
+        vbox.pack_start(self.lbl_preset_hint, False, False, 0)
+        
+        row.set_selectable(False)
+        list_box.add(row)
+
+        # Discovered models list (with checkboxes)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        self.preset_models_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        row.add(self.preset_models_box)
+        row.set_selectable(False)
+        list_box.add(row)
+        
+        # Store discovered models and their checkboxes
+        self._preset_discovered_models = []
+        self._preset_model_checkboxes = []
+
+        # --- Separator ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # --- Info Note about Custom Models ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        row.add(info_box)
+        
+        lbl_tip_header = Gtk.Label(xalign=0, use_markup=True)
+        lbl_tip_header.set_markup("<b>💡 Fine-Grained Control</b>")
+        info_box.pack_start(lbl_tip_header, False, False, 0)
+        
+        tip_text = (
+            "For advanced configuration (custom endpoints, model IDs, port numbers), "
+            "use <b>Settings → Custom Models</b> to manually create model entries. "
+            "No API key is required for local servers."
+        )
+        lbl_tip = Gtk.Label(xalign=0, use_markup=True, wrap=True)
+        lbl_tip.set_markup(f"<small>{tip_text}</small>")
+        lbl_tip.set_max_width_chars(50)
+        lbl_tip.get_style_context().add_class("dim-label")
+        info_box.pack_start(lbl_tip, False, False, 0)
+        
+        row.set_selectable(False)
+        list_box.add(row)
+
+        return scroll
+
+    def _on_preset_changed(self, combo):
+        """Handle preset dropdown selection change."""
+        preset_id = combo.get_active_id()
+        if not preset_id:
+            self.btn_test_preset.set_sensitive(False)
+            self.btn_add_preset.set_sensitive(False)
+            self.lbl_preset_status.set_text("")
+            self.lbl_preset_hint.set_text("")
+            self._clear_preset_models_list()
+            return
+        
+        from config import LOCAL_SERVER_PRESETS
+        preset = LOCAL_SERVER_PRESETS.get(preset_id, {})
+        
+        self.btn_test_preset.set_sensitive(True)
+        self.btn_add_preset.set_sensitive(False)
+        self.lbl_preset_status.set_text("")
+        
+        hint = preset.get("install_hint", "")
+        description = preset.get("description", "")
+        
+        if hint:
+            self.lbl_preset_hint.set_markup(f"<small>💡 {hint}</small>")
+        elif description:
+            self.lbl_preset_hint.set_markup(f"<small>{description}</small>")
+        else:
+            self.lbl_preset_hint.set_text("")
+        
+        # Auto-trigger test when preset is selected
+        self._on_test_preset(self.btn_test_preset)
+
+    def _on_test_preset(self, button):
+        """Test connection to the selected preset server."""
+        import threading
+        import requests
+        
+        preset_id = self.combo_preset.get_active_id()
+        if not preset_id:
+            return
+        
+        from config import LOCAL_SERVER_PRESETS
+        preset = LOCAL_SERVER_PRESETS.get(preset_id, {})
+        
+        base_url = preset.get("base_url", "")
+        health_endpoint = preset.get("health_endpoint", "")
+        
+        if not base_url or not health_endpoint:
+            self.lbl_preset_status.set_text("✗ Invalid preset configuration")
+            return
+        
+        test_url = f"{base_url}{health_endpoint}"
+        self.lbl_preset_status.set_text("Testing connection...")
+        self.btn_test_preset.set_sensitive(False)
+        self._clear_preset_models_list()
+        
+        def do_test():
+            try:
+                resp = requests.get(test_url, timeout=5)
+                ok = resp.status_code < 400
+                
+                # For presets with model discovery, get the models
+                discovered_models = []
+                list_endpoint = preset.get("list_models_endpoint")
+                if ok and list_endpoint:
+                    try:
+                        list_url = f"{base_url}{list_endpoint}"
+                        list_resp = requests.get(list_url, timeout=5)
+                        if list_resp.status_code < 400:
+                            data = list_resp.json()
+                            # All presets use OpenAI-compatible /v1/models format
+                            for m in data.get("data", []):
+                                model_id = m.get("id", "")
+                                discovered_models.append({
+                                    "id": model_id,
+                                    "model_id": model_id,
+                                    "name": model_id,
+                                })
+                    except Exception:
+                        pass
+                elif ok:
+                    # Single model preset (e.g., faster-whisper)
+                    default_id = preset.get("default_model_id", f"{preset_id}-model")
+                    discovered_models.append({
+                        "id": f"{preset_id}:{default_id}",
+                        "model_id": default_id,
+                        "name": preset.get("display_name", preset_id),
+                    })
+                
+                if ok:
+                    status = f"✓ Connected to {preset.get('display_name', 'server')}"
+                    if discovered_models:
+                        status += f" ({len(discovered_models)} model{'s' if len(discovered_models) != 1 else ''})"
+                    GLib.idle_add(lambda: self._preset_test_success(status, discovered_models, preset))
+                else:
+                    GLib.idle_add(lambda: self._preset_test_failure(f"HTTP {resp.status_code}"))
+            except requests.exceptions.ConnectionError:
+                GLib.idle_add(lambda: self._preset_test_failure("Connection refused - is the server running?"))
+            except Exception as e:
+                GLib.idle_add(lambda: self._preset_test_failure(str(e)))
+        
+        threading.Thread(target=do_test, daemon=True).start()
+
+    def _clear_preset_models_list(self):
+        """Clear the discovered models list."""
+        for child in self.preset_models_box.get_children():
+            self.preset_models_box.remove(child)
+        self._preset_discovered_models = []
+        self._preset_model_checkboxes = []
+
+    def _preset_test_success(self, status, models, preset):
+        """Handle successful preset test and populate models list."""
+        self.lbl_preset_status.set_text(status)
+        self.btn_test_preset.set_sensitive(True)
+        
+        # Clear existing UI widgets first (but don't reset the model lists yet)
+        for child in self.preset_models_box.get_children():
+            self.preset_models_box.remove(child)
+        
+        # Now set the discovered models and reset checkboxes
+        self._preset_discovered_models = models
+        self._preset_model_checkboxes = []
+        
+        if models:
+            # Add header
+            header = Gtk.Label(label="<b>Select models to add:</b>", xalign=0, use_markup=True)
+            self.preset_models_box.pack_start(header, False, False, 4)
+            
+            for model in models:
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                
+                check = Gtk.CheckButton()
+                check.set_active(True)  # Enabled by default
+                hbox.pack_start(check, False, False, 0)
+                self._preset_model_checkboxes.append(check)
+                
+                label = Gtk.Label(label=model["name"], xalign=0)
+                label.set_hexpand(True)
+                hbox.pack_start(label, True, True, 0)
+                
+                self.preset_models_box.pack_start(hbox, False, False, 2)
+            
+            self.preset_models_box.show_all()
+            self.btn_add_preset.set_sensitive(True)
+        else:
+            self.btn_add_preset.set_sensitive(False)
+
+    def _preset_test_failure(self, error):
+        """Handle failed preset test."""
+        self.lbl_preset_status.set_text(f"✗ {error}")
+        self.btn_test_preset.set_sensitive(True)
+        self.btn_add_preset.set_sensitive(False)
+        self._clear_preset_models_list()
+
+    def _on_add_preset(self, button):
+        """Add the selected (checked) preset models to custom_models.json."""
+        import json
+        import os
+        
+        preset_id = self.combo_preset.get_active_id()
+        if not preset_id:
+            return
+        
+        from config import LOCAL_SERVER_PRESETS, CUSTOM_MODELS_FILE, SETTINGS_FILE
+        preset = LOCAL_SERVER_PRESETS.get(preset_id, {})
+        base_url = preset.get("base_url", "")
+        
+        # Get only checked models
+        models_to_add = []
+        for i, model in enumerate(self._preset_discovered_models):
+            if i < len(self._preset_model_checkboxes) and self._preset_model_checkboxes[i].get_active():
+                models_to_add.append(model)
+        
+        if not models_to_add:
+            self.lbl_preset_status.set_text("✗ No models selected")
+            return
+        
+        self.lbl_preset_status.set_text("Adding models...")
+        self.btn_add_preset.set_sensitive(False)
+        
+        # Load existing custom models
+        try:
+            if os.path.exists(CUSTOM_MODELS_FILE):
+                with open(CUSTOM_MODELS_FILE, "r") as f:
+                    custom_models = json.load(f)
+            else:
+                custom_models = {}
+        except Exception:
+            custom_models = {}
+        
+        # Add models
+        added_count = 0
+        added_ids = []
+        for model in models_to_add:
+            entry_id = model["id"]
+            if entry_id in custom_models:
+                continue  # Already exists
+            
+            # Determine endpoint based on preset category
+            categories = preset.get("categories", ["chat"])
+            if "stt" in categories:
+                endpoint = f"{base_url}{preset.get('transcription_endpoint', '/v1/audio/transcriptions')}"
+                api_type = "audio.transcriptions"
+            elif "tts" in categories:
+                endpoint = f"{base_url}{preset.get('tts_endpoint', '/v1/audio/speech')}"
+                api_type = "audio.speech"
+            else:
+                endpoint = f"{base_url}{preset.get('chat_endpoint', '/v1/chat/completions')}"
+                api_type = "chat.completions"
+            
+            custom_models[entry_id] = {
+                "model_id": model["model_id"],
+                "endpoint": endpoint,
+                "api_key": "",
+                "api_type": api_type,
+                "display_name": f"{preset.get('display_name', preset_id)}: {model['name']}",
+            }
+            added_count += 1
+            added_ids.append(entry_id)
+        
+        # Save custom models using the utility function
+        from utils import save_custom_models
+        try:
+            save_custom_models(custom_models)
+        except Exception as e:
+            self.lbl_preset_status.set_text(f"✗ Failed to save: {e}")
+            self.btn_add_preset.set_sensitive(True)
+            return
+        
+        # Update the dialog's internal custom_models dict
+        self.custom_models = custom_models
+        
+        # Add to whitelist (CUSTOM_MODEL_WHITELIST, not MODEL_WHITELIST)
+        if added_ids:
+            current_whitelist = getattr(self, 'custom_model_whitelist', '') or ''
+            whitelist_models = set(m.strip() for m in current_whitelist.split(",") if m.strip())
+            for model_id in added_ids:
+                whitelist_models.add(model_id)
+            self.custom_model_whitelist = ",".join(sorted(whitelist_models))
+            
+            # Save the updated whitelist via repository
+            new_settings = self.get_settings()
+            for key, value in new_settings.items():
+                _set_setting_value(self._parent, key, value)
+        
+        # Update the model cache
+        if hasattr(self, "_model_cache"):
+            self._model_cache["custom"] = sorted(self.custom_models.keys())
+        
+        # Refresh the custom models list if built
+        if hasattr(self, '_custom_models_list'):
+            self._refresh_custom_models_list()
+        
+        # Refresh whitelist page if built
+        if hasattr(self, '_model_whitelist_built') and self._model_whitelist_built:
+            self._populate_model_whitelist_sections(preserve_selections=True)
+        
+        if added_count == 0:
+            self.lbl_preset_status.set_text(f"✓ All {len(models_to_add)} model(s) already configured")
+        else:
+            self.lbl_preset_status.set_text(f"✓ Added {added_count} model(s)")
+        self.btn_add_preset.set_sensitive(True)
+
+    def _preset_add_failure(self, error):
+        """Handle failed preset add."""
+        self.lbl_preset_status.set_text(f"✗ {error}")
+        self.btn_add_preset.set_sensitive(True)
 
     def _connect_read_aloud_signals(self):
         if self._read_aloud_signals_connected:

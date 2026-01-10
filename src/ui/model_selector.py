@@ -118,6 +118,7 @@ class ModelSelector(UIComponent):
                     "grok": "Grok",
                     "claude": "Claude",
                     "perplexity": "Perplexity",
+
                     "custom": "Custom",
                     "other": "Other",
                 }

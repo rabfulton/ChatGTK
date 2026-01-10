@@ -72,6 +72,82 @@ CHATGTK_SCRIPT = os.path.join(BASE_DIR, "ChatGTK.py")
 # Memory database path (Qdrant embedded)
 MEMORY_DB_PATH = os.path.join(PARENT_DIR, "chat_memory")
 
+# Local models configuration file (for non-OpenAI-compatible backends like Ollama)
+LOCAL_MODELS_FILE = os.path.join(PARENT_DIR, "local_models.json")
+# Default root directory for local model files (sherpa-onnx, etc.)
+LOCAL_MODELS_DIR = os.path.join(PARENT_DIR, "models")
+
+# ---------------------------------------------------------------------------
+# Local Server Presets for Quick Setup
+# ---------------------------------------------------------------------------
+# These presets define common local inference servers for one-click setup.
+# Each preset specifies endpoints, parsers, and categories for auto-discovery.
+
+LOCAL_SERVER_PRESETS = {
+    "ollama": {
+        "display_name": "Ollama",
+        "description": "Run LLMs locally with Ollama",
+        "base_url": "http://localhost:11434",
+        "list_models_endpoint": "/v1/models",  # OpenAI-compatible endpoint
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",  # OpenAI-compatible endpoint
+        "api_format": "openai",
+        "health_endpoint": "/v1/models",
+        "categories": ["chat", "vision"],
+        "install_hint": "curl -fsSL https://ollama.com/install.sh | sh",
+    },
+    "lmstudio": {
+        "display_name": "LMStudio",
+        "description": "Easy-to-use local LLM server with GUI",
+        "base_url": "http://localhost:1234",
+        "list_models_endpoint": "/v1/models",
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",
+        "api_format": "openai",
+        "health_endpoint": "/v1/models",
+        "categories": ["chat"],
+        "install_hint": "Download from https://lmstudio.ai",
+    },
+    "faster-whisper": {
+        "display_name": "Faster Whisper (STT)",
+        "description": "Fast local speech-to-text",
+        "base_url": "http://localhost:8000",
+        "list_models_endpoint": None,
+        "default_model_id": "whisper-1",
+        "transcription_endpoint": "/v1/audio/transcriptions",
+        "api_format": "openai",
+        "health_endpoint": "/health",
+        "categories": ["stt"],
+        "install_hint": "docker run -d -p 8000:8000 fedirz/faster-whisper-server",
+    },
+    "localai": {
+        "display_name": "LocalAI",
+        "description": "Multi-modal local AI (chat, STT, TTS)",
+        "base_url": "http://localhost:8080",
+        "list_models_endpoint": "/v1/models",
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",
+        "transcription_endpoint": "/v1/audio/transcriptions",
+        "tts_endpoint": "/v1/audio/speech",
+        "api_format": "openai",
+        "health_endpoint": "/readyz",
+        "categories": ["chat", "stt", "tts"],
+        "install_hint": "docker run -p 8080:8080 localai/localai",
+    },
+    "text-gen-webui": {
+        "display_name": "Text Generation WebUI",
+        "description": "Oobabooga's text-generation-webui",
+        "base_url": "http://localhost:5000",
+        "list_models_endpoint": "/v1/models",
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",
+        "api_format": "openai",
+        "health_endpoint": "/v1/models",
+        "categories": ["chat"],
+        "install_hint": "Launch with --api flag",
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Default Appendix Constants (formerly in tools.py)
 # ---------------------------------------------------------------------------
@@ -458,6 +534,14 @@ SETTINGS_CONFIG = {
     'SEARCH_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_SEARCH_TOOL_PROMPT_APPENDIX},
     'TEXT_EDIT_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_TEXT_EDIT_TOOL_PROMPT_APPENDIX},
     'WOLFRAM_TOOL_PROMPT_APPENDIX': {'type': str, 'default': DEFAULT_WOLFRAM_TOOL_PROMPT_APPENDIX},
+    # --- Local Models Settings ---
+    # Master switch for Ollama backend integration.
+    'OLLAMA_ENABLED': {'type': bool, 'default': False},
+    # Ollama server base URL.
+    'OLLAMA_BASE_URL': {'type': str, 'default': 'http://localhost:11434'},
+    # Optional custom root directory for local model files (sherpa-onnx, etc.).
+    # If empty, uses the default LOCAL_MODELS_DIR.
+    'LOCAL_MODELS_ROOT': {'type': str, 'default': ''},
     # Keyboard shortcuts - JSON-encoded dict mapping action names to key combos
     'KEYBOARD_SHORTCUTS': {'type': str, 'default': ''},
     # Model shortcuts - JSON-encoded dict mapping model_1..model_5 to model IDs

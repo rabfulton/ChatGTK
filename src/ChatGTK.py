@@ -361,8 +361,9 @@ class OpenAIGTKClient(Gtk.Window):
                         if not chat_filename.endswith('.json'):
                             chat_filename = f"{chat_filename}.json"
                         # Verify the file exists before trying to load
-                        from config import HISTORY_DIR
-                        chat_path = os.path.join(HISTORY_DIR, chat_filename)
+                        # Use controller's history dir to respect current project
+                        history_dir = self.controller.get_current_history_dir()
+                        chat_path = os.path.join(history_dir, chat_filename)
                         if os.path.exists(chat_path):
                             self.load_chat_by_filename(chat_filename, save_current=False)
                 except Exception as e:
@@ -2348,13 +2349,14 @@ class OpenAIGTKClient(Gtk.Window):
 
         if provider_name == 'custom':
             # Custom models: resolve API key (supports $ENV_VAR syntax)
+            # Local models (e.g., Ollama, LMStudio) have no api_key configured - that's fine
             from utils import resolve_api_key
             custom_config = (self.custom_models or {}).get(target_model, {})
             display_name = custom_config.get('display_name', target_model)
-            api_key = resolve_api_key(custom_config.get('api_key', '')).strip()
-            if not api_key:
-                self.show_error_dialog(f"Please enter an API key for custom model: {display_name}")
-                return False
+            raw_api_key = custom_config.get('api_key', '')
+            api_key = resolve_api_key(raw_api_key).strip() if raw_api_key else ''
+            # Only require API key if one was explicitly configured (non-empty in config)
+            # Local models intentionally have empty api_key fields
         elif provider_name == 'gemini':
             env_var = 'GEMINI_API_KEY'
             provider_label = "Gemini"

@@ -781,13 +781,21 @@ class ChatController:
         
         Returns the provider instance, or None if the key was cleared.
         """
+        
         api_key = (api_key or "").strip()
         self.api_keys[provider_name] = api_key
 
-        # If the key was cleared, drop the provider.
+        # If the key was cleared, drop the provider (unless it's a custom provider
+        # with an endpoint configured - local models don't need API keys).
         if not api_key:
-            self.providers.pop(provider_name, None)
-            return None
+            # For custom provider, check if the model has an endpoint configured
+            if provider_name == 'custom':
+                # Custom models can work without API keys if they have an endpoint
+                # (e.g., local LMStudio, text-generation-webui, etc.)
+                pass  # Don't return None, continue to initialize
+            else:
+                self.providers.pop(provider_name, None)
+                return None
 
         # Reuse an existing provider instance when available so caches survive.
         provider = self.providers.get(provider_name)
@@ -1866,7 +1874,7 @@ class ChatController:
             provider.initialize(
                 api_key=resolve_api_key(config.get("api_key", "")).strip(),
                 endpoint=config.get("endpoint"),
-                model_id=model,
+                model_id=config.get("model_id") or model,
                 api_type=config.get("api_type", "chat.completions"),
             )
             self.custom_providers[model] = provider
@@ -2313,10 +2321,11 @@ class ChatController:
                     raise ValueError(f"Custom model '{model}' is not configured")
                 provider = get_ai_provider("custom")
                 from utils import resolve_api_key
+                
                 provider.initialize(
                     api_key=resolve_api_key(config.get("api_key", "")).strip(),
                     endpoint=config.get("endpoint"),
-                    model_id=config.get("model_name") or model,
+                    model_id=config.get("model_id") or model,
                     api_type=config.get("api_type") or "chat.completions",
                     voice=config.get("voice"),
                 )
