@@ -78,6 +78,77 @@ LOCAL_MODELS_FILE = os.path.join(PARENT_DIR, "local_models.json")
 LOCAL_MODELS_DIR = os.path.join(PARENT_DIR, "models")
 
 # ---------------------------------------------------------------------------
+# Local Server Presets for Quick Setup
+# ---------------------------------------------------------------------------
+# These presets define common local inference servers for one-click setup.
+# Each preset specifies endpoints, parsers, and categories for auto-discovery.
+
+LOCAL_SERVER_PRESETS = {
+    "ollama": {
+        "display_name": "Ollama",
+        "description": "Run LLMs locally with Ollama",
+        "base_url": "http://localhost:11434",
+        "list_models_endpoint": "/v1/models",  # OpenAI-compatible endpoint
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",  # OpenAI-compatible endpoint
+        "api_format": "openai",
+        "health_endpoint": "/v1/models",
+        "categories": ["chat", "vision"],
+        "install_hint": "curl -fsSL https://ollama.com/install.sh | sh",
+    },
+    "lmstudio": {
+        "display_name": "LMStudio",
+        "description": "Easy-to-use local LLM server with GUI",
+        "base_url": "http://localhost:1234",
+        "list_models_endpoint": "/v1/models",
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",
+        "api_format": "openai",
+        "health_endpoint": "/v1/models",
+        "categories": ["chat"],
+        "install_hint": "Download from https://lmstudio.ai",
+    },
+    "faster-whisper": {
+        "display_name": "Faster Whisper (STT)",
+        "description": "Fast local speech-to-text",
+        "base_url": "http://localhost:8000",
+        "list_models_endpoint": None,
+        "default_model_id": "whisper-1",
+        "transcription_endpoint": "/v1/audio/transcriptions",
+        "api_format": "openai",
+        "health_endpoint": "/health",
+        "categories": ["stt"],
+        "install_hint": "docker run -d -p 8000:8000 fedirz/faster-whisper-server",
+    },
+    "localai": {
+        "display_name": "LocalAI",
+        "description": "Multi-modal local AI (chat, STT, TTS)",
+        "base_url": "http://localhost:8080",
+        "list_models_endpoint": "/v1/models",
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",
+        "transcription_endpoint": "/v1/audio/transcriptions",
+        "tts_endpoint": "/v1/audio/speech",
+        "api_format": "openai",
+        "health_endpoint": "/readyz",
+        "categories": ["chat", "stt", "tts"],
+        "install_hint": "docker run -p 8080:8080 localai/localai",
+    },
+    "text-gen-webui": {
+        "display_name": "Text Generation WebUI",
+        "description": "Oobabooga's text-generation-webui",
+        "base_url": "http://localhost:5000",
+        "list_models_endpoint": "/v1/models",
+        "list_models_parser": "openai",
+        "chat_endpoint": "/v1/chat/completions",
+        "api_format": "openai",
+        "health_endpoint": "/v1/models",
+        "categories": ["chat"],
+        "install_hint": "Launch with --api flag",
+    },
+}
+
+# ---------------------------------------------------------------------------
 # Default Appendix Constants (formerly in tools.py)
 # ---------------------------------------------------------------------------
 

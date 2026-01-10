@@ -457,7 +457,7 @@ def build_tools_for_provider(
         if not spec:
             print(f"[build_tools_for_provider] WARNING: No spec found for tool '{tool_name}'")
             continue
-        if provider_name in ("openai", "grok", "claude", "custom", "ollama"):
+        if provider_name in ("openai", "grok", "claude", "custom"):
             declarations.append(build_openai_tool_declaration(spec))
         elif provider_name == "gemini":
             declarations.append(build_gemini_function_declaration(spec))

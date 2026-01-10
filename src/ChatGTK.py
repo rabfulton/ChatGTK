@@ -845,21 +845,6 @@ class OpenAIGTKClient(Gtk.Window):
             models = self._default_models_for_provider('openai')
             self.model_provider_map = {model: 'openai' for model in models}
         
-        # Add Ollama models if enabled
-        if self.settings.get('OLLAMA_ENABLED', False):
-            try:
-                from ollama_provider import OllamaProvider
-                base_url = self.settings.get('OLLAMA_BASE_URL', 'http://localhost:11434')
-                ollama = OllamaProvider()
-                ollama.initialize(base_url)
-                ollama_models = ollama.get_available_models()
-                if ollama_models:
-                    models = list(models) + ollama_models
-                    for mid in ollama_models:
-                        self.model_provider_map[mid] = 'ollama'
-            except Exception as e:
-                print(f"[update_model_list] Failed to fetch Ollama models: {e}")
-        
         # Build display names mapping
         display_names = {}
         for model_id in models:
@@ -2363,13 +2348,14 @@ class OpenAIGTKClient(Gtk.Window):
 
         if provider_name == 'custom':
             # Custom models: resolve API key (supports $ENV_VAR syntax)
+            # Local models (e.g., Ollama, LMStudio) have no api_key configured - that's fine
             from utils import resolve_api_key
             custom_config = (self.custom_models or {}).get(target_model, {})
             display_name = custom_config.get('display_name', target_model)
-            api_key = resolve_api_key(custom_config.get('api_key', '')).strip()
-            if not api_key:
-                self.show_error_dialog(f"Please enter an API key for custom model: {display_name}")
-                return False
+            raw_api_key = custom_config.get('api_key', '')
+            api_key = resolve_api_key(raw_api_key).strip() if raw_api_key else ''
+            # Only require API key if one was explicitly configured (non-empty in config)
+            # Local models intentionally have empty api_key fields
         elif provider_name == 'gemini':
             env_var = 'GEMINI_API_KEY'
             provider_label = "Gemini"

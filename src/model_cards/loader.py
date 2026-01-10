@@ -57,18 +57,6 @@ def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[Mo
         cfg = custom_models[model_id]
         base_card = _synthesize_card_from_custom(model_id, cfg)
     
-    # NEW: Synthesize a basic card for Ollama models if not found above
-    if not base_card and model_id.startswith("ollama:"):
-        # Default Ollama capabilities: assume it supports tools if used in ChatGTK
-        caps = Capabilities(text=True, tool_use=True)
-        base_card = ModelCard(
-            id=model_id,
-            provider="ollama",
-            display_name=model_id[7:], # Strip "ollama:" prefix
-            api_family="ollama",
-            capabilities=caps,
-        )
-    
     # Check for user overrides and apply them
     overrides = load_overrides()
     if model_id in overrides:
@@ -143,6 +131,8 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
         caps = Capabilities(text=False, image_gen=True)
     elif api_type == "tts":
         caps = Capabilities(text=False, audio_out=True)
+    elif api_type == "stt" or api_type == "audio.transcriptions":
+        caps = Capabilities(text=False, audio_in=True)
     elif api_type == "responses":
         # Responses API typically indicates a modern model with tool support
         caps = Capabilities(text=True, tool_use=True, vision=True)
@@ -157,6 +147,11 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
             # Use the first listed voice as the default for synthesized cards
             voice = cfg_voices[0]
 
+    # Store the actual model_id for API calls in quirks
+    # This is needed for local models where the key (e.g., "ollama:llama3.2:1b")
+    # differs from the actual model name (e.g., "llama3.2:1b")
+    actual_model_id = cfg.get("model_id") or cfg.get("model_name") or model_id
+
     return ModelCard(
         id=model_id,
         provider="custom",
@@ -166,6 +161,7 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
         voice=voice,  # Voice for TTS models
         capabilities=caps,
         key_name=model_id,  # Custom models use their own key
+        quirks={"actual_model_id": actual_model_id},
     )
 
 

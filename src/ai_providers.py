@@ -385,7 +385,8 @@ class CustomProvider(AIProvider):
         
         # Default to chat.completions
         print(f"[CustomProvider] Using chat.completions API for model: {model or self.model_id}")
-        url = self._url("/chat/completions")
+        # Use base endpoint to avoid doubling the path if endpoint already contains /chat/completions
+        url = f"{self._get_base_endpoint()}/chat/completions"
         
         # Determine which tools are enabled
         enabled_tools = build_enabled_tools_from_handlers(
@@ -4546,11 +4547,6 @@ def get_ai_provider(provider_name: str) -> AIProvider:
         'perplexity': PerplexityProvider,
         'custom': CustomProvider,
     }
-    
-    # Handle Ollama separately (lazy import to avoid circular dependency)
-    if provider_name == 'ollama':
-        from ollama_provider import OllamaProvider
-        return OllamaProvider()
     
     provider_class = providers.get(provider_name)
     if not provider_class:

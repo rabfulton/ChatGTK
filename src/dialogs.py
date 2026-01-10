@@ -1846,214 +1846,406 @@ class SettingsDialog(Gtk.Dialog):
         list_box.set_selection_mode(Gtk.SelectionMode.NONE)
         scroll.add(list_box)
 
-        # --- Ollama Settings Section ---
+        # --- Introduction ---
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Enable Ollama", xalign=0)
-        label.set_hexpand(True)
-        label.set_tooltip_text("Connect to a local Ollama server for running LLMs")
-        self.switch_ollama_enabled = Gtk.Switch()
-        current_enabled = _get_setting_value(self._parent, 'OLLAMA_ENABLED', False)
-        self.switch_ollama_enabled.set_active(bool(current_enabled))
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_ollama_enabled, False, True, 0)
-        list_box.add(row)
-
-        # Ollama Base URL
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="Ollama Server URL", xalign=0)
-        label.set_hexpand(True)
-        self.entry_ollama_url = Gtk.Entry()
-        current_url = _get_setting_value(self._parent, 'OLLAMA_BASE_URL', 'http://localhost:11434')
-        self.entry_ollama_url.set_text(current_url)
-        self.entry_ollama_url.set_placeholder_text("http://localhost:11434")
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.entry_ollama_url, False, True, 0)
-        list_box.add(row)
-
-        # Test Connection button row
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        self.lbl_ollama_status = Gtk.Label(label="Status: Not tested", xalign=0)
-        self.lbl_ollama_status.set_hexpand(True)
-        btn_test = Gtk.Button(label="Test Connection")
-        btn_test.connect("clicked", self._on_test_ollama_connection)
-        hbox.pack_start(self.lbl_ollama_status, True, True, 0)
-        hbox.pack_start(btn_test, False, True, 0)
-        list_box.add(row)
-
-        # --- Separator ---
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        separator.set_margin_top(8)
-        separator.set_margin_bottom(8)
-        box.pack_start(separator, True, True, 0)
-        row.add(box)
-        row.set_selectable(False)
-        row.set_activatable(False)
-        list_box.add(row)
-
-        # --- Discovered Models Section ---
-        row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(row)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.add(hbox)
-        label = Gtk.Label(label="<b>Discovered Ollama Models</b>", xalign=0, use_markup=True)
-        label.set_hexpand(True)
-        btn_refresh = Gtk.Button(label="Refresh")
-        btn_refresh.connect("clicked", self._on_refresh_ollama_models)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(btn_refresh, False, True, 0)
-        list_box.add(row)
-
-        # Models list (initially empty)
-        self.local_models_listbox = Gtk.ListBox()
-        self.local_models_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.local_models_listbox.set_margin_start(16)
-        row = Gtk.ListBoxRow()
-        row.add(self.local_models_listbox)
+        intro_text = (
+            "Add local AI servers to ChatGTK. Select a preset below, test the connection, "
+            "then add the discovered models. Models will appear in the model selector after restart."
+        )
+        lbl_intro = Gtk.Label(label=intro_text, xalign=0, wrap=True)
+        lbl_intro.set_max_width_chars(60)
+        lbl_intro.get_style_context().add_class("dim-label")
+        row.add(lbl_intro)
         row.set_selectable(False)
         list_box.add(row)
 
-        # Placeholder when no models
-        placeholder_row = Gtk.ListBoxRow()
-        _add_listbox_row_margins(placeholder_row)
-        self.lbl_no_models = Gtk.Label(label="No models discovered. Click 'Refresh' to scan.", xalign=0)
-        self.lbl_no_models.get_style_context().add_class("dim-label")
-        placeholder_row.add(self.lbl_no_models)
-        self.local_models_listbox.add(placeholder_row)
-
-        # --- Separator ---
+        # --- Quick Setup Section ---
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        separator.set_margin_top(8)
-        separator.set_margin_bottom(8)
-        box.pack_start(separator, True, True, 0)
-        row.add(box)
-        row.set_selectable(False)
-        row.set_activatable(False)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
+        label = Gtk.Label(label="<b>Quick Setup</b>", xalign=0, use_markup=True)
+        label.set_hexpand(True)
+        hbox.pack_start(label, True, True, 0)
         list_box.add(row)
 
-        # --- Help Links Section ---
+        # Preset selector row
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add(hbox)
+        
+        # Preset dropdown
+        self.combo_preset = Gtk.ComboBoxText()
+        self.combo_preset.append("", "Select a local server...")
+        from config import LOCAL_SERVER_PRESETS
+        for key, preset in LOCAL_SERVER_PRESETS.items():
+            self.combo_preset.append(key, preset["display_name"])
+        self.combo_preset.set_active(0)
+        self.combo_preset.connect("changed", self._on_preset_changed)
+        self.combo_preset.set_hexpand(True)
+        hbox.pack_start(self.combo_preset, True, True, 0)
+        
+        # Test button
+        self.btn_test_preset = Gtk.Button(label="Test")
+        self.btn_test_preset.set_sensitive(False)
+        self.btn_test_preset.connect("clicked", self._on_test_preset)
+        hbox.pack_start(self.btn_test_preset, False, True, 0)
+        
+        # Add button
+        self.btn_add_preset = Gtk.Button(label="Add")
+        self.btn_add_preset.set_sensitive(False)
+        self.btn_add_preset.get_style_context().add_class("suggested-action")
+        self.btn_add_preset.connect("clicked", self._on_add_preset)
+        hbox.pack_start(self.btn_add_preset, False, True, 0)
+        
+        list_box.add(row)
+
+        # Status and hint row
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         row.add(vbox)
         
-        lbl_help = Gtk.Label(label="<b>Help</b>", xalign=0, use_markup=True)
-        vbox.pack_start(lbl_help, False, False, 0)
+        self.lbl_preset_status = Gtk.Label(label="", xalign=0)
+        self.lbl_preset_status.get_style_context().add_class("dim-label")
+        vbox.pack_start(self.lbl_preset_status, False, False, 0)
         
-        link_install = Gtk.LinkButton.new_with_label(
-            "https://ollama.com/download",
-            "Install Ollama"
+        self.lbl_preset_hint = Gtk.Label(xalign=0, wrap=True, use_markup=True)
+        self.lbl_preset_hint.set_max_width_chars(60)
+        self.lbl_preset_hint.get_style_context().add_class("dim-label")
+        vbox.pack_start(self.lbl_preset_hint, False, False, 0)
+        
+        row.set_selectable(False)
+        list_box.add(row)
+
+        # Discovered models list (with checkboxes)
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        self.preset_models_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        row.add(self.preset_models_box)
+        row.set_selectable(False)
+        list_box.add(row)
+        
+        # Store discovered models and their checkboxes
+        self._preset_discovered_models = []
+        self._preset_model_checkboxes = []
+
+        # --- Separator ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        separator.set_margin_top(8)
+        separator.set_margin_bottom(8)
+        box.pack_start(separator, True, True, 0)
+        row.add(box)
+        row.set_selectable(False)
+        row.set_activatable(False)
+        list_box.add(row)
+
+        # --- Info Note about Custom Models ---
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        row.add(info_box)
+        
+        lbl_tip_header = Gtk.Label(xalign=0, use_markup=True)
+        lbl_tip_header.set_markup("<b>💡 Fine-Grained Control</b>")
+        info_box.pack_start(lbl_tip_header, False, False, 0)
+        
+        tip_text = (
+            "For advanced configuration (custom endpoints, model IDs, port numbers), "
+            "use <b>Settings → Custom Models</b> to manually create model entries. "
+            "No API key is required for local servers."
         )
-        link_install.set_halign(Gtk.Align.START)
-        vbox.pack_start(link_install, False, False, 0)
+        lbl_tip = Gtk.Label(xalign=0, use_markup=True, wrap=True)
+        lbl_tip.set_markup(f"<small>{tip_text}</small>")
+        lbl_tip.set_max_width_chars(50)
+        lbl_tip.get_style_context().add_class("dim-label")
+        info_box.pack_start(lbl_tip, False, False, 0)
         
-        link_models = Gtk.LinkButton.new_with_label(
-            "https://ollama.com/library",
-            "Browse Model Library"
-        )
-        link_models.set_halign(Gtk.Align.START)
-        vbox.pack_start(link_models, False, False, 0)
-        
+        row.set_selectable(False)
         list_box.add(row)
 
         return scroll
 
-    def _on_test_ollama_connection(self, button):
-        """Test connection to the Ollama server."""
-        import threading
+    def _on_preset_changed(self, combo):
+        """Handle preset dropdown selection change."""
+        preset_id = combo.get_active_id()
+        if not preset_id:
+            self.btn_test_preset.set_sensitive(False)
+            self.btn_add_preset.set_sensitive(False)
+            self.lbl_preset_status.set_text("")
+            self.lbl_preset_hint.set_text("")
+            self._clear_preset_models_list()
+            return
         
-        url = self.entry_ollama_url.get_text().strip() or "http://localhost:11434"
-        self.lbl_ollama_status.set_text("Status: Testing...")
+        from config import LOCAL_SERVER_PRESETS
+        preset = LOCAL_SERVER_PRESETS.get(preset_id, {})
+        
+        self.btn_test_preset.set_sensitive(True)
+        self.btn_add_preset.set_sensitive(False)
+        self.lbl_preset_status.set_text("")
+        
+        hint = preset.get("install_hint", "")
+        description = preset.get("description", "")
+        
+        if hint:
+            self.lbl_preset_hint.set_markup(f"<small>💡 {hint}</small>")
+        elif description:
+            self.lbl_preset_hint.set_markup(f"<small>{description}</small>")
+        else:
+            self.lbl_preset_hint.set_text("")
+        
+        # Auto-trigger test when preset is selected
+        self._on_test_preset(self.btn_test_preset)
+
+    def _on_test_preset(self, button):
+        """Test connection to the selected preset server."""
+        import threading
+        import requests
+        
+        preset_id = self.combo_preset.get_active_id()
+        if not preset_id:
+            return
+        
+        from config import LOCAL_SERVER_PRESETS
+        preset = LOCAL_SERVER_PRESETS.get(preset_id, {})
+        
+        base_url = preset.get("base_url", "")
+        health_endpoint = preset.get("health_endpoint", "")
+        
+        if not base_url or not health_endpoint:
+            self.lbl_preset_status.set_text("✗ Invalid preset configuration")
+            return
+        
+        test_url = f"{base_url}{health_endpoint}"
+        self.lbl_preset_status.set_text("Testing connection...")
+        self.btn_test_preset.set_sensitive(False)
+        self._clear_preset_models_list()
         
         def do_test():
             try:
-                from services.local_models import OllamaBackend
-                backend = OllamaBackend(url)
-                health = backend.health_check()
+                resp = requests.get(test_url, timeout=5)
+                ok = resp.status_code < 400
                 
-                GLib.idle_add(
-                    lambda: self.lbl_ollama_status.set_text(
-                        f"Status: {'✓ Connected' if health.ok else '✗ ' + health.detail}"
-                    )
-                )
+                # For presets with model discovery, get the models
+                discovered_models = []
+                list_endpoint = preset.get("list_models_endpoint")
+                if ok and list_endpoint:
+                    try:
+                        list_url = f"{base_url}{list_endpoint}"
+                        list_resp = requests.get(list_url, timeout=5)
+                        if list_resp.status_code < 400:
+                            data = list_resp.json()
+                            parser = preset.get("list_models_parser", "openai")
+                            
+                            if parser == "ollama":
+                                for m in data.get("models", []):
+                                    discovered_models.append({
+                                        "id": m["name"],
+                                        "model_id": m["name"],
+                                        "name": m["name"],
+                                    })
+                            else:
+                                for m in data.get("data", []):
+                                    model_id = m.get("id", "")
+                                    discovered_models.append({
+                                        "id": model_id,
+                                        "model_id": model_id,
+                                        "name": model_id,
+                                    })
+                    except Exception:
+                        pass
+                elif ok:
+                    # Single model preset (e.g., faster-whisper)
+                    default_id = preset.get("default_model_id", f"{preset_id}-model")
+                    discovered_models.append({
+                        "id": f"{preset_id}:{default_id}",
+                        "model_id": default_id,
+                        "name": preset.get("display_name", preset_id),
+                    })
+                
+                if ok:
+                    status = f"✓ Connected to {preset.get('display_name', 'server')}"
+                    if discovered_models:
+                        status += f" ({len(discovered_models)} model{'s' if len(discovered_models) != 1 else ''})"
+                    GLib.idle_add(lambda: self._preset_test_success(status, discovered_models, preset))
+                else:
+                    GLib.idle_add(lambda: self._preset_test_failure(f"HTTP {resp.status_code}"))
+            except requests.exceptions.ConnectionError:
+                GLib.idle_add(lambda: self._preset_test_failure("Connection refused - is the server running?"))
             except Exception as e:
-                GLib.idle_add(
-                    lambda: self.lbl_ollama_status.set_text(f"Status: ✗ Error: {e}")
-                )
+                GLib.idle_add(lambda: self._preset_test_failure(str(e)))
         
         threading.Thread(target=do_test, daemon=True).start()
 
-    def _on_refresh_ollama_models(self, button):
-        """Refresh the list of discovered Ollama models."""
-        import threading
-        
-        url = self.entry_ollama_url.get_text().strip() or "http://localhost:11434"
-        
-        def do_refresh():
-            try:
-                from services.local_models import OllamaBackend
-                backend = OllamaBackend(url)
-                models = backend.list_models()
-                GLib.idle_add(lambda: self._populate_ollama_models(models))
-            except Exception as e:
-                GLib.idle_add(
-                    lambda: self.lbl_ollama_status.set_text(f"Status: ✗ Refresh failed: {e}")
-                )
-        
-        threading.Thread(target=do_refresh, daemon=True).start()
+    def _clear_preset_models_list(self):
+        """Clear the discovered models list."""
+        for child in self.preset_models_box.get_children():
+            self.preset_models_box.remove(child)
+        self._preset_discovered_models = []
+        self._preset_model_checkboxes = []
 
-    def _populate_ollama_models(self, models):
-        """Populate the models list with discovered Ollama models."""
-        # Clear existing rows
-        for child in self.local_models_listbox.get_children():
-            self.local_models_listbox.remove(child)
+    def _preset_test_success(self, status, models, preset):
+        """Handle successful preset test and populate models list."""
+        self.lbl_preset_status.set_text(status)
+        self.btn_test_preset.set_sensitive(True)
         
-        if not models:
-            placeholder_row = Gtk.ListBoxRow()
-            _add_listbox_row_margins(placeholder_row)
-            lbl = Gtk.Label(label="No models found. Make sure Ollama is running.", xalign=0)
-            lbl.get_style_context().add_class("dim-label")
-            placeholder_row.add(lbl)
-            self.local_models_listbox.add(placeholder_row)
+        # Clear existing UI widgets first (but don't reset the model lists yet)
+        for child in self.preset_models_box.get_children():
+            self.preset_models_box.remove(child)
+        
+        # Now set the discovered models and reset checkboxes
+        self._preset_discovered_models = models
+        self._preset_model_checkboxes = []
+        
+        if models:
+            # Add header
+            header = Gtk.Label(label="<b>Select models to add:</b>", xalign=0, use_markup=True)
+            self.preset_models_box.pack_start(header, False, False, 4)
+            
+            for model in models:
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                
+                check = Gtk.CheckButton()
+                check.set_active(True)  # Enabled by default
+                hbox.pack_start(check, False, False, 0)
+                self._preset_model_checkboxes.append(check)
+                
+                label = Gtk.Label(label=model["name"], xalign=0)
+                label.set_hexpand(True)
+                hbox.pack_start(label, True, True, 0)
+                
+                self.preset_models_box.pack_start(hbox, False, False, 2)
+            
+            self.preset_models_box.show_all()
+            self.btn_add_preset.set_sensitive(True)
         else:
-            for entry in models:
-                row = Gtk.ListBoxRow()
-                _add_listbox_row_margins(row)
-                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-                row.add(hbox)
-                
-                # Model name
-                lbl_name = Gtk.Label(label=entry.display_name, xalign=0)
-                lbl_name.set_hexpand(True)
-                hbox.pack_start(lbl_name, True, True, 0)
-                
-                # Capabilities badge
-                caps = []
-                if entry.capabilities.vision:
-                    caps.append("👁 vision")
-                if caps:
-                    lbl_caps = Gtk.Label(label=" ".join(caps), xalign=1)
-                    lbl_caps.get_style_context().add_class("dim-label")
-                    hbox.pack_start(lbl_caps, False, True, 0)
-                
-                self.local_models_listbox.add(row)
+            self.btn_add_preset.set_sensitive(False)
+
+    def _preset_test_failure(self, error):
+        """Handle failed preset test."""
+        self.lbl_preset_status.set_text(f"✗ {error}")
+        self.btn_test_preset.set_sensitive(True)
+        self.btn_add_preset.set_sensitive(False)
+        self._clear_preset_models_list()
+
+    def _on_add_preset(self, button):
+        """Add the selected (checked) preset models to custom_models.json."""
+        import json
+        import os
         
-        self.local_models_listbox.show_all()
-        self.lbl_ollama_status.set_text(f"Status: Found {len(models)} model(s)")
+        preset_id = self.combo_preset.get_active_id()
+        if not preset_id:
+            return
+        
+        from config import LOCAL_SERVER_PRESETS, CUSTOM_MODELS_FILE, SETTINGS_FILE
+        preset = LOCAL_SERVER_PRESETS.get(preset_id, {})
+        base_url = preset.get("base_url", "")
+        
+        # Get only checked models
+        models_to_add = []
+        for i, model in enumerate(self._preset_discovered_models):
+            if i < len(self._preset_model_checkboxes) and self._preset_model_checkboxes[i].get_active():
+                models_to_add.append(model)
+        
+        if not models_to_add:
+            self.lbl_preset_status.set_text("✗ No models selected")
+            return
+        
+        self.lbl_preset_status.set_text("Adding models...")
+        self.btn_add_preset.set_sensitive(False)
+        
+        # Load existing custom models
+        try:
+            if os.path.exists(CUSTOM_MODELS_FILE):
+                with open(CUSTOM_MODELS_FILE, "r") as f:
+                    custom_models = json.load(f)
+            else:
+                custom_models = {}
+        except Exception:
+            custom_models = {}
+        
+        # Add models
+        added_count = 0
+        added_ids = []
+        for model in models_to_add:
+            entry_id = model["id"]
+            if entry_id in custom_models:
+                continue  # Already exists
+            
+            # Determine endpoint based on preset category
+            categories = preset.get("categories", ["chat"])
+            if "stt" in categories:
+                endpoint = f"{base_url}{preset.get('transcription_endpoint', '/v1/audio/transcriptions')}"
+                api_type = "audio.transcriptions"
+            elif "tts" in categories:
+                endpoint = f"{base_url}{preset.get('tts_endpoint', '/v1/audio/speech')}"
+                api_type = "audio.speech"
+            else:
+                endpoint = f"{base_url}{preset.get('chat_endpoint', '/v1/chat/completions')}"
+                api_type = "chat.completions"
+            
+            custom_models[entry_id] = {
+                "model_id": model["model_id"],
+                "endpoint": endpoint,
+                "api_key": "",
+                "api_type": api_type,
+                "display_name": f"{preset.get('display_name', preset_id)}: {model['name']}",
+            }
+            added_count += 1
+            added_ids.append(entry_id)
+        
+        # Save custom models using the utility function
+        from utils import save_custom_models
+        try:
+            save_custom_models(custom_models)
+        except Exception as e:
+            self.lbl_preset_status.set_text(f"✗ Failed to save: {e}")
+            self.btn_add_preset.set_sensitive(True)
+            return
+        
+        # Update the dialog's internal custom_models dict
+        self.custom_models = custom_models
+        
+        # Add to whitelist (CUSTOM_MODEL_WHITELIST, not MODEL_WHITELIST)
+        if added_ids:
+            current_whitelist = getattr(self, 'custom_model_whitelist', '') or ''
+            whitelist_models = set(m.strip() for m in current_whitelist.split(",") if m.strip())
+            for model_id in added_ids:
+                whitelist_models.add(model_id)
+            self.custom_model_whitelist = ",".join(sorted(whitelist_models))
+            
+            # Save the updated whitelist via repository
+            new_settings = self.get_settings()
+            for key, value in new_settings.items():
+                _set_setting_value(self._parent, key, value)
+        
+        # Update the model cache
+        if hasattr(self, "_model_cache"):
+            self._model_cache["custom"] = sorted(self.custom_models.keys())
+        
+        # Refresh the custom models list if built
+        if hasattr(self, '_custom_models_list'):
+            self._refresh_custom_models_list()
+        
+        # Refresh whitelist page if built
+        if hasattr(self, '_model_whitelist_built') and self._model_whitelist_built:
+            self._populate_model_whitelist_sections(preserve_selections=True)
+        
+        if added_count == 0:
+            self.lbl_preset_status.set_text(f"✓ All {len(models_to_add)} model(s) already configured")
+        else:
+            self.lbl_preset_status.set_text(f"✓ Added {added_count} model(s)")
+        self.btn_add_preset.set_sensitive(True)
+
+    def _preset_add_failure(self, error):
+        """Handle failed preset add."""
+        self.lbl_preset_status.set_text(f"✗ {error}")
+        self.btn_add_preset.set_sensitive(True)
 
     def _connect_read_aloud_signals(self):
         if self._read_aloud_signals_connected:
@@ -5215,9 +5407,6 @@ class SettingsDialog(Gtk.Dialog):
                 action: combo.get_active_id() or ''
                 for action, combo in getattr(self, '_model_combos', {}).items()
             }),
-            # Local Models / Ollama settings
-            'ollama_enabled': self.switch_ollama_enabled.get_active() if hasattr(self, 'switch_ollama_enabled') else _get_setting_value(self._parent, 'OLLAMA_ENABLED', False),
-            'ollama_base_url': self.entry_ollama_url.get_text().strip() if hasattr(self, 'entry_ollama_url') else _get_setting_value(self._parent, 'OLLAMA_BASE_URL', 'http://localhost:11434'),
         }
 
     def get_api_keys(self):

@@ -781,23 +781,21 @@ class ChatController:
         
         Returns the provider instance, or None if the key was cleared.
         """
-        # Handle Ollama specially - it doesn't use api_key
-        if provider_name == 'ollama':
-            provider = self.providers.get(provider_name)
-            if provider is None:
-                provider = get_ai_provider(provider_name)
-            base_url = self._settings_manager.get('OLLAMA_BASE_URL', 'http://localhost:11434')
-            provider.initialize(base_url)
-            self.providers[provider_name] = provider
-            return provider
         
         api_key = (api_key or "").strip()
         self.api_keys[provider_name] = api_key
 
-        # If the key was cleared, drop the provider.
+        # If the key was cleared, drop the provider (unless it's a custom provider
+        # with an endpoint configured - local models don't need API keys).
         if not api_key:
-            self.providers.pop(provider_name, None)
-            return None
+            # For custom provider, check if the model has an endpoint configured
+            if provider_name == 'custom':
+                # Custom models can work without API keys if they have an endpoint
+                # (e.g., local LMStudio, text-generation-webui, etc.)
+                pass  # Don't return None, continue to initialize
+            else:
+                self.providers.pop(provider_name, None)
+                return None
 
         # Reuse an existing provider instance when available so caches survive.
         provider = self.providers.get(provider_name)
@@ -1876,7 +1874,7 @@ class ChatController:
             provider.initialize(
                 api_key=resolve_api_key(config.get("api_key", "")).strip(),
                 endpoint=config.get("endpoint"),
-                model_id=model,
+                model_id=config.get("model_id") or model,
                 api_type=config.get("api_type", "chat.completions"),
             )
             self.custom_providers[model] = provider
@@ -1942,16 +1940,12 @@ class ChatController:
         Returns
         -------
         str
-            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom', 'ollama').
+            The provider name ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom').
         """
         from model_cards import get_card
         
         if not model:
             return 'openai'
-        
-        # Check for Ollama models (prefixed with "ollama:")
-        if model.startswith("ollama:"):
-            return 'ollama'
         
         # Model card is the single source of truth
         card = get_card(model, self.custom_models)
@@ -2335,10 +2329,21 @@ class ChatController:
                     raise ValueError(f"Custom model '{model}' is not configured")
                 provider = get_ai_provider("custom")
                 from utils import resolve_api_key
+                from model_cards import get_card
+                
+                # Get the actual model_id from the card's quirks (for local models)
+                # or fall back to config values
+                card = get_card(model, self.custom_models)
+                actual_model_id = None
+                if card and card.quirks.get("actual_model_id"):
+                    actual_model_id = card.quirks["actual_model_id"]
+                if not actual_model_id:
+                    actual_model_id = config.get("model_id") or config.get("model_name") or model
+                
                 provider.initialize(
                     api_key=resolve_api_key(config.get("api_key", "")).strip(),
                     endpoint=config.get("endpoint"),
-                    model_id=config.get("model_name") or model,
+                    model_id=actual_model_id,
                     api_type=config.get("api_type") or "chat.completions",
                     voice=config.get("voice"),
                 )
