@@ -361,8 +361,9 @@ class OpenAIGTKClient(Gtk.Window):
                         if not chat_filename.endswith('.json'):
                             chat_filename = f"{chat_filename}.json"
                         # Verify the file exists before trying to load
-                        from config import HISTORY_DIR
-                        chat_path = os.path.join(HISTORY_DIR, chat_filename)
+                        # Use controller's history dir to respect current project
+                        history_dir = self.controller.get_current_history_dir()
+                        chat_path = os.path.join(history_dir, chat_filename)
                         if os.path.exists(chat_path):
                             self.load_chat_by_filename(chat_filename, save_current=False)
                 except Exception as e:
