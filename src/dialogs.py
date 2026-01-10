@@ -1052,7 +1052,7 @@ class SettingsDialog(Gtk.Dialog):
     """Dialog for configuring application settings with a sidebar for categories."""
 
     # Categories displayed in the sidebar
-    CATEGORIES = ["General", "Audio", "Local Models", "Tool Options", "Memory", "System Prompts", "Custom Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
+    CATEGORIES = ["General", "Audio", "Tool Options", "Memory", "System Prompts", "Custom Models", "Local Models", "Model Whitelist", "API Keys", "Keyboard Shortcuts", "Advanced"]
 
     def __init__(self, parent, ai_provider=None, providers=None, api_keys=None, **settings):
         super().__init__(title="Settings", transient_for=parent, flags=0)

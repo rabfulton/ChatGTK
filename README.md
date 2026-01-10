@@ -171,6 +171,36 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - **Self-hosted models**: Use local or remote self-hosted models with OpenAI-compatible APIs
   - **Alternative providers**: Access models from services like Together AI, Anyscale, or other compatible providers
 
+## Local Models 🆕
+
+> **This feature is new!** Feedback and bug reports are welcome. Please open an issue on GitHub if you encounter any problems or have suggestions for improvement.
+
+ChatGTK supports integration with local AI servers, allowing you to use self-hosted models for chat, speech-to-text, and text-to-speech without requiring API keys or internet connectivity.
+
+- **Quick Setup**
+  - Open **Settings → Local Models**
+  - Select a preset from the dropdown (Ollama, LMStudio, LocalAI, etc.)
+  - Click **Add** to add discovered models to your model list
+  - Models appear in the main model dropdown after adding
+
+- **Supported Servers**
+  | Server | Type | Default Port | Install |
+  |--------|------|--------------|---------|
+  | [Ollama](https://ollama.com) | Chat, Vision | 11434 | `curl -fsSL https://ollama.com/install.sh \| sh` |
+  | [LMStudio](https://lmstudio.ai) | Chat | 1234 | Download from lmstudio.ai |
+  | [LocalAI](https://localai.io) | Chat, STT, TTS | 8080 | `docker run -p 8080:8080 localai/localai` |
+  | [faster-whisper](https://github.com/fedirz/faster-whisper-server) | STT | 8000 | `docker run -p 8000:8000 fedirz/faster-whisper-server` |
+  | [text-generation-webui](https://github.com/oobabooga/text-generation-webui) | Chat | 5000 | Launch with `--api` flag |
+
+- **How It Works**
+  - All servers use OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/models`)
+  - Full tool/function calling support with capable models
+
+- **Manual Configuration**
+  - For advanced setups or custom ports, use **Settings → Custom Models** to manually add entries
+  - Set the endpoint URL to your server's address (e.g., `http://localhost:1234/v1/chat/completions`)
+  - Leave the API Key field empty for local servers
+
 ## Document Mode
 
 Document Mode provides a focused editing environment for creating and refining long-form content with AI assistance. Instead of a back-and-forth chat, you work on a single document that the AI can read and edit directly.
