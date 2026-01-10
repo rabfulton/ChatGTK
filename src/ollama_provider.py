@@ -208,9 +208,37 @@ class OllamaProvider:
         )
         tools = build_tools_for_provider(enabled_tools, "ollama") if enabled_tools else None
         
-        # Pick the first available handler as the general tool call handler for Ollama
-        tool_call_handler = wolfram_handler or search_handler or image_handler or \
-                           music_handler or read_aloud_handler or text_edit_handler
+        # Create a dispatcher function that routes tool calls to the correct handler
+        def tool_call_handler(tool_name: str, args: dict) -> str:
+            """Dispatch tool calls to the appropriate handler."""
+            try:
+                if tool_name == "control_music" and music_handler:
+                    action = args.get("action", "")
+                    keyword = args.get("keyword")
+                    volume = args.get("volume")
+                    return music_handler(action, keyword, volume)
+                elif tool_name == "generate_image" and image_handler:
+                    prompt = args.get("prompt", "")
+                    return image_handler(prompt)
+                elif tool_name == "search" and search_handler:
+                    keyword = args.get("keyword", "")
+                    source = args.get("source", "history")
+                    return search_handler(keyword, source)
+                elif tool_name == "read_aloud" and read_aloud_handler:
+                    text = args.get("text", "")
+                    return read_aloud_handler(text)
+                elif tool_name == "get_text" and text_get_handler:
+                    return text_get_handler()
+                elif tool_name == "edit_text" and text_edit_handler:
+                    new_text = args.get("new_text", "")
+                    return text_edit_handler(new_text)
+                elif tool_name == "wolfram_alpha" and wolfram_handler:
+                    query = args.get("query", "")
+                    return wolfram_handler(query)
+                else:
+                    return f"Unknown tool: {tool_name}"
+            except Exception as e:
+                return f"Error executing {tool_name}: {e}"
 
         return self.backend.chat(
             entry=entry,
@@ -219,7 +247,7 @@ class OllamaProvider:
             temperature=temperature,
             max_tokens=max_tokens,
             tools=tools,
-            tool_call_handler=tool_call_handler,
+            tool_call_handler=tool_call_handler if enabled_tools else None,
         )
     
     # Methods required by AIProvider interface but not applicable to Ollama
