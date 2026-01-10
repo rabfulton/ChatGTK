@@ -147,11 +147,6 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
             # Use the first listed voice as the default for synthesized cards
             voice = cfg_voices[0]
 
-    # Store the actual model_id for API calls in quirks
-    # This is needed for local models where the key (e.g., "ollama:llama3.2:1b")
-    # differs from the actual model name (e.g., "llama3.2:1b")
-    actual_model_id = cfg.get("model_id") or cfg.get("model_name") or model_id
-
     return ModelCard(
         id=model_id,
         provider="custom",
@@ -161,7 +156,6 @@ def _synthesize_card_from_custom(model_id: str, cfg: dict) -> ModelCard:
         voice=voice,  # Voice for TTS models
         capabilities=caps,
         key_name=model_id,  # Custom models use their own key
-        quirks={"actual_model_id": actual_model_id},
     )
 
 

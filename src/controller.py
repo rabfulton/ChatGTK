@@ -2329,21 +2329,11 @@ class ChatController:
                     raise ValueError(f"Custom model '{model}' is not configured")
                 provider = get_ai_provider("custom")
                 from utils import resolve_api_key
-                from model_cards import get_card
-                
-                # Get the actual model_id from the card's quirks (for local models)
-                # or fall back to config values
-                card = get_card(model, self.custom_models)
-                actual_model_id = None
-                if card and card.quirks.get("actual_model_id"):
-                    actual_model_id = card.quirks["actual_model_id"]
-                if not actual_model_id:
-                    actual_model_id = config.get("model_id") or config.get("model_name") or model
                 
                 provider.initialize(
                     api_key=resolve_api_key(config.get("api_key", "")).strip(),
                     endpoint=config.get("endpoint"),
-                    model_id=actual_model_id,
+                    model_id=config.get("model_id") or model,
                     api_type=config.get("api_type") or "chat.completions",
                     voice=config.get("voice"),
                 )

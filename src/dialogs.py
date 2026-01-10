@@ -2040,23 +2040,14 @@ class SettingsDialog(Gtk.Dialog):
                         list_resp = requests.get(list_url, timeout=5)
                         if list_resp.status_code < 400:
                             data = list_resp.json()
-                            parser = preset.get("list_models_parser", "openai")
-                            
-                            if parser == "ollama":
-                                for m in data.get("models", []):
-                                    discovered_models.append({
-                                        "id": m["name"],
-                                        "model_id": m["name"],
-                                        "name": m["name"],
-                                    })
-                            else:
-                                for m in data.get("data", []):
-                                    model_id = m.get("id", "")
-                                    discovered_models.append({
-                                        "id": model_id,
-                                        "model_id": model_id,
-                                        "name": model_id,
-                                    })
+                            # All presets use OpenAI-compatible /v1/models format
+                            for m in data.get("data", []):
+                                model_id = m.get("id", "")
+                                discovered_models.append({
+                                    "id": model_id,
+                                    "model_id": model_id,
+                                    "name": model_id,
+                                })
                     except Exception:
                         pass
                 elif ok:
