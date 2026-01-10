@@ -2389,10 +2389,6 @@ class OpenAIGTKClient(Gtk.Window):
                 self.show_error_dialog(f"Please enter your {provider_label} API key")
                 return False
             os.environ[env_var] = api_key
-        elif provider_name == 'ollama':
-            # Ollama is a local provider - no API key required
-            api_key = None  # Will be ignored; base_url used instead
-            provider_label = "Ollama"
         else:
             env_var = 'OPENAI_API_KEY'
             provider_label = "OpenAI"

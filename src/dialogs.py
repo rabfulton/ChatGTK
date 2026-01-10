@@ -1850,8 +1850,8 @@ class SettingsDialog(Gtk.Dialog):
         row = Gtk.ListBoxRow()
         _add_listbox_row_margins(row)
         intro_text = (
-            "Add local AI servers to ChatGTK. Select a preset below, test the connection, "
-            "then add the discovered models. Models will appear in the model selector after restart."
+            "Add local AI servers to ChatGTK. Select a preset below, select which models you wish to add, "
+            "then click **Add** to add the discovered models."
         )
         lbl_intro = Gtk.Label(label=intro_text, xalign=0, wrap=True)
         lbl_intro.set_max_width_chars(60)
