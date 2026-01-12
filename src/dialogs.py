@@ -1614,15 +1614,28 @@ class SettingsDialog(Gtk.Dialog):
         label.set_hexpand(True)
         self.combo_tts_provider = Gtk.ComboBoxText()
 
-        # Built-in TTS provider options
+        # Built-in TTS provider options (these use dedicated TTS APIs)
         tts_providers = [
             ("openai", "OpenAI TTS (tts-1 / tts-1-hd)"),
             ("gemini", "Gemini TTS"),
-            ("gpt-4o-audio-preview", "gpt-4o-audio-preview"),
-            ("gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview"),
         ]
         for provider_id, display_name in tts_providers:
             self.combo_tts_provider.append(provider_id, display_name)
+
+        # Dynamically add audio models from catalog (models with audio_out capability)
+        from model_cards import list_cards as get_all_cards
+        audio_models_added = set()
+        for card in get_all_cards().values():
+            # Include models with audio_out that use the audio modality (chat-based TTS)
+            # Exclude pure TTS models (no text input) and realtime models (websocket)
+            if (card.capabilities.audio_out
+                and card.capabilities.text  # Must accept text input
+                and card.quirks.get("requires_audio_modality")
+                and not card.quirks.get("realtime_websocket")
+                and card.id not in audio_models_added):
+                # Prefer base model names over dated variants
+                self.combo_tts_provider.append(card.id, card.get_display_name())
+                audio_models_added.add(card.id)
 
         # Add custom TTS models from custom_models.json
         for model_id, cfg in self.custom_models.items():
@@ -5061,9 +5074,14 @@ class SettingsDialog(Gtk.Dialog):
             else:
                 self.row_hd_voice.hide()
         
-        # Prompt Template only applies to Gemini TTS and audio-preview models (not custom)
+        # Prompt Template only applies to Gemini TTS and audio-modality models (not custom)
         if hasattr(self, 'row_prompt_template'):
-            if provider_id in ("gemini", "gpt-4o-audio-preview", "gpt-4o-mini-audio-preview") and not is_custom_tts:
+            # Check if this is an audio-modality model via model card
+            from model_cards import get_card
+            card = get_card(provider_id)
+            is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
+            
+            if (provider_id == "gemini" or is_audio_modality_model) and not is_custom_tts:
                 self.row_prompt_template.show()
             else:
                 self.row_prompt_template.hide()

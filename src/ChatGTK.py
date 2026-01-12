@@ -1980,6 +1980,11 @@ class OpenAIGTKClient(Gtk.Window):
             custom_models = getattr(self, 'custom_models', {}) or {}
             is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
             
+            # Check if this is an audio-modality model (gpt-audio, gpt-4o-audio-preview, etc.)
+            from model_cards import get_card
+            card = get_card(provider)
+            is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
+            
             if provider == 'openai':
                 success = self._synthesize_and_play_tts(
                     text,
@@ -1992,7 +1997,7 @@ class OpenAIGTKClient(Gtk.Window):
                     chat_id=self.current_chat_id,
                     stop_event=None
                 )
-            elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
+            elif is_audio_modality_model:
                 success = self._synthesize_and_play_audio_preview(
                     text,
                     chat_id=self.current_chat_id,
@@ -4085,6 +4090,11 @@ class OpenAIGTKClient(Gtk.Window):
                         custom_models = getattr(self, 'custom_models', {}) or {}
                         is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
                         
+                        # Check if this is an audio-modality model
+                        from model_cards import get_card
+                        card = get_card(provider)
+                        is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
+                        
                         if provider == 'openai':
                             self._synthesize_and_play_tts(
                                 text_content,
@@ -4097,7 +4107,7 @@ class OpenAIGTKClient(Gtk.Window):
                                 chat_id=self.current_chat_id,
                                 stop_event=stop_event
                             )
-                        elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
+                        elif is_audio_modality_model:
                             self._synthesize_and_play_audio_preview(
                                 text_content,
                                 chat_id=self.current_chat_id,
@@ -4405,6 +4415,11 @@ class OpenAIGTKClient(Gtk.Window):
             custom_models = getattr(self, 'custom_models', {}) or {}
             is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
             
+            # Check if this is an audio-modality model
+            from model_cards import get_card
+            card = get_card(provider)
+            is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
+            
             try:
                 if provider == 'openai':
                     self._synthesize_and_play_tts(
@@ -4418,7 +4433,7 @@ class OpenAIGTKClient(Gtk.Window):
                         chat_id=chat_id,
                         stop_event=self.read_aloud_stop_event
                     )
-                elif provider in ('gpt-4o-audio-preview', 'gpt-4o-mini-audio-preview'):
+                elif is_audio_modality_model:
                     self._synthesize_and_play_audio_preview(
                         text,
                         chat_id=chat_id,
