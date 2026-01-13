@@ -1839,9 +1839,30 @@ class OpenAIGTKClient(Gtk.Window):
 
         def fetch_thread():
             if not self.providers:
+                # Even when no remote providers are initialized (e.g. fresh install
+                # using only a local custom endpoint like Ollama), still include any
+                # configured custom models. Previously we returned early here and
+                # ignored custom models until restart (when whitelist startup kicks in).
+                collected_models = []
+                mapping = {}
+
                 default_models = self._default_models_for_provider('openai')
-                mapping = {model: 'openai' for model in default_models}
-                GLib.idle_add(self.apply_model_fetch_results, default_models, mapping)
+                for model in default_models:
+                    mapping[model] = 'openai'
+                    collected_models.append(model)
+
+                # Add custom models (persisted on disk)
+                if self.custom_models:
+                    custom_whitelist = whitelists.get('custom', set())
+                    custom_ids = list(self.custom_models.keys())
+                    if not disable_filter and custom_whitelist:
+                        custom_ids = [m for m in custom_ids if m in custom_whitelist]
+                    for model_id in custom_ids:
+                        mapping[model_id] = 'custom'
+                        collected_models.append(model_id)
+
+                unique_models = sorted(dict.fromkeys(collected_models))
+                GLib.idle_add(self.apply_model_fetch_results, unique_models, mapping)
                 return
 
             collected_models = []
@@ -2058,6 +2079,11 @@ class OpenAIGTKClient(Gtk.Window):
         return False
 
     def on_open_settings(self, widget):
+        # Snapshot custom models so we can detect changes even if the user closes the
+        # dialog with Cancel/Window Close. (Custom models are persisted immediately
+        # by the dialog itself, so we should re-sync from disk on close.)
+        custom_models_before_open = dict(getattr(self, "custom_models", {}) or {})
+
         # Gather current API keys from environment or stored values
         from utils import API_KEY_FIELDS
         current_api_keys = {}
@@ -2103,6 +2129,26 @@ class OpenAIGTKClient(Gtk.Window):
 
             self.fetch_models_async()
         dialog.destroy()
+
+        # If custom models changed on disk, ensure the running app picks them up
+        # even if the settings dialog was closed without OK.
+        try:
+            from utils import load_custom_models
+            custom_models_after = load_custom_models() or {}
+        except Exception:
+            custom_models_after = None
+
+        current_custom_models = dict(getattr(self, "custom_models", {}) or {})
+        if (
+            custom_models_after is not None
+            and custom_models_after != current_custom_models
+            and custom_models_after != custom_models_before_open
+        ):
+            self.custom_models = custom_models_after
+            self.controller.custom_models = self.custom_models
+            self.custom_providers = {}
+            self.controller.update_tool_manager()
+            self.fetch_models_async()
 
     def on_open_prompt_editor(self, widget):
         """Open a larger dialog for composing a more complex prompt."""
