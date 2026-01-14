@@ -509,7 +509,7 @@ class CustomModelDialog(Gtk.Dialog):
         dialog = Gtk.Dialog(title="Edit Voices", transient_for=self, flags=0)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("Save", Gtk.ResponseType.OK)
-        dialog.set_default_size(350, 260)
+        dialog.set_default_size(520, 360)
 
         box = dialog.get_content_area()
         box.set_spacing(8)
@@ -517,6 +517,21 @@ class CustomModelDialog(Gtk.Dialog):
         box.set_margin_bottom(10)
         box.set_margin_start(10)
         box.set_margin_end(10)
+
+        # Fetch voices: keep status on its own line so long URLs/messages don't
+        # distort the button sizing.
+        fetch_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        fetch_btn = Gtk.Button(label="Fetch from server")
+        fetch_btn_row.pack_start(fetch_btn, False, False, 0)
+        box.pack_start(fetch_btn_row, False, False, 0)
+
+        fetch_status = Gtk.Label(label="", xalign=0)
+        fetch_status.set_hexpand(True)
+        fetch_status.set_line_wrap(True)
+        fetch_status.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        fetch_status.set_max_width_chars(72)
+        fetch_status.get_style_context().add_class("dim-label")
+        box.pack_start(fetch_status, False, False, 0)
 
         instructions = Gtk.Label(
             label="Enter one voice per line. Remove a line to delete a voice.",
@@ -537,6 +552,107 @@ class CustomModelDialog(Gtk.Dialog):
         existing = "\n".join(self._get_voice_options())
         buffer.set_text(existing)
         scrolled.add(textview)
+
+        def set_fetch_status(text: str) -> None:
+            fetch_status.set_text(text or "")
+
+        def _get_base_endpoint_for_voices(raw_endpoint: str) -> str:
+            endpoint = (raw_endpoint or "").strip()
+            endpoint = endpoint.rstrip("/")
+            if not endpoint:
+                return ""
+            # Strip common OpenAI-compatible API suffixes, keeping /v1 if present.
+            endpoint = re.sub(
+                r"/(chat/completions|responses|images/generations|audio/speech|audio/transcriptions)(/.*)?$",
+                "",
+                endpoint,
+            )
+            return endpoint.rstrip("/")
+
+        def on_fetch_clicked(_btn):
+            raw_endpoint = ""
+            try:
+                raw_endpoint = self.entry_endpoint.get_text()
+            except Exception:
+                raw_endpoint = ""
+            base = _get_base_endpoint_for_voices(raw_endpoint)
+            if not base:
+                set_fetch_status("Enter an Endpoint URL first.")
+                return
+
+            # OpenAI-compatible convention is /v1/audio/voices; base often already ends in /v1.
+            voices_url = f"{base}/audio/voices"
+
+            fetch_btn.set_sensitive(False)
+            set_fetch_status("Fetching voices…")
+
+            def do_fetch():
+                try:
+                    import requests
+                    from utils import resolve_api_key
+
+                    # Best-effort auth: use the dialog's current API key selection.
+                    api_key = ""
+                    try:
+                        entry_widget = self.combo_api_key.get_child()
+                        api_key = (entry_widget.get_text() or "").strip()
+                    except Exception:
+                        api_key = ""
+                    api_key = resolve_api_key(api_key)
+
+                    headers = {}
+                    if api_key:
+                        headers["Authorization"] = f"Bearer {api_key}"
+
+                    resp = requests.get(voices_url, headers=headers, timeout=10)
+                    if resp.status_code >= 400:
+                        body = (resp.text or "").strip()
+                        raise RuntimeError(f"HTTP {resp.status_code}: {body or 'no response body'}")
+
+                    data = resp.json()
+                    voices = []
+                    if isinstance(data, list):
+                        voices = [str(v).strip() for v in data if str(v).strip()]
+                    elif isinstance(data, dict):
+                        if isinstance(data.get("voices"), list):
+                            voices = [str(v).strip() for v in data.get("voices") if str(v).strip()]
+                        elif isinstance(data.get("data"), list):
+                            for item in data.get("data") or []:
+                                if isinstance(item, str):
+                                    v = item.strip()
+                                    if v:
+                                        voices.append(v)
+                                elif isinstance(item, dict):
+                                    v = str(item.get("id") or item.get("name") or "").strip()
+                                    if v:
+                                        voices.append(v)
+                    # De-dup preserve order
+                    deduped = []
+                    seen = set()
+                    for v in voices:
+                        if v not in seen:
+                            deduped.append(v)
+                            seen.add(v)
+                    if not deduped:
+                        raise RuntimeError("No voices returned.")
+
+                    def apply():
+                        buffer.set_text("\n".join(deduped))
+                        set_fetch_status(f"Loaded {len(deduped)} voice(s) from {voices_url}")
+                        fetch_btn.set_sensitive(True)
+                        return False
+
+                    GLib.idle_add(apply)
+                except Exception as e:
+                    def fail():
+                        set_fetch_status(f"Failed: {e}")
+                        fetch_btn.set_sensitive(True)
+                        return False
+                    GLib.idle_add(fail)
+
+            threading.Thread(target=do_fetch, daemon=True).start()
+
+        fetch_btn.connect("clicked", on_fetch_clicked)
 
         dialog.show_all()
         response = dialog.run()
