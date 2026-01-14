@@ -633,7 +633,7 @@ class AudioService:
         elif provider_type == 'custom':
             audio_path = self.synthesize_custom_tts(
                 clean_text, provider,
-                voice=kwargs.get('voice', 'default'),
+                voice=kwargs.get('voice', ''),
                 model_id=kwargs.get('model_id', 'custom'),
                 chat_id=chat_id,
                 stop_event=stop_event,

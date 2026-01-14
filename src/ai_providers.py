@@ -1151,7 +1151,11 @@ class CustomProvider(AIProvider):
         self._debug("TTS Payload", payload)
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
         self._debug("TTS Response Status", resp.status_code)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Include response body to make common misconfiguration (model/voice/schema)
+            # issues debuggable for local OpenAI-compatible servers.
+            body = (resp.text or "").strip()
+            raise RuntimeError(f"TTS request failed ({resp.status_code}) at {url}: {body or 'no response body'}")
         return resp.content
 
     # -----------------------------

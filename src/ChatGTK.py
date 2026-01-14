@@ -4407,7 +4407,10 @@ class OpenAIGTKClient(Gtk.Window):
         cfg_voices = cfg.get('voices', [])
         if isinstance(cfg_voices, list):
             cfg_voices = [v.strip() for v in cfg_voices if isinstance(v, str) and v.strip()]
-        voice = selected_voice.strip() or cfg_voice or (cfg_voices[0] if cfg_voices else "default")
+        # Only send a voice if the user configured one (via global TTS_VOICE or
+        # the custom model config). Some OpenAI-compatible TTS servers reject an
+        # arbitrary placeholder voice like "default" with HTTP 400.
+        voice = selected_voice.strip() or cfg_voice or (cfg_voices[0] if cfg_voices else "")
         
         # Create provider
         provider = CustomProvider()
@@ -4416,7 +4419,7 @@ class OpenAIGTKClient(Gtk.Window):
             endpoint=cfg.get('endpoint', ''),
             model_id=cfg.get('model_name') or cfg.get('model_id') or model_id,
             api_type='tts',
-            voice=voice
+            voice=voice or None,
         )
         
         return self.controller.audio_service.synthesize_and_play(
