@@ -41,7 +41,6 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 
 ## Contents
 
-- [Screenshots](#screenshots)
 - [Features](#features)
 - [Installation from AUR](#installation-from-aur)
 - [Quick Install (Virtual Environment)](#quick-install-virtual-environment)
@@ -68,10 +67,10 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - Image generation by directly prompting image models or through function calling
 - Export conversations and documents to PDF
 - Text to Speech using what ever model and voice you choose
-- Real-time voice conversation support using OpenAI's realtime models
+- Real-time voice conversation support using OpenAI's and xAI's realtime models
 - Reasoning level adjustment for capable models
 - Tool use including music control, image generation, web search, Wolfram Alpha queries, and a read aloud tool that lets your assistant decide when to use TTS
-- Multi-provider support for OpenAI, Gemini, xAI, Perplexity, Anthropic and 3rd parties
+- Multi-provider support for Local, OpenAI, Gemini, xAI, Perplexity, Anthropic and 3rd parties
 
 ## Installation from AUR
 
@@ -125,7 +124,7 @@ The application looks for the following environment variables:
 - `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional)
 - `PERPLEXITY_API_KEY` (optional)
 
-You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page or define a custom endpoint in the **Custom Models* settings page.
+You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page or define a custom endpoint in the **Custom Models* settings page. You can also use the systems keyring to hold your API keys, configure this in `settings->API Keys`.
 
 ## Getting API keys
 
@@ -244,7 +243,7 @@ ChatGTK supports integration with local AI servers, allowing you to use self-hos
 
 ## Document Mode
 
-Document Mode provides a focused editing environment for creating and refining long-form content with AI assistance. Instead of a back-and-forth chat, you work on a single document that the AI can read and edit directly.
+Document Mode provides a focused editing environment for creating and refining long-form content with AI assistance. Instead of a back-and-forth chat, you work on a single document that the AI can read and edit directly. The documents are formatted using markdown and can be exported as a pdf as usual.
 
 - **Creating Documents**
   - Click the document icon (📄) in the sidebar to create a new document
@@ -404,6 +403,10 @@ Set your **Music Library Directory** in **Settings → Tool Options**, then clic
 Web search is only supported on certain models. For OpenAI, supported models include: `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, and `gpt-5.x` models. For Gemini, supported models include `gemini-2.x` and `gemini-3.x` models. Older models like `gpt-3.5-turbo` or `gemini-1.5` do not support web search. Newer Grok models should work and can also be asked to search X.
 ### Fonts look bad in exported PDF
 install `texlive-fontsrecommended` from your package manager.
+### How do I use the realtime voice chat?
+- Ensure that the realtime models from either xAI or OpenAI are enabled in `settings->model whitelist`.
+- Ensure that you have a microphone selected in `settings->audio` and select the realtime voice you want to use.
+- Now in a **new chat** select the desired realtime model from the drop down model list then hit the microphone icon next to the prompt entry box to start the conversation.
 
 ## Requirements
 
