@@ -2,6 +2,60 @@
 
 A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity Sonar and Anthropic Claude APIs, featuring voice input/output and a clean interface. This project was primarily generated through AI assistance (Claude, O1, O3-mini, Grok, GPT 5.1).
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="screenshots/syntax_highlight.png">
+        <img src="screenshots/syntax_highlight.png" width="320" alt="Syntax highlighting" />
+      </a>
+      <br />
+      <sub>Syntax highlighting</sub>
+    </td>
+    <td align="center">
+      <a href="screenshots/formula.png">
+        <img src="screenshots/formula.png" width="320" alt="Equation rendering" />
+      </a>
+      <br />
+      <sub>Equation rendering</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="screenshots/images.png">
+        <img src="screenshots/images.png" width="320" alt="Image generation" />
+      </a>
+      <br />
+      <sub>Image generation</sub>
+    </td>
+    <td align="center">
+      <a href="screenshots/document.png">
+        <img src="screenshots/document.png" width="320" alt="Document mode" />
+      </a>
+      <br />
+      <sub>Document mode</sub>
+    </td>
+  </tr>
+</table>
+
+## Contents
+
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Installation from AUR](#installation-from-aur)
+- [Quick Install (Virtual Environment)](#quick-install-virtual-environment)
+- [Manual Installation](#manual-installation)
+- [Usage](#usage)
+- [Getting API keys](#getting-api-keys)
+- [Custom Models](#custom-models)
+- [Local Models](#local-models)
+- [Document Mode](#document-mode)
+- [Tools Support](#tools-support)
+- [Memory System](#memory-system)
+- [FAQ](#faq)
+- [Requirements](#requirements)
+
 ## Features
 
 - Clean GTK3 interface
@@ -72,20 +126,6 @@ The application looks for the following environment variables:
 - `PERPLEXITY_API_KEY` (optional)
 
 You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page or define a custom endpoint in the **Custom Models* settings page.
-
-## Screenshots
-
-*Syntax highlighting*
-![Code Feature](screenshots/syntax_highlight.png)
-
-*Support for Equations*
-![Formulae Feature](screenshots/formula.png)
-
-*Image Generation*
-![Image Generation](screenshots/images.png)
-
-*Document Mode*
-![Image Generation](screenshots/document.png)
 
 ## Getting API keys
 
@@ -171,6 +211,7 @@ ChatGTK supports adding custom models from any OpenAI-compatible API endpoint. T
   - **Self-hosted models**: Use local or remote self-hosted models with OpenAI-compatible APIs
   - **Alternative providers**: Access models from services like Together AI, Anyscale, or other compatible providers
 
+<a id="local-models"></a>
 ## Local Models 🆕
 
 > **This feature is new!** Feedback and bug reports are welcome. Please open an issue on GitHub if you encounter any problems or have suggestions for improvement.
