@@ -2488,6 +2488,9 @@ class OpenAIGTKClient(Gtk.Window):
             # Keep a convenience reference for legacy callers.
             self.ws_provider = ws_provider
 
+            if hasattr(ws_provider, "web_search_enabled"):
+                ws_provider.web_search_enabled = bool(self.settings.get("WEB_SEARCH_ENABLED", False))
+
             success = ws_provider.connect(
                 model=target_model,
                 system_message=self.system_message,
@@ -3238,6 +3241,8 @@ class OpenAIGTKClient(Gtk.Window):
                     provider_name = self.get_provider_name_for_model(current_model)
                     ws_provider = self._get_realtime_ws_provider(provider_name)
                     self.ws_provider = ws_provider
+                    if hasattr(ws_provider, "web_search_enabled"):
+                        ws_provider.web_search_enabled = bool(self.settings.get("WEB_SEARCH_ENABLED", False))
 
                     # Connect to WebSocket before starting stream
                     if provider_name == "grok":

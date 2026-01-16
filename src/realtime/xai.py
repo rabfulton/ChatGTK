@@ -44,6 +44,7 @@ class XAIWebSocketProvider:
         self.temperature = None
         self.realtime_prompt = None
         self.turn_detection = "server_vad"  # or None
+        self.web_search_enabled = False
 
         self.is_recording = False
         self.drain_requested = False
@@ -266,6 +267,11 @@ class XAIWebSocketProvider:
                 "voice": self.voice or "Ara",
                 "instructions": instructions,
                 "turn_detection": {"type": "server_vad"} if self.turn_detection == "server_vad" else None,
+                "tools": (
+                    [{"type": "web_search"}, {"type": "x_search"}]
+                    if bool(getattr(self, "web_search_enabled", False))
+                    else []
+                ),
                 "audio": {
                     "input": {"format": {"type": "audio/pcm", "rate": int(self.output_sample_rate)}},
                     "output": {"format": {"type": "audio/pcm", "rate": int(self.output_sample_rate)}},
