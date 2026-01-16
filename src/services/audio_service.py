@@ -2,10 +2,14 @@
 Audio service for handling recording, transcription, and text-to-speech.
 """
 
+from __future__ import annotations
+
 import os
+import platform
 import re
 import hashlib
 import subprocess
+import shutil
 import threading
 import tempfile
 import time
@@ -13,9 +17,20 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Callable, Tuple
 from datetime import datetime
 
-import numpy as np
-import sounddevice as sd
-import soundfile as sf
+# Heavy native deps are imported lazily to keep app startup fast, especially on Windows.
+def _lazy_np():
+    import numpy as np
+    return np
+
+
+def _lazy_sd():
+    import sounddevice as sd
+    return sd
+
+
+def _lazy_sf():
+    import soundfile as sf
+    return sf
 
 from config import HISTORY_DIR
 from events import EventBus, EventType, Event
@@ -33,6 +48,9 @@ class AudioService:
         self._event_bus = event_bus
         self._current_playback_stop = None
         self._current_process = None
+
+    def _should_use_paplay(self) -> bool:
+        return platform.system() == "Linux" and shutil.which("paplay") is not None
     
     def _emit(self, event_type: EventType, **data) -> None:
         """Emit an event if event bus is configured."""
@@ -100,8 +118,11 @@ class AudioService:
             (recording_data, sample_rate) or (None, None) on error.
         """
         try:
+            np = _lazy_np()
+            sd = _lazy_sd()
             recorded_chunks = []
-            os.environ['AUDIODEV'] = 'pulse'
+            if platform.system() == "Linux" and "AUDIODEV" not in os.environ:
+                os.environ["AUDIODEV"] = "pulse"
             
             device_info = sd.query_devices(microphone, 'input')
             if device_info is None:
@@ -150,6 +171,7 @@ class AudioService:
         path: Optional[Path] = None,
     ) -> Path:
         """Save recording to file, return path."""
+        sf = _lazy_sf()
         if path is None:
             path = Path(tempfile.gettempdir()) / "voice_input.wav"
         
@@ -310,6 +332,8 @@ class AudioService:
             return audio_path
         except Exception as e:
             print(f"Gemini TTS error: {e}")
+            if os.environ.get("CHATGTK_DEBUG_GEMINI_TTS", "").strip().lower() in ("1", "true", "yes"):
+                print("Gemini TTS debug: set; check your temp folder for chatgtk_gemini_tts_response_*.json")
             self._emit(EventType.ERROR_OCCURRED, error=str(e), context='tts_gemini')
             return None
     
@@ -485,6 +509,8 @@ class AudioService:
             True if played successfully.
         """
         try:
+            sd = _lazy_sd()
+            sf = _lazy_sf()
             self._emit(EventType.PLAYBACK_STARTED, audio_path=str(audio_path))
             
             data, sample_rate = sf.read(str(audio_path))
@@ -521,11 +547,15 @@ class AudioService:
         audio_path: Path,
         stop_event: Optional[threading.Event] = None,
     ) -> bool:
-        """Play audio using paplay subprocess."""
+        """Play audio using an OS subprocess player when available."""
         try:
             self._emit(EventType.PLAYBACK_STARTED, audio_path=str(audio_path))
-            
-            self._current_process = subprocess.Popen(['paplay', str(audio_path)])
+
+            if self._should_use_paplay():
+                self._current_process = subprocess.Popen(["paplay", str(audio_path)])
+            else:
+                # Fallback to in-process playback (works on Windows/macOS if PortAudio/libsndfile are available).
+                return self.play_audio(audio_path, stop_event)
             
             while self._current_process.poll() is None:
                 if stop_event and stop_event.is_set():
@@ -541,10 +571,23 @@ class AudioService:
             print(f"Subprocess playback error: {e}")
             self._emit(EventType.ERROR_OCCURRED, error=str(e), context='playback')
             return False
+
+    def play_audio_auto(
+        self,
+        audio_path: Path,
+        stop_event: Optional[threading.Event] = None,
+    ) -> bool:
+        """
+        Best-effort playback that picks an appropriate backend for the platform.
+        """
+        if self._should_use_paplay():
+            return self.play_audio_subprocess(audio_path, stop_event)
+        return self.play_audio(audio_path, stop_event)
     
     def stop_playback(self) -> None:
         """Stop current playback."""
         try:
+            sd = _lazy_sd()
             sd.stop()
             if self._current_playback_stop:
                 self._current_playback_stop.set()
@@ -565,7 +608,7 @@ class AudioService:
         provider: Any,
         stop_event: Optional[threading.Event] = None,
         chat_id: Optional[str] = None,
-        use_subprocess: bool = True,
+        use_subprocess: Optional[bool] = None,
         **kwargs,
     ) -> bool:
         """
@@ -647,7 +690,8 @@ class AudioService:
             return False
         
         # Play
+        if use_subprocess is None:
+            return self.play_audio_auto(audio_path, stop_event)
         if use_subprocess:
             return self.play_audio_subprocess(audio_path, stop_event)
-        else:
-            return self.play_audio(audio_path, stop_event)
+        return self.play_audio(audio_path, stop_event)
