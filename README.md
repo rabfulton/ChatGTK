@@ -120,7 +120,7 @@ The application looks for the following environment variables:
 - `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` (optional)
 - `PERPLEXITY_API_KEY` (optional)
 
-You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page or define a custom endpoint in the **Custom Models* settings page. You can also use the systems keyring to hold your API keys, configure this in `settings->API Keys`.
+You will need at least one API key for the application to function. Alternatively you can manage API keys from within the app via the **API Keys** settings page or define a custom endpoint in the **Custom Models** settings page. You can also use the systems keyring to hold your API keys, configure this in `settings->API Keys`.
 
 ## Getting API keys
 
@@ -339,7 +339,7 @@ Document Mode provides a focused editing environment for creating and refining l
 
 ## Memory System
 
-ChatGTK supports three complementary memory mechanisms that can be used separately or together to give your assistant context awareness:
+ChatGTK supports three complementary memory mechanisms, plus optional conversation compaction, that can be used separately or together to give your assistant context awareness:
 
 ### 1. Conversation Buffer (Short-term Memory)
 Controls how many recent messages are sent to the model in each request.
@@ -348,6 +348,15 @@ Controls how many recent messages are sent to the model in each request.
 - Options: `ALL` (entire conversation), or a specific number (e.g., `10`, `20`, `50`)
 - Setting a limit helps manage token costs for long conversations while keeping recent context
 - Acts as "working memory" - the model sees recent exchanges but older messages are not sent
+
+### 1b. Conversation Compaction (Summarization)
+Optionally summarize older parts of long conversations to reduce token usage, while still preserving important context.
+
+- Configure via **Settings → General → Enable Conversation Compaction**
+- Trigger: **Max Size Before Compaction (KB)**
+- Keeps the most recent context uncompressed via **Keep Turns After Compaction**
+- Compaction writes a running summary and injects it into the system prompt as **Previous Conversation Summary**, then continues sending only messages after the compaction point
+- Advanced: customize the summarizer prompt via **Settings → Advanced → Compaction Prompt**
 
 ### 2. Search Tool (Long-term Recall)
 Allows the model to search past conversations and local documents using keyword matching.
@@ -378,16 +387,27 @@ Provides intelligent, meaning-based recall using embeddings and a vector databas
 - **Configuration options**:
   - **Store Mode**: Store `all` messages, only `user` messages, or only `assistant` messages
   - **Auto Import**: Automatically store new messages as they occur
-  - **Top K**: Number of relevant memories to retrieve (1-20)
+  - **Top K**: Number of relevant memories to retrieve (1-10)
   - **Min Similarity**: Threshold for memory relevance (0.0-1.0)
 - **Import existing history**: Use the **Import** button to index your existing conversation history
 - Unlike the Search Tool, semantic memory finds conceptually related content even without exact keyword matches
 
+### Suggested Settings
+These are starting points; adjust based on your model’s context window and how much you care about cost vs. maximum recall.
+
+| Use case | Conversation Buffer | Compaction | Search Tool | Semantic Memory |
+|---|---:|---|---|---|
+| Quick Q&A / low cost | `10`–`20` | On, 100–200KB, keep 4–8 turns | Off | Off |
+| Long “working session” chat (coding/writing) | `ALL` or `50` | On, 100–300KB, keep 8–12 turns | Off (or On if you need explicit recall) | Optional (On if you want automatic recall across chats) |
+| Research across many chats + local notes | `20`–`50` | On, 100–300KB, keep 4–8 turns | On (history + directories) | On (Top K 3–8, Min Similarity ~0.65–0.75) |
+| Personal assistant across weeks/months | `20`–`50` | On, 100–300KB, keep 4–8 turns | Optional | On (Store `user` or `all`, Top K 3–5, Min Similarity ~0.7) |
+
 ### Combining Memory Types
 - Use **Conversation Buffer** for immediate context (what was just discussed)
+- Use **Conversation Compaction** to keep long chats usable without sending the full transcript
 - Use **Search Tool** for explicit recall ("find where we talked about X")
 - Use **Semantic Memory** for automatic, intelligent context injection
-- All three can be enabled simultaneously for comprehensive memory coverage
+- These can be enabled simultaneously for comprehensive memory coverage
 
 ## FAQ
 
