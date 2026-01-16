@@ -391,6 +391,11 @@ SETTINGS_CONFIG = {
     # Speech prompt template for Gemini TTS and audio-preview models. Use {text} as placeholder.
     'TTS_PROMPT_TEMPLATE': {'type': str, 'default': ''},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},
+    # Realtime voice provider and per-provider voice selection.
+    # `REALTIME_VOICE` remains for backward compatibility and tracks the OpenAI realtime voice.
+    'REALTIME_VOICE_PROVIDER': {'type': str, 'default': 'openai'},
+    'REALTIME_VOICE_OPENAI': {'type': str, 'default': 'alloy'},
+    'REALTIME_VOICE_GROK': {'type': str, 'default': 'Ara'},
     'REALTIME_PROMPT': {'type': str, 'default': 'Your name is {name}, speak quickly and professionally. Respond in the same language as the user unless directed otherwise.'},
     'REALTIME_VAD_THRESHOLD': {'type': float, 'default': 0.1},
     'MUTE_MIC_DURING_PLAYBACK': {'type': bool, 'default': True},
@@ -431,7 +436,7 @@ SETTINGS_CONFIG = {
     },
     'GROK_MODEL_WHITELIST': {
         'type': str,
-        'default': 'grok-2-1212,grok-2-vision-1212,grok-2-image-1212,grok-3,grok-3-mini,grok-4-1-fast-non-reasoning,grok-4-1-fast-reasoning,grok-4-fast-non-reasoning,grok-4-fast-reasoning'
+        'default': 'grok-realtime,grok-2-1212,grok-2-vision-1212,grok-2-image-1212,grok-3,grok-3-mini,grok-4-1-fast-non-reasoning,grok-4-1-fast-reasoning,grok-4-fast-non-reasoning,grok-4-fast-reasoning'
     },
     'CLAUDE_MODEL_WHITELIST': {
         'type': str,

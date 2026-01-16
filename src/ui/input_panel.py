@@ -150,12 +150,16 @@ class InputPanel(UIComponent):
         """Focus the input entry."""
         self.entry.grab_focus()
     
-    def set_recording_state(self, recording: bool):
+    def set_recording_state(self, recording: bool, mode: str | None = None):
         """Update the recording state."""
         self.recording = recording
         if recording:
-            self.btn_voice.set_image(Gtk.Image.new_from_icon_name("media-record-symbolic", Gtk.IconSize.BUTTON))
-            self.btn_voice.set_tooltip_text("Recording... Click to Stop")
+            if (mode or "").lower() == "realtime":
+                self.btn_voice.set_image(Gtk.Image.new_from_icon_name("media-playback-stop-symbolic", Gtk.IconSize.BUTTON))
+                self.btn_voice.set_tooltip_text("Realtime active... Click to Stop")
+            else:
+                self.btn_voice.set_image(Gtk.Image.new_from_icon_name("media-record-symbolic", Gtk.IconSize.BUTTON))
+                self.btn_voice.set_tooltip_text("Recording... Click to Stop")
         else:
             self.btn_voice.set_image(Gtk.Image.new_from_icon_name("audio-input-microphone-symbolic", Gtk.IconSize.BUTTON))
             self.btn_voice.set_tooltip_text("Start Voice Input")
@@ -198,7 +202,12 @@ class InputPanel(UIComponent):
     
     def _on_recording_started(self, event):
         """Handle RECORDING_STARTED event."""
-        self.schedule_ui_update(lambda: self.set_recording_state(True))
+        mode = None
+        try:
+            mode = (event.data or {}).get("mode")
+        except Exception:
+            mode = None
+        self.schedule_ui_update(lambda: self.set_recording_state(True, mode=mode))
     
     def _on_recording_stopped(self, event):
         """Handle RECORDING_STOPPED event."""

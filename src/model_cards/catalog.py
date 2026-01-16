@@ -1249,6 +1249,13 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
     # ===========================================================================
     # Grok Models
     # ===========================================================================
+    "grok-realtime": ModelCard(
+        id="grok-realtime",
+        provider="grok",
+        display_name="Grok Realtime (Voice)",
+        capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
+        quirks={"realtime": True},
+    ),
     "grok-2": ModelCard(
         id="grok-2",
         provider="grok",

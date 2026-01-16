@@ -40,6 +40,7 @@ from utils import (
     get_model_display_name,
 )
 from ai_providers import get_ai_provider, OpenAIProvider, OpenAIWebSocketProvider
+from realtime.xai import XAIWebSocketProvider
 from model_cards import get_card
 from markup_utils import (
     format_response,
@@ -415,10 +416,17 @@ class OpenAIGTKClient(Gtk.Window):
         provider_keys = ('openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom')
         models = []
         mapping = {}
+        grok_key_present = bool(
+            os.environ.get("GROK_API_KEY", "").strip()
+            or os.environ.get("XAI_API_KEY", "").strip()
+            or (self.api_keys.get("grok", "") if hasattr(self, "api_keys") else "").strip()
+        )
         for provider_key in provider_keys:
             setting_key = f"{provider_key.upper()}_MODEL_WHITELIST"
             whitelist_str = self.settings.get(setting_key, "") or ""
             for model_id in (m.strip() for m in whitelist_str.split(",") if m.strip()):
+                if provider_key == "grok" and model_id == "grok-realtime" and not grok_key_present:
+                    continue
                 if model_id not in mapping:
                     models.append(model_id)
                 mapping[model_id] = provider_key
@@ -1949,6 +1957,23 @@ class OpenAIGTKClient(Gtk.Window):
         # Unknown model - default to openai
         return 'openai'
 
+    def _get_realtime_ws_provider(self, provider_id: str):
+        provider_id = (provider_id or "openai").lower()
+        if not hasattr(self, "_realtime_ws_providers"):
+            self._realtime_ws_providers = {}
+        if provider_id in self._realtime_ws_providers:
+            return self._realtime_ws_providers[provider_id]
+
+        if provider_id in ("grok", "xai"):
+            ws_provider = XAIWebSocketProvider(callback_scheduler=GLib.idle_add)
+        else:
+            ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
+
+        ws_provider.on_user_transcript = self._on_realtime_user_transcript
+        ws_provider.on_assistant_transcript = self._on_realtime_assistant_transcript
+        self._realtime_ws_providers[provider_id] = ws_provider
+        return ws_provider
+
     def _build_tool_handlers(self, model: str, last_msg: dict) -> dict:
         """Build tool handler kwargs for a model."""
         handlers = {}
@@ -2459,25 +2484,25 @@ class OpenAIGTKClient(Gtk.Window):
 
         # Check if we're in realtime mode
         if "realtime" in target_model.lower():
-            if not hasattr(self, 'ws_provider'):
-                self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
-                self.ws_provider.on_user_transcript = self._on_realtime_user_transcript
-                self.ws_provider.on_assistant_transcript = self._on_realtime_assistant_transcript
-                # Connect to WebSocket server
-                success = self.ws_provider.connect(
-                    model=target_model,
-                    system_message=self.system_message,
-                    temperature=model_temperature,
-                    voice=self.settings.get('REALTIME_VOICE', ''),
-                    mute_mic_during_playback=bool(self.settings.get('MUTE_MIC_DURING_PLAYBACK', True)),
-                    realtime_prompt=self._get_realtime_prompt(),
-                    api_key=api_key
-                )
-                if not success:
-                    self.display_error("Failed to connect to WebSocket server")
-                    return
-                
-            self.ws_provider.send_text(question, self.on_stream_content_received)
+            ws_provider = self._get_realtime_ws_provider(provider_name)
+            # Keep a convenience reference for legacy callers.
+            self.ws_provider = ws_provider
+
+            success = ws_provider.connect(
+                model=target_model,
+                system_message=self.system_message,
+                temperature=model_temperature,
+                voice=self._get_realtime_voice_for_provider(provider_name),
+                mute_mic_during_playback=bool(self.settings.get('MUTE_MIC_DURING_PLAYBACK', True)),
+                realtime_prompt=self._get_realtime_prompt(),
+                api_key=api_key
+            )
+            if not success:
+                err = getattr(ws_provider, "last_error", None)
+                self.display_error(err or "Failed to connect to realtime service")
+                return
+
+            ws_provider.send_text(question, self.on_stream_content_received)
             msg_index = len(self.conversation_history)
             self.append_message('user', question, msg_index)
             self.conversation_history.append(create_user_message(question))
@@ -2640,7 +2665,7 @@ class OpenAIGTKClient(Gtk.Window):
             cancel_check=lambda: getattr(self, 'request_cancelled', False),
         )
 
-    def _show_recording_popover(self):
+    def _show_recording_popover(self, message: str | None = None):
         """Show recording popover near the voice button."""
         if hasattr(self, '_recording_popover') and self._recording_popover:
             self._recording_popover.popdown()
@@ -2655,7 +2680,7 @@ class OpenAIGTKClient(Gtk.Window):
         box.set_margin_top(12)
         box.set_margin_bottom(12)
         
-        label = Gtk.Label(label="Recording Voice\nPress any key to stop")
+        label = Gtk.Label(label=message or "Recording Voice\nPress any key to stop")
         label.set_justify(Gtk.Justification.CENTER)
         box.pack_start(label, False, False, 0)
         
@@ -2683,12 +2708,23 @@ class OpenAIGTKClient(Gtk.Window):
     
     def _stop_recording(self):
         """Stop the current recording."""
+        mode = getattr(self, "_recording_mode", None)
+        self.recording = False
         if hasattr(self, 'recording_event'):
             self.recording_event.clear()
         if hasattr(self, 'ws_provider'):
             self.ws_provider.stop_streaming()
             delattr(self, 'ws_provider')
         self._hide_recording_popover()
+        self._recording_mode = None
+        try:
+            self.controller.event_bus.publish(Event(
+                type=EventType.RECORDING_STOPPED,
+                data={"mode": mode} if mode else {},
+                source="ui",
+            ))
+        except Exception:
+            pass
 
     def _insert_text_into_entry(self, entry: Gtk.Entry, text: str) -> None:
         """Insert text at the entry cursor position."""
@@ -2748,7 +2784,16 @@ class OpenAIGTKClient(Gtk.Window):
                 self.recording_event = threading.Event()
                 self.recording_event.set()  # Start recording
                 self.recording = True
+                self._recording_mode = "stt"
                 self._show_recording_popover()
+                try:
+                    self.controller.event_bus.publish(Event(
+                        type=EventType.RECORDING_STARTED,
+                        data={"mode": "stt"},
+                        source="ui",
+                    ))
+                except Exception:
+                    pass
                 print("Recording started")
                 
                 def record_thread():
@@ -2803,6 +2848,15 @@ class OpenAIGTKClient(Gtk.Window):
                         # Reset state
                         GLib.idle_add(self._hide_recording_popover)
                         self.recording = False
+                        self._recording_mode = None
+                        try:
+                            self.controller.event_bus.publish(Event(
+                                type=EventType.RECORDING_STOPPED,
+                                data={"mode": "stt"},
+                                source="ui",
+                            ))
+                        except Exception:
+                            pass
                 
                 # Start recording in separate thread
                 threading.Thread(target=record_thread, daemon=True).start()
@@ -2813,12 +2867,22 @@ class OpenAIGTKClient(Gtk.Window):
                 self.append_message('ai', err_text, msg_index)
                 self._hide_recording_popover()
                 self.recording = False
+                self._recording_mode = None
         else:
             # Stop recording
             if hasattr(self, 'recording_event'):
                 self.recording_event.clear()  # Signal recording to stop
             self.recording = False
             self._hide_recording_popover()
+            self._recording_mode = None
+            try:
+                self.controller.event_bus.publish(Event(
+                    type=EventType.RECORDING_STOPPED,
+                    data={"mode": "stt"},
+                    source="ui",
+                ))
+            except Exception:
+                pass
 
     def _audio_transcription_to_textview(self, textview):
         """Handle audio transcription and insert result into a textview at cursor position."""
@@ -3165,45 +3229,67 @@ class OpenAIGTKClient(Gtk.Window):
         else:
             # Start real-time audio streaming
             print("Starting real-time audio streaming...\n")
-            
+
             if not self.recording:
                 try:
                     # Check if audio system is available
                     sd.check_output_settings()
-                    
-                    # Initialize WebSocket provider if needed
-                    if not hasattr(self, 'ws_provider'):
-                        self.ws_provider = OpenAIWebSocketProvider(callback_scheduler=GLib.idle_add)
-                        self.ws_provider.microphone = self.settings.get('MICROPHONE', '')
-                        self.ws_provider.on_user_transcript = self._on_realtime_user_transcript
-                        self.ws_provider.on_assistant_transcript = self._on_realtime_assistant_transcript
-                
-                    # Connect to WebSocket before starting stream
-                    api_key = os.environ.get('OPENAI_API_KEY', self.api_keys.get('openai', '')).strip()
-                    if not api_key:
-                        self.show_error_dialog("Please enter your OpenAI API key")
-                        return False
-                    os.environ['OPENAI_API_KEY'] = api_key
-                    self.initialize_provider('openai', api_key)
 
-                    # Connect with the current model
-                    if not self.ws_provider.connect(
+                    provider_name = self.get_provider_name_for_model(current_model)
+                    ws_provider = self._get_realtime_ws_provider(provider_name)
+                    self.ws_provider = ws_provider
+
+                    # Connect to WebSocket before starting stream
+                    if provider_name == "grok":
+                        env_var = "GROK_API_KEY"
+                        label = "Grok"
+                        api_key = os.environ.get(env_var, self.api_keys.get("grok", "")).strip()
+                        if not api_key:
+                            self.show_error_dialog(f"Please enter your {label} API key")
+                            return False
+                        os.environ[env_var] = api_key
+                    else:
+                        env_var = "OPENAI_API_KEY"
+                        label = "OpenAI"
+                        api_key = os.environ.get(env_var, self.api_keys.get("openai", "")).strip()
+                        if not api_key:
+                            self.show_error_dialog(f"Please enter your {label} API key")
+                            return False
+                        os.environ[env_var] = api_key
+
+                    self.initialize_provider(provider_name, api_key)
+
+                    if not ws_provider.connect(
                         model=current_model,
                         system_message=self.system_message,
                         temperature=model_temperature,
-                        voice=self.settings.get('REALTIME_VOICE', ''),
+                        voice=self._get_realtime_voice_for_provider(provider_name),
                         mute_mic_during_playback=bool(self.settings.get('MUTE_MIC_DURING_PLAYBACK', True)),
                         realtime_prompt=self._get_realtime_prompt(),
                         api_key=api_key
                     ):
-                        self.show_error_dialog("Failed to connect to OpenAI realtime service")
+                        err = getattr(ws_provider, "last_error", None)
+                        self.show_error_dialog(err or f"Failed to connect to {label} realtime service")
                         return False
 
                     # Start recording
                     self.recording = True
-                    self._show_recording_popover()
-                    
-                    self.ws_provider.start_streaming(
+                    self._recording_mode = "realtime"
+                    self._show_recording_popover("Realtime conversation started\nSpeak now (press any key to stop)")
+                    try:
+                        self.controller.event_bus.publish(Event(
+                            type=EventType.RECORDING_STARTED,
+                            data={"mode": "realtime", "provider": provider_name},
+                            source="ui",
+                        ))
+                    except Exception:
+                        pass
+
+                    # OpenAI client needs microphone selection for sounddevice device match.
+                    if hasattr(ws_provider, "microphone"):
+                        ws_provider.microphone = self.settings.get('MICROPHONE', '')
+
+                    ws_provider.start_streaming(
                         callback=self.on_stream_content_received,
                         microphone=self.settings.get('MICROPHONE', ''),
                         system_message=self.system_message,
@@ -3213,7 +3299,7 @@ class OpenAIGTKClient(Gtk.Window):
                         api_key=api_key,
                         vad_threshold=float(self.settings.get('REALTIME_VAD_THRESHOLD', 0.1))
                     )
-                    
+
                 except Exception as e:
                     print(f"Real-time streaming error: {e}")
                     err_text = f"Error starting real-time streaming: {str(e)}"
@@ -3221,14 +3307,11 @@ class OpenAIGTKClient(Gtk.Window):
                     self.append_message('ai', err_text, msg_index)
                     self._hide_recording_popover()
                     self.recording = False
+                    self._recording_mode = None
             else:
                 # Stop recording
                 print("Stopping real-time streaming...")
-                if hasattr(self, 'ws_provider'):
-                    self.ws_provider.stop_streaming()
-                    delattr(self, 'ws_provider')  # Clean up the provider
-                self.recording = False
-                self._hide_recording_popover()
+                self._stop_recording()
                 return False  # Prevent signal propagation
 
     def on_delete_chat(self, widget, history_row):
@@ -4574,6 +4657,16 @@ class OpenAIGTKClient(Gtk.Window):
         )
         ai_name = self.settings.get('AI_NAME', 'Assistant')
         return template.replace("{name}", ai_name)
+
+    def _get_realtime_voice_for_provider(self, provider_id: str) -> str:
+        provider_id = (provider_id or "").lower()
+        if provider_id in ("grok", "xai"):
+            return self.settings.get("REALTIME_VOICE_GROK", "Ara") or "Ara"
+        return (
+            self.settings.get("REALTIME_VOICE_OPENAI", None)
+            or self.settings.get("REALTIME_VOICE", None)
+            or "alloy"
+        )
 
     def _is_latex_math_image(self, img_path: str) -> bool:
         """

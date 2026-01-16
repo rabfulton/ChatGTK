@@ -852,7 +852,11 @@ class ChatController:
         if provider_name == 'gemini':
             return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-3-pro-preview"]
         if provider_name == 'grok':
-            return ["grok-2", "grok-2-mini", "grok-2-image-1212"]
+            grok_key = (os.environ.get('GROK_API_KEY', '').strip() or self.api_keys.get('grok', '').strip())
+            models = ["grok-2", "grok-2-mini", "grok-2-image-1212"]
+            if grok_key:
+                models.insert(0, "grok-realtime")
+            return models
         if provider_name == 'claude':
             return ["claude-sonnet-4-5", "claude-3-5-sonnet-latest"]
         if provider_name == 'perplexity':

@@ -1874,20 +1874,29 @@ class SettingsDialog(Gtk.Dialog):
         _add_listbox_row_margins(row)
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.add(hbox)
+        label = Gtk.Label(label="Realtime Provider", xalign=0)
+        label.set_hexpand(True)
+        self.combo_realtime_provider = Gtk.ComboBoxText()
+        self.combo_realtime_provider.append("openai", "OpenAI")
+        self.combo_realtime_provider.append("grok", "xAI (Grok)")
+        current_rt_provider = (getattr(self, "realtime_voice_provider", None) or "openai").lower()
+        if current_rt_provider not in ("openai", "grok"):
+            current_rt_provider = "openai"
+        self.combo_realtime_provider.set_active_id(current_rt_provider)
+
+        hbox.pack_start(label, True, True, 0)
+        hbox.pack_start(self.combo_realtime_provider, False, False, 0)
+        list_box.add(row)
+
+        row = Gtk.ListBoxRow()
+        _add_listbox_row_margins(row)
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add(hbox)
         label = Gtk.Label(label="Realtime Voice", xalign=0)
         label.set_hexpand(True)
+
         voice_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.combo_realtime = Gtk.ComboBoxText()
-
-        realtime_voices = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
-        for voice in realtime_voices:
-            self.combo_realtime.append_text(voice)
-
-        if self.realtime_voice in realtime_voices:
-            self.combo_realtime.set_active(realtime_voices.index(self.realtime_voice))
-        else:
-            self.combo_realtime.set_active(0)
-
         self.btn_preview_realtime = Gtk.Button(label="Preview")
         self.btn_preview_realtime.connect("clicked", self.on_preview_realtime_voice)
 
@@ -1897,6 +1906,9 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(voice_box, True, True, 0)
         list_box.add(row)
+
+        self.combo_realtime_provider.connect("changed", self._on_realtime_provider_changed)
+        self._populate_realtime_voices()
 
         # Mute mic during playback (echo suppression)
         row = Gtk.ListBoxRow()
@@ -1951,6 +1963,43 @@ class SettingsDialog(Gtk.Dialog):
         list_box.add(row)
 
         return scroll
+
+    def _on_realtime_provider_changed(self, combo):
+        self._populate_realtime_voices()
+
+    def _populate_realtime_voices(self):
+        from realtime.voices import get_realtime_voices
+
+        provider_id = (self.combo_realtime_provider.get_active_id() or "openai").lower()
+        voices = get_realtime_voices(provider_id)
+
+        current = self.combo_realtime.get_active_text()
+        self.combo_realtime.remove_all()
+        for voice in voices:
+            self.combo_realtime.append_text(voice)
+
+        # Restore voice selection per provider.
+        if provider_id == "grok":
+            saved = getattr(self, "realtime_voice_grok", None) or ""
+        else:
+            saved = (
+                getattr(self, "realtime_voice_openai", None)
+                or getattr(self, "realtime_voice", None)
+                or ""
+            )
+
+        if current and current in voices:
+            self.combo_realtime.set_active(voices.index(current))
+        elif saved and saved in voices:
+            self.combo_realtime.set_active(voices.index(saved))
+        else:
+            self.combo_realtime.set_active(0)
+
+        self.btn_preview_realtime.set_sensitive(True)
+        if provider_id in ("grok", "xai"):
+            self.btn_preview_realtime.set_tooltip_text("Plays a local preview WAV from `src/xai_preview/`.")
+        else:
+            self.btn_preview_realtime.set_tooltip_text("Plays a local preview WAV from `src/preview/`.")
 
     def _ensure_audio_page(self):
         if not self._audio_page_built:
@@ -4728,6 +4777,16 @@ class SettingsDialog(Gtk.Dialog):
         if not hasattr(self, '_model_cache') or self._model_cache is None:
             self._model_cache = load_model_cache()
 
+        def has_api_key_for_provider(pkey: str) -> bool:
+            pkey = (pkey or "").lower()
+            if pkey == "grok":
+                return bool(
+                    os.environ.get("GROK_API_KEY", "").strip()
+                    or os.environ.get("XAI_API_KEY", "").strip()
+                    or (self.initial_api_keys or {}).get("grok", "").strip()
+                )
+            return True
+
         # Custom models are stored locally and do not require network fetch.
         if provider_key == "custom":
             models = sorted(self.custom_models.keys())
@@ -4737,7 +4796,19 @@ class SettingsDialog(Gtk.Dialog):
 
         cached = self._model_cache.get(provider_key)
         if cached and not force_refresh:
-            return cached
+            models = list(cached)
+            if provider_key == "grok":
+                if has_api_key_for_provider("grok"):
+                    if "grok-realtime" not in models:
+                        models.append("grok-realtime")
+                        self._model_cache[provider_key] = models
+                        save_model_cache(self._model_cache)
+                else:
+                    if "grok-realtime" in models:
+                        models = [m for m in models if m != "grok-realtime"]
+                        self._model_cache[provider_key] = models
+                        save_model_cache(self._model_cache)
+            return models
 
         # Need to fetch from provider (network call) or fall back to defaults
         models = []
@@ -4753,6 +4824,14 @@ class SettingsDialog(Gtk.Dialog):
             config_key = f"{provider_key.upper()}_MODEL_WHITELIST"
             default_str = SETTINGS_CONFIG.get(config_key, {}).get('default', '')
             models = [m.strip() for m in default_str.split(",") if m.strip()]
+        elif provider_key == "grok":
+            if has_api_key_for_provider("grok"):
+                if "grok-realtime" not in models:
+                    # Ensure placeholder realtime entry shows up even if the provider
+                    # models endpoint doesn't list it.
+                    models.append("grok-realtime")
+            else:
+                models = [m for m in models if m != "grok-realtime"]
 
         # Update in-memory and disk cache
         self._model_cache[provider_key] = models
@@ -5098,7 +5177,13 @@ class SettingsDialog(Gtk.Dialog):
     def on_preview_realtime_voice(self, widget):
         """Preview the selected realtime voice using prepared WAV files."""
         selected_voice = self.combo_realtime.get_active_text()
-        preview_file = Path(BASE_DIR) / "preview" / f"{selected_voice}.wav"
+        provider_id = "openai"
+        if hasattr(self, "combo_realtime_provider"):
+            provider_id = (self.combo_realtime_provider.get_active_id() or "openai").lower()
+
+        preview_subdir = "xai_preview" if provider_id in ("grok", "xai") else "preview"
+        voice_filename = f"{(selected_voice or '').strip().lower()}.wav"
+        preview_file = Path(BASE_DIR) / preview_subdir / voice_filename
 
         try:
             if not preview_file.exists():
@@ -5418,6 +5503,7 @@ class SettingsDialog(Gtk.Dialog):
             )
             tts_voice_provider = self.combo_tts_provider.get_active_id() or 'openai'
             tts_voice = self.combo_tts.get_active_text()
+            realtime_voice_provider = self.combo_realtime_provider.get_active_id() or 'openai'
             realtime_voice = self.combo_realtime.get_active_text()
             realtime_prompt = self.entry_realtime_prompt.get_text()
             realtime_vad_threshold = self.spin_vad_threshold.get_value()
@@ -5430,6 +5516,7 @@ class SettingsDialog(Gtk.Dialog):
             speech_to_text_model = getattr(self, "speech_to_text_model", "whisper-1") or "whisper-1"
             tts_voice_provider = getattr(self, "tts_voice_provider", "openai") or "openai"
             tts_voice = getattr(self, "tts_voice", "")
+            realtime_voice_provider = getattr(self, "realtime_voice_provider", "openai") or "openai"
             realtime_voice = getattr(self, "realtime_voice", "")
             realtime_prompt = getattr(self, "realtime_prompt", "")
             realtime_vad_threshold = float(getattr(self, "realtime_vad_threshold", 0.1))
@@ -5444,6 +5531,24 @@ class SettingsDialog(Gtk.Dialog):
         read_aloud_tool_enabled = self.switch_read_aloud_tool.get_active()
         if read_aloud_tool_enabled and read_aloud_enabled:
             read_aloud_enabled = False
+
+        realtime_voice_provider = (realtime_voice_provider or "openai").lower()
+        prev_openai_voice = (
+            getattr(self, "realtime_voice_openai", None)
+            or getattr(self, "realtime_voice", None)
+            or "alloy"
+        )
+        prev_grok_voice = getattr(self, "realtime_voice_grok", None) or "Ara"
+
+        if realtime_voice_provider == "grok":
+            realtime_voice_grok = realtime_voice or prev_grok_voice
+            realtime_voice_openai = prev_openai_voice
+        else:
+            realtime_voice_openai = realtime_voice or prev_openai_voice
+            realtime_voice_grok = prev_grok_voice
+
+        # Keep legacy key aligned to the OpenAI realtime voice.
+        realtime_voice_legacy = realtime_voice_openai
 
         return {
             'ai_name': self.entry_ai_name.get_text(),
@@ -5461,7 +5566,10 @@ class SettingsDialog(Gtk.Dialog):
             'speech_to_text_model': speech_to_text_model,
             'tts_voice_provider': tts_voice_provider,
             'tts_voice': tts_voice,
-            'realtime_voice': realtime_voice,
+            'realtime_voice_provider': realtime_voice_provider,
+            'realtime_voice_openai': realtime_voice_openai,
+            'realtime_voice_grok': realtime_voice_grok,
+            'realtime_voice': realtime_voice_legacy,
             'realtime_prompt': realtime_prompt,
             'realtime_vad_threshold': realtime_vad_threshold,
             'mute_mic_during_playback': mute_mic_during_playback,

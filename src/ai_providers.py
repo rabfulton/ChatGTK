@@ -2655,6 +2655,12 @@ class GrokProvider(AIProvider):
             model_ids = [model.id for model in models]
             # print(f"[GrokProvider] models returned: {model_ids}")
 
+            # Mock realtime entry (xAI realtime voice currently uses a fixed endpoint
+            # and does not expose a model id in the websocket URL).
+            rt_model_id = "grok-realtime"
+            if rt_model_id not in model_ids:
+                model_ids.append(rt_model_id)
+
             # Hardcode the primary image model so it's always available for testing,
             # even if it is not listed by the API.
             image_model_id = "grok-2-image-1212"
@@ -2684,7 +2690,7 @@ class GrokProvider(AIProvider):
         except Exception as exc:
             print(f"Error fetching Grok models: {exc}")
             # Fallback to a reasonable default set.
-            return sorted(["grok-2", "grok-2-mini", "grok-2-image-1212"])
+            return sorted(["grok-realtime", "grok-2", "grok-2-mini", "grok-2-image-1212"])
 
     def generate_chat_completion(
         self,
@@ -4540,6 +4546,11 @@ class OpenAIWebSocketProvider:
         self.stop_loop()
         
         self.ws = None
+
+# Realtime voice clients are being refactored into `src/realtime/`.
+# Keep this import for backward compatibility with existing UI code that does:
+# `from ai_providers import OpenAIWebSocketProvider`.
+from realtime.openai import OpenAIWebSocketProvider  # noqa: E402
 
 # Factory function to get the appropriate provider
 def get_ai_provider(provider_name: str) -> AIProvider:
