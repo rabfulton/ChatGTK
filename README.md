@@ -86,11 +86,7 @@ Use the one-liner installer (master branch) to create a virtual environment and 
 curl -fsSL https://raw.githubusercontent.com/rabfulton/ChatGTK/master/installer.sh | bash
 ```
 
-Or run it manually after cloning:
-
-```bash
-./installer.sh
-```
+You can now run ChatGTK from your desktop launcher!
 
 ## Manual Installation
 
