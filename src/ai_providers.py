@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from openai import OpenAI
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -9,8 +8,6 @@ import json
 import os
 import re
 # Note: GLib dependency removed - callback scheduler is now injected
-import numpy as np
-import sounddevice as sd
 import threading
 import base64
 import io
@@ -29,6 +26,23 @@ from tools import (
 )
 from config import HISTORY_DIR
 from model_cards import get_card
+
+
+# Heavy/optional native deps (NumPy/PortAudio) are imported lazily to keep startup fast,
+# especially for frozen Windows builds where importing NumPy can dominate launch time.
+def _lazy_np():
+    import numpy as np
+    return np
+
+
+def _lazy_sd():
+    import sounddevice as sd
+    return sd
+
+
+def _lazy_openai_OpenAI():
+    from openai import OpenAI
+    return OpenAI
 
 
 # Module-level function to get current history directory
@@ -1244,6 +1258,7 @@ class OpenAIProvider(AIProvider):
         if api_key != self._current_api_key:
             self._file_id_cache = {}
             self._current_api_key = api_key
+        OpenAI = _lazy_openai_OpenAI()
         self.client = OpenAI(api_key=api_key)
     
     def _get_file_cache_key(self, file_path: str) -> tuple:
@@ -2245,6 +2260,7 @@ class OpenAIProvider(AIProvider):
         # Choose client, honoring optional base_url/api_key overrides
         client = self.client
         if base_url or api_key:
+            OpenAI = _lazy_openai_OpenAI()
             client = OpenAI(api_key=api_key or self._current_api_key, base_url=base_url or None)
         is_openai_base = not base_url or "openai.com" in (base_url or "")
 
@@ -2357,6 +2373,7 @@ class GrokProvider(AIProvider):
 
     def initialize(self, api_key: str):
         # Reuse the OpenAI client with a different base_url.
+        OpenAI = _lazy_openai_OpenAI()
         self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
 
     # ------------------------------------------------------------------
@@ -2955,6 +2972,7 @@ class ClaudeProvider(AIProvider):
         # We reuse the official OpenAI client, pointing it at the Claude
         # compatibility endpoint as described in the Anthropic docs:
         # `https://platform.claude.com/docs/en/api/openai-sdk`
+        OpenAI = _lazy_openai_OpenAI()
         self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
 
     def get_available_models(self, disable_filter: bool = False):
@@ -3192,6 +3210,7 @@ class PerplexityProvider(AIProvider):
 
     def initialize(self, api_key: str):
         """Initialize the Perplexity client using the OpenAI SDK with a custom base URL."""
+        OpenAI = _lazy_openai_OpenAI()
         self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
 
     def get_available_models(self, disable_filter: bool = False):
@@ -3737,13 +3756,24 @@ class GeminiProvider(AIProvider):
             data = resp.json()
         except requests.exceptions.RequestException as exc:
             raise RuntimeError(f"Gemini TTS API call failed: {exc}") from exc
+
+        debug_tts = os.environ.get("CHATGTK_DEBUG_GEMINI_TTS", "").strip().lower() in ("1", "true", "yes")
+        if debug_tts:
+            try:
+                import tempfile
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_path = Path(tempfile.gettempdir()) / f"chatgtk_gemini_tts_response_{ts}.json"
+                out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                print(f"[GeminiProvider] Saved Gemini TTS response to: {out_path}")
+            except Exception as exc:
+                print(f"[GeminiProvider] Failed to save Gemini TTS response: {exc}")
         
-        # Extract audio data from response
-        # Gemini returns audio as base64-encoded data in inlineData
+        # Extract audio data from response.
+        # Gemini returns audio as base64-encoded data in inlineData.
         candidates = data.get("candidates", [])
         if not candidates:
             raise RuntimeError("Gemini TTS returned no candidates")
-        
+
         audio_data = None
         mime_type = None
         for candidate in candidates:
@@ -3756,7 +3786,7 @@ class GeminiProvider(AIProvider):
                     break
             if audio_data:
                 break
-        
+
         if not audio_data:
             raise RuntimeError("Gemini TTS response missing audio data")
         
@@ -3765,7 +3795,7 @@ class GeminiProvider(AIProvider):
         
         # Gemini TTS returns LINEAR16 PCM data at 24kHz mono
         # If it's raw PCM (audio/L16), we need to add a WAV header
-        if "L16" in mime_type or "pcm" in mime_type.lower():
+        if mime_type and ("L16" in mime_type or "pcm" in mime_type.lower()):
             # Add WAV header for 24kHz, 16-bit, mono PCM
             return self._add_wav_header(raw_audio, sample_rate=24000, channels=1, bits_per_sample=16)
         
@@ -3846,6 +3876,7 @@ class OpenAIWebSocketProvider:
         self.input_sample_rate = 48000  # Input from mic
         self.output_sample_rate = 24000  # Server rate
         self.channels = 1
+        np = _lazy_np()
         self.dtype = np.int16
         self.min_audio_ms = 75
         self.response_started = False  # Track if a response is in flight for this turn
@@ -4018,6 +4049,8 @@ class OpenAIWebSocketProvider:
     def _initialize_output_stream(self):
         """Initialize audio output stream if needed"""
         if self.output_stream is None:
+            sd = _lazy_sd()
+            np = _lazy_np()
             self.output_stream = sd.OutputStream(
                 channels=1,
                 samplerate=self.output_sample_rate,
@@ -4030,6 +4063,8 @@ class OpenAIWebSocketProvider:
     async def start_audio_stream(self, callback):
         """Start streaming audio to the API"""
         try:
+            sd = _lazy_sd()
+            np = _lazy_np()
             await self.ensure_connection(self.voice)
             self._log("start_audio_stream: connection ready")
             
@@ -4233,6 +4268,7 @@ class OpenAIWebSocketProvider:
 
     def audio_callback(self, indata, frames, time, status):
         """Callback for audio input"""
+        np = _lazy_np()
         self._log(f"audio_callback entry frames={frames} status={status}")
         if status:
             if self.debug:
@@ -4428,6 +4464,7 @@ class OpenAIWebSocketProvider:
     async def send_text_message(self, text):
         """Send a text message through the realtime connection"""
         try:
+            np = _lazy_np()
             if not self._ws_is_open():
                 await self.ensure_connection(self.voice)
             
@@ -4548,9 +4585,11 @@ class OpenAIWebSocketProvider:
         self.ws = None
 
 # Realtime voice clients are being refactored into `src/realtime/`.
-# Keep this import for backward compatibility with existing UI code that does:
-# `from ai_providers import OpenAIWebSocketProvider`.
-from realtime.openai import OpenAIWebSocketProvider  # noqa: E402
+# Keep a lazy shim for backward compatibility with existing UI code that does:
+# `from ai_providers import OpenAIWebSocketProvider` without importing the realtime stack at startup.
+def OpenAIWebSocketProvider(*args, **kwargs):  # noqa: N802
+    from realtime.openai import OpenAIWebSocketProvider as _Impl  # noqa: WPS433
+    return _Impl(*args, **kwargs)
 
 # Factory function to get the appropriate provider
 def get_ai_provider(provider_name: str) -> AIProvider:

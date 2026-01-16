@@ -21,7 +21,10 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GtkSource", "4")
 
 from gi.repository import Gtk, Gdk, GtkSource, GLib, Pango
-import sounddevice as sd
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import sounddevice as sd  # noqa: F401
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
 from model_cards import get_card, list_cards
@@ -1635,6 +1638,7 @@ class SettingsDialog(Gtk.Dialog):
 
         all_devices = []
         try:
+            import sounddevice as sd
             devices = sd.query_devices()
             for device in devices:
                 if device['max_input_channels'] > 0:

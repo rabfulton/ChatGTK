@@ -101,6 +101,8 @@ Or use your package manager to install the dependencies.
 - Install `qdrant-client`, `qdrant` if you want to try the vector database for memory system.
 - Install `keyring` if you want to store API keys in your system keyring instead of a plaintext file.
 
+Windows: see `docs/BUILD_WINDOWS.md:1` for dev-run instructions (WSL2/MSYS2).
+
 Launch the application by running:
 ```bash
 ./chatgtk.sh
