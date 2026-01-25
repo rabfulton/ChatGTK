@@ -50,6 +50,7 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - [Custom Models](#custom-models)
 - [Local Models](#local-models)
 - [Document Mode](#document-mode)
+- [Document Import / Conversion](#document-import--conversion)
 - [Tools Support](#tools-support)
 - [Memory System](#memory-system)
 - [FAQ](#faq)
@@ -98,6 +99,7 @@ pip install -r requirements.txt
 Or use your package manager to install the dependencies.  
 - You optionally require `texlive` and `dvipng` if you want mathematics to render nicely.
 - Install `beets` and `playerctl` if you want the music control functionality.
+- Install `poppler-utils` and `tesseract-ocr` if you want OCR / PDF-to-text conversion for scanned documents.
 - Install `qdrant-client`, `qdrant` if you want to try the vector database for memory system.
 - Install `keyring` if you want to store API keys in your system keyring instead of a plaintext file.
 
@@ -268,6 +270,19 @@ Document Mode provides a focused editing environment for creating and refining l
   - Ask the AI to expand, refine, restructure, or edit specific sections
   - Review changes in preview mode
   - Undo AI edits if needed, or continue iterating
+
+## Document Import / Conversion
+
+ChatGTK can optionally convert documents (especially PDFs) into usable text/Markdown using **external command-line tools** (“pipelines”). This is useful for scanned PDFs (OCR) as well as PDFs with selectable text.
+
+- Click the attach icon and choose a PDF to open the **Import Document** dialog.
+- Use **Preview** to verify the converter output before importing.
+- Choose how to use the result:
+  - Convert and inline into the next message
+  - Convert and save as a local source (searchable via the search tool)
+  - Convert and open as a new Document (Document Mode)
+
+Pipelines are user-editable from the Import dialog via **Pipelines…** and stored in settings under `DOCUMENT_IMPORT_PIPELINES_JSON`.
 
 ## Tools Support
 
@@ -452,6 +467,8 @@ install `texlive-fontsrecommended` from your package manager.
   - A music player such as `vlc` (configurable in Settings)
   - A [beets](https://beets.io/) music library (import your music with `beet import /path/to/music`)
 - `playerctl` (optional, for pause/resume/stop/next/previous controls via MPRIS)
+- `poppler-utils` (optional, for document conversion: `pdftotext`, `pdftoppm`)
+- `tesseract-ocr` (optional, for OCR on scanned PDFs)
 - `qdrant-client`, `qdrant` Optional vector database for memory system
 - `sentence-transformers` Optional to support local embedding model for memory system
 - `keyring` Optional to store API keys in system keyring instead of plaintext file

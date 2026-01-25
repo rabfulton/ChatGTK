@@ -1240,12 +1240,10 @@ class OpenAIProvider(AIProvider):
     MAX_FILE_SIZE = 512 * 1024 * 1024
     
     # Supported MIME types for document uploads.
-    # NOTE: The Responses API currently only accepts PDF files for file inputs,
-    # so we restrict uploads to PDFs here. Other text-like formats (TXT, MD,
-    # etc.) are inlined as text by the UI instead of being uploaded.
-    SUPPORTED_DOC_TYPES = {
-        "application/pdf",
-    }
+    #
+    # We intentionally restrict file uploads to PDFs for now. Other "text-like"
+    # documents are inlined into the prompt by the UI layer.
+    SUPPORTED_DOC_TYPES = {"application/pdf"}
     
     def __init__(self):
         self.client = None
@@ -1385,7 +1383,7 @@ class OpenAIProvider(AIProvider):
                     "text": content_text,
                 })
             
-            # Add file attachments (PDFs only - text files are inlined by the UI)
+            # Add file attachments (PDFs only; other documents are inlined by the UI).
             for file_info in files:
                 file_path = file_info.get("path")
                 mime_type = file_info.get("mime_type", "application/octet-stream")

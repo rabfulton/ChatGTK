@@ -11,6 +11,7 @@ from .audio_service import AudioService
 from .tool_service import ToolService
 from .document_service import DocumentService
 from .wolfram_service import WolframService
+from .document_conversion_service import DocumentConversionService, DocumentConversionError, DocumentPipeline
 
 __all__ = [
     'ChatService',
@@ -19,4 +20,7 @@ __all__ = [
     'ToolService',
     'DocumentService',
     'WolframService',
+    'DocumentConversionService',
+    'DocumentConversionError',
+    'DocumentPipeline',
 ]

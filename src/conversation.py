@@ -72,6 +72,8 @@ class Message:
         Model ID (stored in system message for chat restoration).
     text_edit_events : Optional[List[Dict[str, Any]]]
         Optional list of text edit events for undo support.
+    display_content : Optional[str]
+        Optional alternate content for UI display (e.g. attachment placeholders).
     """
     role: str
     content: str
@@ -80,6 +82,7 @@ class Message:
     provider_meta: ProviderMeta = field(default_factory=ProviderMeta)
     model: Optional[str] = None
     text_edit_events: Optional[List[Dict[str, Any]]] = None
+    display_content: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization or API calls."""
@@ -96,6 +99,8 @@ class Message:
             result["model"] = self.model
         if self.text_edit_events:
             result["text_edit_events"] = self.text_edit_events
+        if self.display_content is not None:
+            result["display_content"] = self.display_content
         return result
     
     @classmethod
@@ -109,6 +114,7 @@ class Message:
             provider_meta=ProviderMeta.from_dict(data.get("provider_meta")),
             model=data.get("model"),
             text_edit_events=data.get("text_edit_events"),
+            display_content=data.get("display_content"),
         )
 
 
@@ -340,7 +346,7 @@ class ConversationHistory:
         
         # If there's no system message or no tools, return as-is
         if not messages or messages[0].get("role") != "system":
-            return messages
+            return [{k: v for k, v in msg.items() if k != "display_content"} for msg in messages]
         
         if enabled_tools is None:
             enabled_tools = set()
@@ -360,12 +366,12 @@ class ConversationHistory:
         
         # If nothing changed, return the original
         if new_prompt == current_prompt:
-            return messages
+            return [{k: v for k, v in msg.items() if k != "display_content"} for msg in messages]
         
         # Create a copy with the modified system prompt
         result = [msg.copy() for msg in messages]
         result[0]["content"] = new_prompt
-        return result
+        return [{k: v for k, v in msg.items() if k != "display_content"} for msg in result]
 
 
 # ---------------------------------------------------------------------------

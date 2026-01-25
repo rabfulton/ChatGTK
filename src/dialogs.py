@@ -6424,6 +6424,7 @@ class PromptEditorDialog(Gtk.Dialog):
             
         return False
 
+
     def get_text(self) -> str:
         """Return the full prompt text from the editor."""
         buf = self.textview.get_buffer()
@@ -6598,6 +6599,278 @@ class PromptEditorDialog(Gtk.Dialog):
 
         buf.insert_at_cursor(f"\n{prefix}")
         return True
+
+
+# ---------------------------------------------------------------------------
+# Document import / conversion dialogs
+# ---------------------------------------------------------------------------
+
+
+class DocumentPipelinesEditorDialog(Gtk.Dialog):
+    """Simple JSON editor for document import pipelines."""
+
+    def __init__(self, parent, pipelines_json: str):
+        super().__init__(title="Edit Document Pipelines", transient_for=parent, flags=0)
+        self.set_modal(True)
+        self.set_default_size(800, 500)
+
+        self.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_SAVE, Gtk.ResponseType.OK,
+        )
+
+        content = self.get_content_area()
+        content.set_spacing(6)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+
+        info = Gtk.Label()
+        info.set_xalign(0)
+        info.set_line_wrap(True)
+        info.set_markup(
+            "<b>Document import pipelines</b>\n"
+            "Provide a JSON list of pipeline objects.\n\n"
+            "Example:\n"
+            "<tt>[{\"id\":\"pdftotext\",\"label\":\"PDF → Text\",\"extensions\":[\".pdf\"],"
+            "\"argv\":[\"pdftotext\",\"-layout\",\"{input}\",\"-\"]}]</tt>"
+        )
+        content.pack_start(info, False, False, 0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+
+        self._textview = Gtk.TextView()
+        self._textview.set_wrap_mode(Gtk.WrapMode.NONE)
+        self._textview.set_monospace(True)
+        buf = self._textview.get_buffer()
+        buf.set_text(pipelines_json or "[]")
+        scroll.add(self._textview)
+        content.pack_start(scroll, True, True, 0)
+
+        self.show_all()
+
+    def get_pipelines_json(self) -> str:
+        buf = self._textview.get_buffer()
+        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+
+
+class DocumentImportDialog(Gtk.Dialog):
+    """
+    Attachment-time import dialog.
+
+    This dialog is UI-only; the caller performs conversion and persistence.
+    """
+
+    ACTION_ATTACH_RAW = "attach_raw"
+    ACTION_CONVERT_INLINE = "convert_inline"
+    ACTION_CONVERT_SAVE_SOURCE = "convert_save_source"
+    ACTION_CONVERT_REPLACE_DOCUMENT = "convert_replace_document"
+    ACTION_CONVERT_NEW_DOCUMENT = "convert_new_document"
+
+    RESPONSE_PREVIEW = 1001
+
+    def __init__(
+        self,
+        parent,
+        file_path: str,
+        pipelines: list,
+        default_pipeline_id: str | None = None,
+        in_document_mode: bool = False,
+        has_open_document: bool = False,
+        has_chat_id: bool = False,
+    ):
+        super().__init__(title="Import Document", transient_for=parent, flags=0)
+        self.set_modal(True)
+        self.set_default_size(700, 520)
+
+        self._file_path = file_path
+        self._pipelines = pipelines or []
+        self._pipeline_id_to_label = {p.id: p.label for p in self._pipelines}
+
+        self._in_document_mode = bool(in_document_mode)
+        self._has_open_document = bool(has_open_document)
+        self._has_chat_id = bool(has_chat_id)
+        self._preview_pipeline_id: str | None = None
+
+        self.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            "Pipelines…", Gtk.ResponseType.APPLY,
+            "Preview", self.RESPONSE_PREVIEW,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK,
+        )
+
+        content = self.get_content_area()
+        content.set_spacing(10)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+
+        filename = os.path.basename(file_path) if file_path else "document"
+
+        header = Gtk.Label()
+        header.set_xalign(0)
+        header.set_line_wrap(True)
+        header.set_markup(
+            f"<b>{GLib.markup_escape_text(filename)}</b>\n"
+            f"<tt>{GLib.markup_escape_text(file_path)}</tt>"
+        )
+        content.pack_start(header, False, False, 0)
+
+        # Pipeline selector
+        pipeline_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        pipeline_label = Gtk.Label(label="Pipeline", xalign=0)
+        pipeline_box.pack_start(pipeline_label, False, False, 0)
+
+        self._pipeline_combo = Gtk.ComboBoxText()
+        for pipeline in self._pipelines:
+            self._pipeline_combo.append(pipeline.id, pipeline.label)
+        if default_pipeline_id and default_pipeline_id in self._pipeline_id_to_label:
+            self._pipeline_combo.set_active_id(default_pipeline_id)
+        elif self._pipelines:
+            self._pipeline_combo.set_active(0)
+        pipeline_box.pack_start(self._pipeline_combo, True, True, 0)
+        content.pack_start(pipeline_box, False, False, 0)
+
+        # Actions
+        actions_frame = Gtk.Frame(label="Use As")
+        actions_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        actions_box.set_margin_start(12)
+        actions_box.set_margin_end(12)
+        actions_box.set_margin_top(8)
+        actions_box.set_margin_bottom(8)
+        actions_frame.add(actions_box)
+        content.pack_start(actions_frame, False, False, 0)
+
+        self._rb_attach_raw = Gtk.RadioButton.new_with_label_from_widget(
+            None, "Attach without conversion (current behavior)"
+        )
+        actions_box.pack_start(self._rb_attach_raw, False, False, 0)
+
+        self._rb_convert_inline = Gtk.RadioButton.new_with_label_from_widget(
+            self._rb_attach_raw, "Convert and inline into the next message"
+        )
+        actions_box.pack_start(self._rb_convert_inline, False, False, 0)
+
+        self._rb_convert_source = Gtk.RadioButton.new_with_label_from_widget(
+            self._rb_attach_raw,
+            "Convert and save as a local source (searchable via search tool)",
+        )
+        actions_box.pack_start(self._rb_convert_source, False, False, 0)
+
+        # Always offer "new document" so chat mode can jump straight into Document Mode.
+        self._rb_convert_new_doc = Gtk.RadioButton.new_with_label_from_widget(
+            self._rb_attach_raw,
+            "Convert and open as a new Document (Document Mode)",
+        )
+        actions_box.pack_start(self._rb_convert_new_doc, False, False, 0)
+
+        if self._in_document_mode:
+            self._rb_convert_replace_doc = Gtk.RadioButton.new_with_label_from_widget(
+                self._rb_attach_raw,
+                "Convert and replace the current document content",
+            )
+            actions_box.pack_start(self._rb_convert_replace_doc, False, False, 0)
+        else:
+            self._rb_convert_replace_doc = None
+
+        note = Gtk.Label()
+        note.set_xalign(0)
+        note.set_line_wrap(True)
+        source_scope = "this chat" if self._has_chat_id else "this project (no active chat yet)"
+        note.set_markup(
+            f"<span size='small'>Tip: for scanned PDFs, try an OCR pipeline. "
+            f"For large documents, prefer saving as a source instead of inlining. "
+            f"Sources will be stored under {GLib.markup_escape_text(source_scope)}.</span>"
+        )
+        content.pack_start(note, False, False, 0)
+
+        # Preview area
+        preview_frame = Gtk.Frame(label="Preview (first 4,000 chars)")
+        preview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        preview_box.set_margin_start(12)
+        preview_box.set_margin_end(12)
+        preview_box.set_margin_top(8)
+        preview_box.set_margin_bottom(8)
+        preview_frame.add(preview_box)
+
+        self._preview_status = Gtk.Label(label="Click Preview to run the selected pipeline.")
+        self._preview_status.set_xalign(0)
+        self._preview_status.set_line_wrap(True)
+        preview_box.pack_start(self._preview_status, False, False, 0)
+
+        preview_scroll = Gtk.ScrolledWindow()
+        preview_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        preview_scroll.set_vexpand(True)
+        preview_scroll.set_hexpand(True)
+
+        self._preview_textview = Gtk.TextView()
+        self._preview_textview.set_editable(False)
+        self._preview_textview.set_cursor_visible(False)
+        self._preview_textview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._preview_textview.set_monospace(True)
+        self._preview_textview.set_left_margin(8)
+        self._preview_textview.set_right_margin(8)
+        self._preview_textview.set_top_margin(8)
+        self._preview_textview.set_bottom_margin(8)
+        preview_scroll.add(self._preview_textview)
+        preview_box.pack_start(preview_scroll, True, True, 0)
+
+        content.pack_start(preview_frame, True, True, 0)
+
+        # If no pipelines, disable conversion choices (attach still works).
+        has_pipelines = bool(self._pipelines)
+        self._pipeline_combo.set_sensitive(has_pipelines)
+        self._rb_convert_inline.set_sensitive(has_pipelines)
+        self._rb_convert_source.set_sensitive(has_pipelines)
+        self.set_response_sensitive(self.RESPONSE_PREVIEW, has_pipelines)
+        if self._rb_convert_replace_doc is not None:
+            self._rb_convert_replace_doc.set_sensitive(has_pipelines and self._has_open_document)
+        if self._rb_convert_new_doc is not None:
+            self._rb_convert_new_doc.set_sensitive(has_pipelines)
+
+        self._rb_attach_raw.set_active(True)
+        self.show_all()
+
+        if hasattr(self, "_pipeline_combo"):
+            self._pipeline_combo.connect("changed", lambda *_args: self.set_preview_text(""))
+
+    def get_selected_pipeline_id(self) -> Optional[str]:
+        pid = self._pipeline_combo.get_active_id() if hasattr(self, "_pipeline_combo") else None
+        return pid or None
+
+    def get_selected_action(self) -> str:
+        if self._rb_convert_new_doc is not None and self._rb_convert_new_doc.get_active():
+            return self.ACTION_CONVERT_NEW_DOCUMENT
+        if self._rb_convert_replace_doc is not None and self._rb_convert_replace_doc.get_active():
+            return self.ACTION_CONVERT_REPLACE_DOCUMENT
+        if self._rb_convert_source.get_active():
+            return self.ACTION_CONVERT_SAVE_SOURCE
+        if self._rb_convert_inline.get_active():
+            return self.ACTION_CONVERT_INLINE
+        return self.ACTION_ATTACH_RAW
+
+    def set_preview_text(self, text: str, error: str | None = None) -> None:
+        buf = self._preview_textview.get_buffer()
+        if not text and not error:
+            self._preview_pipeline_id = None
+            self._preview_status.set_text("Click Preview to run the selected pipeline.")
+            buf.set_text("")
+            return
+        if error:
+            self._preview_pipeline_id = None
+            self._preview_status.set_text(error)
+        else:
+            self._preview_pipeline_id = self.get_selected_pipeline_id()
+            self._preview_status.set_text(f"Preview loaded ({len(text)} chars).")
+        buf.set_text(text or "")
+
+    def get_preview_pipeline_id(self) -> Optional[str]:
+        """Return pipeline id for the currently displayed preview (if any)."""
+        return self._preview_pipeline_id or None
 
 
 class ShortcutsHelpDialog(Gtk.Dialog):

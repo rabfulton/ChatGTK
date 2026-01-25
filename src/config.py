@@ -327,6 +327,67 @@ DEFAULT_SYSTEM_PROMPTS = [
 import json as _json
 DEFAULT_SYSTEM_PROMPTS_JSON = _json.dumps(DEFAULT_SYSTEM_PROMPTS)
 
+# ---------------------------------------------------------------------------
+# Document import / conversion pipelines
+# ---------------------------------------------------------------------------
+#
+# Pipelines are optional command-line programs that can convert an input document
+# into plain text or Markdown for use in ChatGTK (inline, searchable sources,
+# or future semantic indexing).
+#
+# Stored as JSON so power users can customize without extra UI complexity.
+#
+# Schema (list of dicts):
+# - id: stable identifier
+# - label: shown in UI
+# - extensions: list like [".pdf", ".html"]
+# - argv: list of tokens; supports {input} and {output} placeholders
+# - shell: optional string command (advanced); supports {input}/{output}
+# - output_ext: suggested output extension (".txt" or ".md")
+DEFAULT_DOCUMENT_IMPORT_PIPELINES = [
+    {
+        "id": "pdftotext_layout",
+        "label": "PDF → Text (pdftotext -layout)",
+        "extensions": [".pdf"],
+        "argv": ["pdftotext", "-layout", "-enc", "UTF-8", "{input}", "-"],
+        "output_ext": ".txt",
+    },
+    {
+        "id": "tesseract_ocr",
+        "label": "PDF → OCR Text (tesseract)",
+        "extensions": [".pdf"],
+        # Render PDF pages to images, then run tesseract per page and concatenate
+        # into a single output file.
+        #
+        # Requirements (user-installed):
+        # - pdftoppm (poppler-utils)
+        # - tesseract
+        #
+        # Notes:
+        # - Adjust language with `-l` (e.g. `-l eng` or `-l eng+deu`) by editing the pipeline.
+        # - This pipeline uses `stdout` output to avoid generating per-page .txt files.
+        "shell": (
+            "set -e; "
+            "tmpdir=\"$(mktemp -d)\"; "
+            "trap 'rm -rf \"$tmpdir\"' EXIT; "
+            "rm -f \"{output}\"; : > \"{output}\"; "
+            "pdftoppm -r 200 -png \"{input}\" \"$tmpdir/page\" >/dev/null 2>&1; "
+            "if ! ls \"$tmpdir\"/page*.png >/dev/null 2>&1; then "
+            "echo 'No images were generated from the PDF. Is pdftoppm installed?' 1>&2; "
+            "exit 2; "
+            "fi; "
+            "for f in \"$tmpdir\"/page*.png; do "
+            "  echo \"\\n\\n--- PAGE: $(basename \"$f\") ---\\n\" >> \"{output}\"; "
+            "  tesseract \"$f\" stdout -l eng 2>/dev/null >> \"{output}\"; "
+            "done"
+        ),
+        "output_ext": ".txt",
+        "timeout_sec": 900,
+    },
+]
+
+DEFAULT_DOCUMENT_IMPORT_PIPELINES_JSON = _json.dumps(DEFAULT_DOCUMENT_IMPORT_PIPELINES)
+
 # Define settings configuration with their types and defaults
 SETTINGS_CONFIG = {
     'AI_NAME': {'type': str, 'default': 'Assistant'},
@@ -419,6 +480,8 @@ SETTINGS_CONFIG = {
     'CURRENT_PROJECT': {'type': str, 'default': ''},
     # Display name for the default history folder (empty project ID).
     'DEFAULT_PROJECT_LABEL': {'type': str, 'default': 'Default'},
+    # JSON list of external document import pipelines (see DEFAULT_DOCUMENT_IMPORT_PIPELINES).
+    'DOCUMENT_IMPORT_PIPELINES_JSON': {'type': str, 'default': DEFAULT_DOCUMENT_IMPORT_PIPELINES_JSON},
     # Model whitelists per provider – comma-separated model IDs.
     # These defaults mirror the curated sets previously hardcoded in ai_providers.py.
     'OPENAI_MODEL_WHITELIST': {

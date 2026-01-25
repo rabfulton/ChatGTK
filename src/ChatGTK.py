@@ -306,6 +306,7 @@ class OpenAIGTKClient(Gtk.Window):
         self.recording = False
         self.attached_file_path = None
         self._attached_temp_path = None
+        self._attached_imported = False
         self.pending_edit_image = None
         self.pending_edit_message_index = None
         self._edit_buttons = []
@@ -2342,6 +2343,24 @@ class OpenAIGTKClient(Gtk.Window):
         dialog.run()
         dialog.destroy()
 
+    def show_info_dialog(self, message: str, title: str = "Info"):
+        """Display a simple modal info dialog with selectable text."""
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text=title or "Info",
+        )
+        label = Gtk.Label(label=str(message))
+        label.set_selectable(True)
+        label.set_line_wrap(True)
+        label.set_max_width_chars(60)
+        label.show()
+        dialog.get_message_area().pack_start(label, False, False, 0)
+        dialog.run()
+        dialog.destroy()
+
     def _show_large_file_warning(self, size_info: str) -> bool:
         """Show warning about large file uploads. Returns True if user wants to continue."""
         dialog = Gtk.MessageDialog(
@@ -3016,6 +3035,12 @@ class OpenAIGTKClient(Gtk.Window):
                 return
             self._select_text_edit_target()
             return
+
+        # When a file is already attached in chat mode, clicking the attach icon again
+        # clears it (similar to how text-edit target selection is toggled).
+        if getattr(self, "attached_file_path", None):
+            self._clear_attached_file()
+            return
         dialog = Gtk.FileChooserDialog(
             title="Please choose a file",
             parent=self,
@@ -3062,13 +3087,13 @@ class OpenAIGTKClient(Gtk.Window):
         if response == Gtk.ResponseType.OK:
             filepath = dialog.get_filename()
             dialog.destroy()
-            
+
             # Check file size and warn for large files
             try:
                 size = os.path.getsize(filepath)
                 mime_type, _ = mimetypes.guess_type(filepath)
                 is_pdf = mime_type == "application/pdf"
-                
+
                 # Warn for PDFs > 1MB or text files > 100KB
                 if (is_pdf and size > 1_000_000) or (not is_pdf and size > 100_000):
                     size_str = f"{size / 1_000_000:.1f}MB" if size > 1_000_000 else f"{size / 1000:.0f}KB"
@@ -3076,15 +3101,336 @@ class OpenAIGTKClient(Gtk.Window):
                         return
             except OSError:
                 pass
-            
-            self.attached_file_path = filepath
-            self._attached_temp_path = None
-            filename = os.path.basename(filepath)
-            self.btn_attach.set_label(f"Attached: {filename}")
-            print(f"File selected: {self.attached_file_path}")
+
+            # Offer import/conversion options for PDFs (additive feature).
+            mime_type, _ = mimetypes.guess_type(filepath)
+            if (mime_type or "") == "application/pdf":
+                handled = self._handle_document_import_dialog(filepath)
+                if handled:
+                    return
+
+            # Default: attach as-is (current behavior)
+            self._attach_path_as_next_message_file(filepath)
             return
-        
+
         dialog.destroy()
+
+    def _attach_path_as_next_message_file(self, filepath: str, imported: bool = False) -> None:
+        self.attached_file_path = filepath
+        self._attached_temp_path = None
+        self._attached_imported = bool(imported)
+        self._refresh_attach_button_label()
+        print(f"File selected: {self.attached_file_path}")
+
+    def _handle_document_import_dialog(self, filepath: str) -> bool:
+        """
+        Show the import dialog for a selected file.
+
+        Returns True if the dialog handled the selection (including cancel).
+        Returns False to fall back to the default "attach as-is" behavior.
+        """
+        try:
+            from services import DocumentConversionService, DocumentConversionError
+            from dialogs import DocumentImportDialog, DocumentPipelinesEditorDialog
+            from config import DEFAULT_DOCUMENT_IMPORT_PIPELINES_JSON
+        except Exception:
+            return False
+
+        pipelines_json = self._get_effective_document_import_pipelines_json()
+
+        while True:
+            service = DocumentConversionService(pipelines_json)
+            default_pipeline = service.get_default_pipeline_for_path(filepath)
+            dlg = DocumentImportDialog(
+                parent=self,
+                file_path=filepath,
+                pipelines=service.pipelines,
+                default_pipeline_id=default_pipeline.id if default_pipeline else None,
+                in_document_mode=bool(self._in_document_mode),
+                has_open_document=bool(self.controller.has_document()),
+                has_chat_id=bool(self.current_chat_id),
+            )
+
+            # Inner loop: keep the same dialog open for Preview operations.
+            preview_cache = {
+                "pipeline_id": None,
+                "pipelines_json": pipelines_json,
+                "text": None,
+                "output_ext": None,
+            }
+            while True:
+                resp = dlg.run()
+
+                if resp == Gtk.ResponseType.APPLY:
+                    dlg.destroy()
+                    editor = DocumentPipelinesEditorDialog(self, pipelines_json)
+                    editor_resp = editor.run()
+                    if editor_resp == Gtk.ResponseType.OK:
+                        new_json = editor.get_pipelines_json()
+                        # Best-effort validation: keep old value if invalid JSON.
+                        try:
+                            import json as _json
+
+                            _json.loads(new_json)
+                            # Persist full pipeline list as edited.
+                            pipelines_json = new_json
+                            self.settings.set("DOCUMENT_IMPORT_PIPELINES_JSON", pipelines_json, emit_event=False)
+                            self.settings.save()
+                        except Exception as e:
+                            self.show_error_dialog(f"Invalid JSON: {e}")
+                    editor.destroy()
+                    break  # rebuild import dialog with updated pipelines
+
+                if resp == getattr(DocumentImportDialog, "RESPONSE_PREVIEW", 1001):
+                    pipeline_id = dlg.get_selected_pipeline_id()
+                    if not pipeline_id:
+                        dlg.set_preview_text("", error="No pipeline selected.")
+                        continue
+                    try:
+                        converted_text, _output_ext = self._convert_document_blocking(
+                            filepath, pipelines_json, pipeline_id
+                        )
+                        preview = (converted_text or "")[:4000]
+                        dlg.set_preview_text(preview)
+                        preview_cache = {
+                            "pipeline_id": pipeline_id,
+                            "pipelines_json": pipelines_json,
+                            "text": converted_text,
+                            "output_ext": _output_ext,
+                        }
+                        while Gtk.events_pending():
+                            Gtk.main_iteration_do(False)
+                    except Exception as e:
+                        dlg.set_preview_text("", error=str(e))
+                    continue
+
+                if resp != Gtk.ResponseType.OK:
+                    dlg.destroy()
+                    return True  # handled (cancel/no attach)
+
+                action = dlg.get_selected_action()
+                pipeline_id = dlg.get_selected_pipeline_id()
+                preview_pipeline_id = None
+                try:
+                    preview_pipeline_id = dlg.get_preview_pipeline_id()
+                except Exception:
+                    preview_pipeline_id = None
+                dlg.destroy()
+                break
+
+            # If we broke out of inner loop due to pipeline edits, rebuild.
+            if resp == Gtk.ResponseType.APPLY:
+                continue
+
+            if action == DocumentImportDialog.ACTION_ATTACH_RAW or not pipeline_id:
+                return False
+
+            # Use previewed conversion if it's for the same pipeline.
+            if (
+                preview_cache.get("pipeline_id") == pipeline_id
+                and preview_cache.get("pipelines_json") == pipelines_json
+                and preview_pipeline_id == pipeline_id
+                and isinstance(preview_cache.get("text"), str)
+            ):
+                converted_text = preview_cache["text"]
+                output_ext = preview_cache.get("output_ext") or ".txt"
+                print(f"[Import] Reusing preview conversion for pipeline '{pipeline_id}'")
+            else:
+                # Convert now (blocking with a lightweight progress dialog).
+                try:
+                    converted_text, output_ext = self._convert_document_blocking(filepath, pipelines_json, pipeline_id)
+                except DocumentConversionError as e:
+                    self.show_error_dialog(str(e))
+                    return True
+                except Exception as e:
+                    self.show_error_dialog(f"Conversion failed: {e}")
+                    return True
+
+            if action == DocumentImportDialog.ACTION_CONVERT_INLINE:
+                temp_path = self._write_temp_converted_attachment(filepath, converted_text, output_ext)
+                self.attached_file_path = temp_path
+                self._attached_temp_path = temp_path
+                self._attached_imported = True
+                self._refresh_attach_button_label()
+                return True
+
+            if action == DocumentImportDialog.ACTION_CONVERT_SAVE_SOURCE:
+                saved_path = self._save_converted_source(filepath, converted_text, output_ext)
+                self._clear_attached_file()
+                self.show_info_dialog(f"Imported source saved to:\n{saved_path}", title="Import")
+                return True
+
+            if action == DocumentImportDialog.ACTION_CONVERT_REPLACE_DOCUMENT:
+                if not self.controller.has_document():
+                    self.show_error_dialog("No document is open.")
+                    return True
+                self.controller.set_document_content(converted_text)
+                self.controller.save_document()
+                if self._in_document_mode:
+                    GLib.idle_add(self._sync_document_view)
+                self._clear_attached_file()
+                return True
+
+            if action == DocumentImportDialog.ACTION_CONVERT_NEW_DOCUMENT:
+                title = os.path.splitext(os.path.basename(filepath))[0] or "Imported"
+                self.controller.new_document(title=title, content=converted_text)
+                self._switch_to_document_view()
+                if hasattr(self, "_history_sidebar"):
+                    self._history_sidebar.refresh()
+                self._clear_attached_file()
+                return True
+
+            return True
+
+    def _get_effective_document_import_pipelines_json(self) -> str:
+        """
+        Return the effective pipelines JSON used by the Import dialog.
+
+        This merges the built-in default pipelines with the user's configured
+        pipelines (if any). User-defined entries override built-ins by `id`.
+        """
+        from config import DEFAULT_DOCUMENT_IMPORT_PIPELINES_JSON
+        import json as _json
+
+        user_raw = self.settings.get("DOCUMENT_IMPORT_PIPELINES_JSON", "") or ""
+        try:
+            user_list = _json.loads(user_raw) if user_raw.strip() else []
+        except Exception:
+            user_list = []
+        try:
+            default_list = _json.loads(DEFAULT_DOCUMENT_IMPORT_PIPELINES_JSON) or []
+        except Exception:
+            default_list = []
+
+        if not isinstance(user_list, list):
+            user_list = []
+        if not isinstance(default_list, list):
+            default_list = []
+
+        merged_by_id = {}
+        merged_order = []
+
+        def add_item(item):
+            if not isinstance(item, dict):
+                return
+            pid = str(item.get("id", "")).strip()
+            if not pid:
+                return
+            if pid not in merged_by_id:
+                merged_order.append(pid)
+            merged_by_id[pid] = item
+
+        for item in default_list:
+            add_item(item)
+        for item in user_list:
+            add_item(item)
+
+        merged_list = [merged_by_id[pid] for pid in merged_order if pid in merged_by_id]
+        return _json.dumps(merged_list)
+
+    def _convert_document_blocking(self, filepath: str, pipelines_json: str, pipeline_id: str) -> tuple[str, str]:
+        from services import DocumentConversionService
+
+        service = DocumentConversionService(pipelines_json)
+        pipeline = next((p for p in service.pipelines if p.id == pipeline_id), None)
+        output_ext = pipeline.output_ext if pipeline else ".txt"
+        if pipeline:
+            print(f"[Import] Selected pipeline: {pipeline.id} ({pipeline.label}) output_ext={output_ext}")
+        else:
+            print(f"[Import] Selected pipeline id: {pipeline_id} output_ext={output_ext}")
+
+        # Modal progress dialog with nested main loop.
+        progress = Gtk.Dialog(title="Converting…", transient_for=self, flags=0)
+        progress.set_modal(True)
+        progress.set_default_size(360, 100)
+        box = progress.get_content_area()
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        label = Gtk.Label(label="Running conversion pipeline…")
+        label.set_xalign(0)
+        spinner = Gtk.Spinner()
+        spinner.start()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        hbox.pack_start(spinner, False, False, 0)
+        hbox.pack_start(label, True, True, 0)
+        box.pack_start(hbox, True, True, 0)
+        progress.show_all()
+
+        result_holder: dict = {}
+        loop = GLib.MainLoop()
+
+        def worker():
+            try:
+                print(f"[Import] Starting conversion for: {filepath}")
+                fd, output_path = tempfile.mkstemp(suffix=output_ext or ".txt")
+                os.close(fd)
+                try:
+                    text = service.convert_to_text(filepath, pipeline_id=pipeline_id, output_path=output_path)
+                finally:
+                    try:
+                        os.remove(output_path)
+                    except OSError:
+                        pass
+                print(f"[Import] Conversion produced {len(text)} chars")
+                result_holder["text"] = text
+            except Exception as e:
+                print(f"[Import] Conversion failed: {e}")
+                result_holder["error"] = e
+            finally:
+                GLib.idle_add(loop.quit)
+
+        import threading
+
+        threading.Thread(target=worker, daemon=True).start()
+        loop.run()
+        progress.destroy()
+
+        if "error" in result_holder:
+            raise result_holder["error"]
+        return result_holder.get("text", ""), output_ext
+
+    def _write_temp_converted_attachment(self, source_path: str, text: str, output_ext: str) -> str:
+        safe_title = self._sanitize_filename(os.path.splitext(os.path.basename(source_path))[0]) or "converted"
+        filename = f"{safe_title}{output_ext or '.txt'}"
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, filename)
+        if os.path.exists(temp_path):
+            counter = 1
+            while True:
+                candidate = os.path.join(temp_dir, f"{safe_title}_{counter}{output_ext or '.txt'}")
+                if not os.path.exists(candidate):
+                    temp_path = candidate
+                    break
+                counter += 1
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            handle.write(text or "")
+        print(f"[Import] Wrote temp converted attachment: {temp_path}")
+        return temp_path
+
+    def _save_converted_source(self, source_path: str, text: str, output_ext: str) -> str:
+        history_dir = self.controller.get_current_history_dir()
+        base = self._sanitize_filename(os.path.splitext(os.path.basename(source_path))[0]) or "import"
+        if self.current_chat_id:
+            target_dir = os.path.join(history_dir, self.current_chat_id, "imports")
+        else:
+            target_dir = os.path.join(history_dir, "_imports")
+        os.makedirs(target_dir, exist_ok=True)
+        filename = f"{base}{output_ext or '.txt'}"
+        out_path = os.path.join(target_dir, filename)
+        if os.path.exists(out_path):
+            counter = 1
+            while True:
+                candidate = os.path.join(target_dir, f"{base}_{counter}{output_ext or '.txt'}")
+                if not os.path.exists(candidate):
+                    out_path = candidate
+                    break
+                counter += 1
+        with open(out_path, "w", encoding="utf-8") as handle:
+            handle.write(text or "")
+        print(f"[Import] Saved converted source: {out_path}")
+        return out_path
 
     def _select_text_edit_target(self):
         dialog = Gtk.FileChooserDialog(
@@ -3173,7 +3519,8 @@ class OpenAIGTKClient(Gtk.Window):
                 pass
         self._attached_temp_path = None
         self.attached_file_path = None
-        self.btn_attach.set_label("Attach File")
+        self._attached_imported = False
+        self._refresh_attach_button_label()
 
     def _sanitize_filename(self, name: str) -> str:
         if not name:
@@ -3205,6 +3552,19 @@ class OpenAIGTKClient(Gtk.Window):
                 self.btn_attach.set_image(Gtk.Image.new_from_icon_name("mail-attachment-symbolic", Gtk.IconSize.BUTTON))
                 self.btn_attach.set_tooltip_text("Select a target file for text edits")
             return
+
+        if getattr(self, "attached_file_path", None):
+            filename = os.path.basename(self.attached_file_path)
+            if getattr(self, "_attached_imported", False):
+                icon = "x-office-document-symbolic"
+                tip = f"Imported: {filename}\nClick Send to use"
+            else:
+                icon = "mail-attachment-symbolic"
+                tip = f"Attached: {filename}\nClick Send to use"
+            self.btn_attach.set_image(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON))
+            self.btn_attach.set_tooltip_text(tip)
+            return
+
         self.btn_attach.set_image(Gtk.Image.new_from_icon_name("mail-attachment-symbolic", Gtk.IconSize.BUTTON))
         self.btn_attach.set_tooltip_text("Attach a file to the message")
 
@@ -3406,7 +3766,8 @@ class OpenAIGTKClient(Gtk.Window):
                 if message['role'] != 'system':  # Skip system message
                     message_index = idx
                     if message['role'] == 'user':
-                        self.append_message('user', message['content'], message_index)
+                        content = message.get('display_content') or message.get('content', '')
+                        self.append_message('user', content, message_index)
                     elif message['role'] == 'assistant':
                         self.append_message('ai', message['content'], message_index)
         finally:
@@ -3603,7 +3964,8 @@ class OpenAIGTKClient(Gtk.Window):
             handle.write(content or "")
         self.attached_file_path = temp_path
         self._attached_temp_path = temp_path
-        self.btn_attach.set_label(f"Attached: {filename}")
+        self._attached_imported = True
+        self._refresh_attach_button_label()
 
     def get_chat_timestamp(self, filename):
         """Get a formatted timestamp from the filename."""

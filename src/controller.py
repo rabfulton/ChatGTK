@@ -1298,9 +1298,16 @@ class ChatController:
                     "content": matches_text
                 })
         
-        # Search directories
-        if source in ("documents", "all") and search_directories:
-            dirs = [d.strip() for d in search_directories.split(",") if d.strip()]
+        # Search directories (explicit + implicit per-chat/per-document imports)
+        dirs: List[str] = []
+        if search_directories:
+            dirs.extend([d.strip() for d in search_directories.split(",") if d.strip()])
+        dirs.extend(self._get_implicit_search_directories())
+        # De-dupe while preserving order
+        seen = set()
+        dirs = [d for d in dirs if d and not (d in seen or seen.add(d))]
+
+        if source in ("documents", "all") and dirs:
             for directory in dirs:
                 if len(results) >= result_limit:
                     break
@@ -1346,6 +1353,35 @@ class ChatController:
         if not show_results:
             return "__HIDE_TOOL_RESULT__" + result_text
         return result_text
+
+    def _get_implicit_search_directories(self) -> List[str]:
+        """
+        Return search directories that are implicitly associated with the current
+        chat/document (e.g. imported sources).
+
+        This keeps "documents" search useful without forcing users to manually
+        configure SEARCH_DIRECTORIES for each chat.
+        """
+        history_dir = self.get_current_history_dir()
+        dirs: List[str] = []
+
+        # Per-chat imports
+        if self.current_chat_id:
+            dirs.append(os.path.join(history_dir, self.current_chat_id, "imports"))
+
+        # Per-document imports (Document Mode)
+        doc_id = None
+        try:
+            doc_id = self.document_service.current_document_id
+        except Exception:
+            doc_id = None
+        if doc_id:
+            dirs.append(os.path.join(history_dir, doc_id, "imports"))
+
+        # Project-level imports (when no chat exists yet)
+        dirs.append(os.path.join(history_dir, "_imports"))
+
+        return dirs
 
     def handle_music_tool(self, action: str, keyword: Optional[str] = None, volume: Optional[float] = None) -> str:
         """
