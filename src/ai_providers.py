@@ -1079,6 +1079,15 @@ class CustomProvider(AIProvider):
         url = self._url("/images/generations")
         payload = {"model": self.model_id or model, "prompt": prompt}
         resp = self.session.post(url, headers=self._headers(), json=payload, timeout=60)
+        if not resp.ok:
+            body = None
+            try:
+                body = resp.json()
+            except Exception:
+                body = resp.text
+            print(f"[CustomProvider] image generation failed: status={resp.status_code} url={url}")
+            print(f"[CustomProvider] image generation request payload: {json.dumps(payload, indent=2)}")
+            print(f"[CustomProvider] image generation response body: {json.dumps(body, indent=2, default=str) if not isinstance(body, str) else body}")
         resp.raise_for_status()
         data = resp.json()
         # Expect OpenAI-style {data:[{url:...}]} or base64
@@ -1337,6 +1346,31 @@ class OpenAIProvider(AIProvider):
         
         # Unknown model - default to no web search
         return False
+
+    def _log_api_error(self, context: str, exc: Exception) -> None:
+        """Log structured API error details when available."""
+        response = getattr(exc, "response", None)
+        body = None
+
+        if response is not None:
+            body = getattr(response, "text", None)
+            if body is None:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = None
+
+        if body is None:
+            body = getattr(exc, "body", None)
+
+        print(f"[OpenAIProvider] {context} failed: {exc}")
+        if body is not None:
+            try:
+                if not isinstance(body, str):
+                    body = json.dumps(body, indent=2, default=str)
+            except Exception:
+                body = str(body)
+            print(f"[OpenAIProvider] {context} response body: {body}")
 
     def _build_responses_input(self, messages) -> tuple:
         """
@@ -2186,26 +2220,34 @@ class OpenAIProvider(AIProvider):
                 
                 # Re‑open as a file handle for the SDK
                 with open(temp_img.name, "rb") as img_file:
-                    response = self.client.images.edit(
-                        model=model,
-                        image=img_file,
-                        prompt=prompt,
-                        n=1,
-                        size="1024x1024",
-                    )
+                    try:
+                        response = self.client.images.edit(
+                            model=model,
+                            image=img_file,
+                            prompt=prompt,
+                            n=1,
+                            size="1024x1024",
+                        )
+                    except Exception as exc:
+                        self._log_api_error(f"images.edit model={model}", exc)
+                        raise
             
             image_b64 = response.data[0].b64_json
             final_image_bytes = base64.b64decode(image_b64)
         else:
             print(f"[OpenAIProvider] Using images.generate API for model: {model}")
             # Standard image generation (no source image)
-            response = self.client.images.generate(
-                model=model,
-                prompt=prompt,
-                size="1024x1024",
-                #quality="standard",
-                n=1,
-            )
+            try:
+                response = self.client.images.generate(
+                    model=model,
+                    prompt=prompt,
+                    size="1024x1024",
+                    #quality="standard",
+                    n=1,
+                )
+            except Exception as exc:
+                self._log_api_error(f"images.generate model={model}", exc)
+                raise
             
             data_obj = response.data[0]
             final_image_bytes = None

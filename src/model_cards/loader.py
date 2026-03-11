@@ -16,6 +16,30 @@ from .catalog import BUILTIN_CARDS
 _custom_cards: Dict[str, ModelCard] = {}
 
 
+def _infer_builtin_like_card(model_id: str) -> Optional[ModelCard]:
+    """
+    Infer a model card for dynamically discovered provider models.
+
+    This is intentionally conservative and only covers strong naming
+    conventions that are stable enough to route correctly without a
+    catalog entry.
+    """
+    model_lower = (model_id or "").lower()
+
+    # OpenAI image models can appear from the models API before this repo's
+    # built-in catalog is updated. Route the whole family through /images.
+    if model_lower.startswith("gpt-image-"):
+        return ModelCard(
+            id=model_id,
+            provider="openai",
+            display_name=model_id,
+            api_family="images",
+            capabilities=Capabilities(text=False, image_gen=True, image_edit=True),
+        )
+
+    return None
+
+
 def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[ModelCard]:
     """
     Look up a ModelCard by ID.
@@ -57,6 +81,9 @@ def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[Mo
         cfg = custom_models[model_id]
         base_card = _synthesize_card_from_custom(model_id, cfg)
     
+    if base_card is None:
+        base_card = _infer_builtin_like_card(model_id)
+
     # Check for user overrides and apply them
     overrides = load_overrides()
     if model_id in overrides:

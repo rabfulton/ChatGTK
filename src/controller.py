@@ -2236,6 +2236,22 @@ class ChatController:
             is_image_model = card and card.capabilities.image_gen and not card.capabilities.text
             
             if is_image_model:
+                image_kwargs = {}
+                if has_attached_images:
+                    image = last_msg.get("images", [None])[0]
+                    if image:
+                        image_data = image.get("data")
+                        if not image_data and image.get("path"):
+                            import base64
+                            try:
+                                with open(image["path"], "rb") as f:
+                                    image_data = base64.b64encode(f.read()).decode("utf-8")
+                            except Exception as exc:
+                                print(f"[Controller] Failed to load image for edit: {exc}")
+                        if image_data:
+                            image_kwargs["image_data"] = image_data
+                            image_kwargs["mime_type"] = image.get("mime_type")
+
                 # Route to image generation
                 answer = self._image_service.generate_image(
                     prompt=prompt,
@@ -2243,7 +2259,7 @@ class ChatController:
                     provider=provider,
                     provider_name=provider_name,
                     chat_id=self.current_chat_id or "temp",
-                    edit_image=last_msg.get("images", [None])[0] if has_attached_images else None,
+                    **image_kwargs,
                 )
                 assistant_provider_meta = None
             else:

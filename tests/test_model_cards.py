@@ -197,6 +197,17 @@ class TestCardLookup:
         card = get_card("unknown-model-xyz-12345")
         assert card is None
 
+    def test_dynamic_gpt_image_model_is_inferred(self):
+        """Unknown gpt-image variants synthesize as OpenAI image models."""
+        card = get_card("gpt-image-1.5")
+        assert card is not None
+        assert card.provider == "openai"
+        assert card.api_family == "images"
+        assert card.is_image_model() is True
+        assert card.capabilities.image_gen is True
+        assert card.capabilities.image_edit is True
+        assert card.capabilities.text is False
+
     def test_custom_model_synthesized(self):
         """Custom models are synthesized from config dict."""
         custom_models = {
