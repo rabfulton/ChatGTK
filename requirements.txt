@@ -4,8 +4,11 @@ requests>=2.0.0
 websockets>=12.0
 sounddevice==0.4.6
 soundfile==0.12.1
-PyGObject>=3.42.0; platform_system == "Linux"
 beets>=1.6.0
+
+# GTK bindings are provided by distro packages on Linux instead of pip.
+# When using a virtual environment, create it with --system-site-packages so
+# `gi` from packages such as python3-gi remains visible inside the venv.
 
 # Optional: Memory feature - required for semantic memory
 # qdrant-client>=1.7.0

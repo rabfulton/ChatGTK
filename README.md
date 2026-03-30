@@ -81,19 +81,40 @@ AUR package: [chatgtk_client-git](https://aur.archlinux.org/packages/chatgtk_cli
 
 ## Quick Install (Virtual Environment)
 
-Use the one-liner installer (master branch) to create a virtual environment and desktop entry:
+On Debian, Ubuntu, and similar distros, install the GTK runtime packages first:
+
+```bash
+sudo apt install python3-venv python3-gi gir1.2-gtk-3.0 gir1.2-gtksource-4 libportaudio2
+```
+
+Then use the installer to create a virtual environment and desktop entry:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rabfulton/ChatGTK/master/installer.sh | bash
 ```
 
+The installer reuses those system GTK bindings inside the virtual environment.
+
 You can now run ChatGTK from your desktop launcher!
 
 ## Manual Installation
 
+On Linux, install the GTK bindings from your package manager instead of pip. Debian/Ubuntu example:
+
+```bash
+sudo apt install python3-venv python3-gi gir1.2-gtk-3.0 gir1.2-gtksource-4 libportaudio2
+```
+
 ```bash
 git clone https://github.com/rabfulton/ChatGTK
 cd ChatGTK
+```
+
+Create the virtual environment with access to those system packages, then install the Python-only dependencies:
+
+```bash
+python3 -m venv --system-site-packages .venv
+. .venv/bin/activate
 pip install -r requirements.txt
 ```
 Or use your package manager to install the dependencies.  
@@ -445,7 +466,6 @@ install `texlive-fontsrecommended` from your package manager.
 
 ### Python Packages
 - openai>=1.0.0
-- PyGObject>=3.42.0
 - sounddevice>=0.4.6
 - soundfile>=0.12.1
 - numpy>=1.24.0
@@ -455,8 +475,10 @@ install `texlive-fontsrecommended` from your package manager.
 ### System Dependencies
 - `openai`
 - `python3`
-- `gtk-3.0`
-- `gtksourceview4`
+- `python3-gi` or your distro's equivalent PyGObject package
+- `gir1.2-gtk-3.0` / GTK 3 runtime and introspection data
+- `gir1.2-gtksource-4` / GtkSourceView 4 runtime and introspection data
+- `libportaudio2` or your distro's PortAudio runtime package
 - `pulseaudio`
 - `websockets`
 - `requests`

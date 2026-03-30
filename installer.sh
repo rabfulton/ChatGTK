@@ -21,8 +21,59 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+get_linux_runtime_hint() {
+  local distro_id=""
+  local distro_like=""
+
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    distro_id="${ID:-}"
+    distro_like="${ID_LIKE:-}"
+  fi
+
+  case " ${distro_id} ${distro_like} " in
+    *" debian "*|*" ubuntu "*)
+      printf '%s\n' \
+        "sudo apt install python3-venv python3-gi gir1.2-gtk-3.0 gir1.2-gtksource-4 libportaudio2"
+      ;;
+    *" arch "*|*" manjaro "*)
+      printf '%s\n' \
+        "sudo pacman -S python python-gobject gtk3 gtksourceview4 portaudio"
+      ;;
+    *" fedora "*|*" rhel "*|*" centos "*)
+      printf '%s\n' \
+        "sudo dnf install python3-gobject gtk3 gtksourceview4 portaudio"
+      ;;
+    *)
+      printf '%s\n' \
+        "Install your distro's GTK 3, GtkSourceView 4, PyGObject, and PortAudio runtime packages."
+      ;;
+  esac
+}
+
+ensure_linux_runtime_deps() {
+  local check_cmd='import gi; gi.require_version("Gtk", "3.0"); gi.require_version("GtkSource", "4"); from gi.repository import Gtk, GtkSource'
+
+  if python3 -c "$check_cmd" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  fail "$(cat <<EOF
+ChatGTK needs the system GTK bindings on Linux, but python3 cannot import them.
+
+Install the required runtime packages first, for example:
+  $(get_linux_runtime_hint)
+
+Then rerun this installer. The virtual environment is created with
+--system-site-packages so it can reuse those distro-provided bindings.
+EOF
+)"
+}
+
 need_cmd git
 need_cmd python3
+ensure_linux_runtime_deps
 
 if [ -d "$INSTALL_DIR" ] && [ "$UPDATE_EXISTING" != "1" ]; then
   log "Install directory exists; refreshing application files in $INSTALL_DIR"
@@ -40,6 +91,21 @@ fi
 install_app_files() {
   local src_dir="$1"
   local dest_dir="$2"
+
+  copy_optional_wav_dir() {
+    local dir_name="$1"
+    local -a wav_files=()
+
+    mkdir -p "$dest_dir/src/$dir_name"
+    if [ -d "$src_dir/src/$dir_name" ]; then
+      shopt -s nullglob
+      wav_files=("$src_dir/src/$dir_name/"*.wav)
+      shopt -u nullglob
+      if [ ${#wav_files[@]} -gt 0 ]; then
+        install -m 644 "${wav_files[@]}" "$dest_dir/src/$dir_name/"
+      fi
+    fi
+  }
 
   mkdir -p "$dest_dir/src"
 
@@ -75,6 +141,11 @@ install_app_files() {
   mkdir -p "$dest_dir/src/ui"
   install -m 644 "$src_dir/src/ui/"*.py "$dest_dir/src/ui/"
 
+  mkdir -p "$dest_dir/src/realtime"
+  if [ -d "$src_dir/src/realtime" ]; then
+    install -m 644 "$src_dir/src/realtime/"*.py "$dest_dir/src/realtime/" 2>/dev/null || true
+  fi
+
   mkdir -p "$dest_dir/src/memory"
   if [ -d "$src_dir/src/memory" ]; then
     install -m 644 "$src_dir/src/memory/"*.py "$dest_dir/src/memory/" 2>/dev/null || true
@@ -82,15 +153,9 @@ install_app_files() {
 
   install -m 644 "$src_dir/src/icon.png" "$dest_dir/src/icon.png"
 
-  mkdir -p "$dest_dir/src/preview"
-  if [ -d "$src_dir/src/preview" ]; then
-    shopt -s nullglob
-    preview_files=("$src_dir/src/preview/"*.wav)
-    shopt -u nullglob
-    if [ ${#preview_files[@]} -gt 0 ]; then
-      install -m 644 "${preview_files[@]}" "$dest_dir/src/preview/"
-    fi
-  fi
+  copy_optional_wav_dir "preview"
+  copy_optional_wav_dir "gemini_preview"
+  copy_optional_wav_dir "xai_preview"
 
   install -m 644 "$src_dir/requirements.txt" "$dest_dir/requirements.txt"
 }
@@ -98,12 +163,15 @@ install_app_files() {
 install_app_files "$tmp_dir" "$INSTALL_DIR"
 
 log "Creating virtual environment"
-python3 -m venv "$INSTALL_DIR/.venv"
+python3 -m venv --system-site-packages "$INSTALL_DIR/.venv"
 
 log "Installing Python dependencies"
 "$INSTALL_DIR/.venv/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
 "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip
 "$INSTALL_DIR/.venv/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
+"$INSTALL_DIR/.venv/bin/python" -c \
+  'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("GtkSource", "4"); from gi.repository import Gtk, GtkSource' \
+  >/dev/null 2>&1 || fail "The virtual environment could not see the system GTK bindings."
 
 rm -rf "$tmp_dir"
 
