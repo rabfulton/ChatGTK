@@ -14,11 +14,13 @@ These tests verify that the unified tokenization system correctly handles:
 import sys
 import os
 import re
+import pytest
 
 # Ensure project root is on sys.path so we can import the src package
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from src.latex_utils import (
     ProtectedRegions,
@@ -84,7 +86,7 @@ And some text after."""
     def test_display_math_protection(self):
         """Display math ($$...$$) should be protected."""
         regions = ProtectedRegions()
-        text = r"The equation is $$E = mc^2$$ which is famous."
+        text = "The equation is\n$$E = mc^2$$\nwhich is famous."
         
         result = regions.protect_display_math(text)
         
@@ -95,16 +97,40 @@ And some text after."""
         assert '$$E = mc^2$$' in restored
     
     def test_display_math_bracket_notation(self):
-        """Display math with \\[...\\] should be converted to $$...$$."""
+        """Block-isolated \\[...\\] should retain its display delimiters."""
         regions = ProtectedRegions()
-        text = r"The equation is \[E = mc^2\] which is famous."
+        text = "The equation is\n\\[E = mc^2\\]\nwhich is famous."
         
         result = regions.protect_display_math(text)
         
         assert '@@DISPLAYMATH_' in result
         
         restored = regions.restore_all(result)
-        assert '$$E = mc^2$$' in restored
+        assert r'\[E = mc^2\]' in restored
+
+    @pytest.mark.parametrize("delimiters", [("$$", "$$"), (r"\[", r"\]")])
+    def test_display_delimiters_inside_sentence_become_inline(self, delimiters):
+        opening, closing = delimiters
+        regions = ProtectedRegions()
+        text = f"The equation is {opening}E = mc^2{closing} which is famous."
+
+        result = regions.protect_display_math(text)
+
+        assert "@@DISPLAYMATH_" not in result
+        assert regions.restore_all(result) == (
+            "The equation is $E = mc^2$ which is famous."
+        )
+
+    @pytest.mark.parametrize("delimiters", [("$$", "$$"), (r"\[", r"\]")])
+    def test_multiline_display_math_protection(self, delimiters):
+        opening, closing = delimiters
+        regions = ProtectedRegions()
+        text = f"Before\n{opening}\nE = mc^2\n{closing}\nAfter"
+
+        result = regions.protect_display_math(text)
+
+        assert "@@DISPLAYMATH_" in result
+        assert regions.restore_all(result) == text
     
     def test_inline_math_protection(self):
         """Inline math ($...$) should be protected."""
@@ -352,6 +378,19 @@ class TestBoldItalic:
         assert r'\textbf{bold}' in result
         assert r'\textit{italic}' in result
 
+    @pytest.mark.parametrize("text, expected", [
+        ("*x*", r"\textit{x}"),
+        ("*italic* text", r"\textit{italic} text"),
+        ("*italic*\nnext line", "\\textit{italic}\nnext line"),
+        ("*first* and *second*", r"\textit{first} and \textit{second}"),
+        ("* list item", "* list item"),
+        ("* first\n* second", "* first\n* second"),
+        ("* leading space*", "* leading space*"),
+        ("*trailing space *", "*trailing space *"),
+    ])
+    def test_italic_boundaries(self, text, expected):
+        assert process_bold_italic(text) == expected
+
 
 class TestFormatMessageContent:
     """Integration tests for the full message formatting pipeline."""
@@ -417,11 +456,18 @@ x = {"key": "value"}
     
     def test_display_math_preserved(self):
         """Display math should be preserved."""
-        content = r"The equation: $$\sum_{i=1}^n i = \frac{n(n+1)}{2}$$"
+        equation = r"\sum_{i=1}^n i = \frac{n(n+1)}{2}"
+        content = f"The equation:\n$${equation}$$"
         result = format_message_content(content)
         
-        assert '$$' in result
-        assert r'\sum' in result
+        assert f'$${equation}$$' in result
+
+    @pytest.mark.parametrize("delimiters", [("$$", "$$"), (r"\[", r"\]")])
+    def test_embedded_display_math_exported_inline(self, delimiters):
+        opening, closing = delimiters
+        result = format_message_content(f"The equation: {opening}x^2{closing}.")
+
+        assert result == "The equation: $x^2$."
     
     def test_headers_converted(self):
         """Markdown headers should be converted to LaTeX sectioning."""
@@ -645,64 +691,33 @@ class TestTables:
         # Tabular environment exists
         assert r'\begin{tabular}' in result
         # Math should be preserved inside the table
-        assert '$x$' in result or r'x' in result
-        assert '$x^2$' in result or r'x^2' in result
+        assert '$x$' in result
+        assert '$y$' in result
+        assert '$x^2$' in result
+        assert r'\begin{tabular}{lr}' in result
+        assert '@@' not in result
         # No raw table markdown pipes should remain for this block
         assert '| Variable |' not in result
 
+    def test_table_preserves_code_math_and_escaped_text(self):
+        content = r"""| Expression | Description |
+| --- | --- |
+| **$x_1$** | *Input* & 50% |
+| `a_b` | ***Result*** and $x_1^2$ |
+"""
+        result = format_message_content(content)
+
+        assert r'\textbf{$x_1$}' in result
+        assert r'\textit{Input} \& 50\%' in result
+        assert r'\lstinline[style=inlinecode]|a_b|' in result
+        assert r'\textbf{\textit{Result}}' in result
+        assert '$x_1^2$' in result
+        assert '@@' not in result
+
 
 def run_tests():
-    """Run all tests and print results."""
-    import traceback
-    
-    test_classes = [
-        TestProtectedRegions,
-        TestEscaping,
-        TestNewlineInsertion,
-        TestBoldItalic,
-        TestFormatMessageContent,
-        TestEdgeCases,
-    ]
-    
-    total_tests = 0
-    passed_tests = 0
-    failed_tests = []
-    
-    for test_class in test_classes:
-        print(f"\n{'='*60}")
-        print(f"Running {test_class.__name__}")
-        print('='*60)
-        
-        instance = test_class()
-        methods = [m for m in dir(instance) if m.startswith('test_')]
-        
-        for method_name in methods:
-            total_tests += 1
-            method = getattr(instance, method_name)
-            try:
-                method()
-                print(f"  ✓ {method_name}")
-                passed_tests += 1
-            except AssertionError as e:
-                print(f"  ✗ {method_name}: {e}")
-                failed_tests.append((test_class.__name__, method_name, str(e)))
-            except Exception as e:
-                print(f"  ✗ {method_name}: {type(e).__name__}: {e}")
-                traceback.print_exc()
-                failed_tests.append((test_class.__name__, method_name, f"{type(e).__name__}: {e}"))
-    
-    print(f"\n{'='*60}")
-    print(f"Results: {passed_tests}/{total_tests} tests passed")
-    print('='*60)
-    
-    if failed_tests:
-        print("\nFailed tests:")
-        for class_name, method_name, error in failed_tests:
-            print(f"  - {class_name}.{method_name}: {error}")
-        return 1
-    else:
-        print("\nAll tests passed!")
-        return 0
+    """Run the export tests, including parametrized cases, through pytest."""
+    return pytest.main([__file__, "-v"])
 
 
 if __name__ == '__main__':

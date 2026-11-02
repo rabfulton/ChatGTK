@@ -24,6 +24,7 @@ from model_cards import (
     register_card,
     unregister_card,
     clear_custom_cards,
+    resolve_model_id,
 )
 from model_cards.catalog import BUILTIN_CARDS
 from model_cards.overrides import apply_override_to_card
@@ -142,7 +143,8 @@ class TestBuiltinCatalog:
             "gpt-4o-mini",
             "dall-e-3",
             "gemini-2.5-flash",
-            "grok-3",
+            "grok-latest",
+            "grok-4.7",
             "claude-sonnet-4-5",
             "sonar",
         ]
@@ -159,7 +161,7 @@ class TestBuiltinCatalog:
 
     def test_chat_models_have_tool_support(self):
         """Major chat models should have tool_use capability."""
-        chat_models = ["gpt-4o", "gpt-4o-mini", "gemini-2.5-flash", "grok-3", "claude-sonnet-4-5"]
+        chat_models = ["gpt-4o", "gpt-4o-mini", "gemini-2.5-flash", "grok-4.7", "claude-sonnet-4-5"]
         for model_id in chat_models:
             card = BUILTIN_CARDS.get(model_id)
             assert card is not None, f"{model_id} should be in catalog"
@@ -196,6 +198,29 @@ class TestCardLookup:
         """Unknown models return None."""
         card = get_card("unknown-model-xyz-12345")
         assert card is None
+
+    @pytest.mark.parametrize("value, expected", [
+        ("GPT-5.2", "gpt-5.2"),
+        (" gpt-5.2 ", "gpt-5.2"),
+        ("Grok Latest", "grok-latest"),
+        ("SomeServer/CaseSensitiveModel", "SomeServer/CaseSensitiveModel"),
+        ("", ""),
+    ])
+    def test_resolve_model_id_or_display_label(self, value, expected):
+        assert resolve_model_id(value) == expected
+
+    def test_model_resolution_preserves_custom_ids_and_ambiguous_labels(self):
+        custom = {
+            "GPT-5.2": {"display_name": "Private Model"},
+            "Server/CaseSensitive": {"display_name": "Lab Model"},
+            "second-model": {"display_name": "Lab Model"},
+        }
+        assert resolve_model_id("GPT-5.2", custom) == "GPT-5.2"
+        assert resolve_model_id("GpT-5.2", custom) == "GpT-5.2"
+        assert resolve_model_id("Lab Model", custom) == "Lab Model"
+        assert resolve_model_id("", custom) == ""
+        del custom["second-model"]
+        assert resolve_model_id("Lab Model", custom) == "Server/CaseSensitive"
 
     def test_dynamic_gpt_image_model_is_inferred(self):
         """Unknown gpt-image variants synthesize as OpenAI image models."""
@@ -378,14 +403,19 @@ class TestPhase2ProviderIntegration:
         assert card is not None
         assert card.capabilities.web_search is True
 
-    def test_web_search_capability_grok(self):
-        """Grok chat models should have web_search capability."""
-        card = get_card("grok-3")
+    def test_legacy_grok_mini_has_no_server_side_web_search(self):
+        """Legacy Grok-3 Mini has no documented Responses search support."""
+        card = get_card("grok-3-mini")
         assert card is not None
-        assert card.capabilities.web_search is True
+        assert card.capabilities.web_search is False
+        assert card.capabilities.tool_use is True
 
-        card = get_card("grok-2-1212")
+    @pytest.mark.parametrize("model_id", ["grok-latest", "grok-4.3", "grok-4.7"])
+    def test_web_search_capability_grok(self, model_id):
+        """Current Grok models use Responses with server-side search."""
+        card = get_card(model_id)
         assert card is not None
+        assert card.api_family == "responses"
         assert card.capabilities.web_search is True
 
     def test_web_search_capability_gemini(self):

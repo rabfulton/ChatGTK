@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from config import SETTINGS_FILE, SETTINGS_CONFIG
+from model_cards.grok import LEGACY_GROK_MODEL_WHITELIST
 
 # DEFAULT_SETTINGS is computed from SETTINGS_CONFIG
 DEFAULT_SETTINGS = {key: config['default'] for key, config in SETTINGS_CONFIG.items()}
@@ -73,6 +74,17 @@ class SettingsRepository:
         self._migrate_legacy_tts_settings()
         # Apply tool menu migration defaults
         self._migrate_tool_menu_settings()
+        self._migrate_grok_model_defaults()
+
+    def _migrate_grok_model_defaults(self) -> None:
+        """Refresh the old shipped Grok list while preserving custom selections."""
+        key = 'GROK_MODEL_WHITELIST'
+        configured = {
+            model.strip() for model in self._settings[key].split(',')
+            if model.strip()
+        }
+        if configured == set(LEGACY_GROK_MODEL_WHITELIST.split(',')):
+            self._settings[key] = DEFAULT_SETTINGS[key]
     
     def _migrate_legacy_tts_settings(self) -> None:
         """Migrate legacy TTS settings to unified settings."""

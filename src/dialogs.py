@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     import sounddevice as sd  # noqa: F401
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
-from model_cards import get_card, list_cards
+from model_cards import get_card, list_cards, resolve_model_id
 from repositories import ModelCacheRepository, SettingsRepository
 from utils import (
     parse_color_to_rgba,
@@ -1342,6 +1342,9 @@ class SettingsDialog(Gtk.Dialog):
         label.set_hexpand(True)
         self.entry_default_model = Gtk.Entry()
         self.entry_default_model.set_text(self.default_model)
+        self.entry_default_model.set_tooltip_text(
+            "Model ID or known display name, for example gpt-5.2"
+        )
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.entry_default_model, False, True, 0)
         list_box.add(row)
@@ -5560,7 +5563,9 @@ class SettingsDialog(Gtk.Dialog):
             'font_size': int(self.spin_size.get_value()),
             'user_color': self.btn_user_color.get_rgba().to_string(),
             'ai_color': self.btn_ai_color.get_rgba().to_string(),
-            'default_model': self.entry_default_model.get_text(),
+            'default_model': resolve_model_id(
+                self.entry_default_model.get_text(), self.custom_models,
+            ),
             'group_models_by_provider': self.switch_group_models.get_active(),
             'system_message': system_message,
             'system_prompts_json': system_prompts_json,

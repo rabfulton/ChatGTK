@@ -13,6 +13,7 @@ import base64
 import io
 import tempfile
 import subprocess
+from typing import Any
 
 from tools import (
     build_tools_for_provider,
@@ -2431,19 +2432,15 @@ class GrokProvider(AIProvider):
         if not model:
             return False
 
-        model_lower = model.lower()
-        if model_lower in ("grok-3", "grok-3-mini"):
-            return False
-
         # Check model card for web_search capability
         card = get_card(model)
         if card:
-            return card.capabilities.web_search
+            return card.provider == "grok" and card.capabilities.web_search
 
         # Unknown model - default to no web search
         return False
 
-    def _build_responses_input(self, messages):
+    def _build_responses_input(self, messages, model=None, web_search_enabled=None):
         """
         Convert internal message format to Responses API input format for Grok.
 
@@ -2474,17 +2471,20 @@ class GrokProvider(AIProvider):
             # Include assistant messages as regular message content so the model
             # retains conversation context across turns.
             if role == "assistant":
+                grok_meta = (msg.get("provider_meta") or {}).get("grok", {})
+                same_search_policy = (
+                    grok_meta.get("web_search_enabled") == web_search_enabled
+                )
+                if (grok_meta.get("model") == model and same_search_policy
+                        and grok_meta.get("response_output")):
+                    input_items.extend(grok_meta["response_output"])
+                    continue
                 if content_text:
                     input_items.append(
                         {
                             "type": "message",
                             "role": role,
-                            "content": [
-                                {
-                                    "type": "input_text",
-                                    "text": content_text,
-                                }
-                            ],
+                            "content": content_text,
                         }
                     )
                 continue
@@ -2502,7 +2502,7 @@ class GrokProvider(AIProvider):
 
             # Add image attachments (convert to base64 data URL format).
             for img in images:
-                img_data = img.get("data", "")
+                img_data = _get_image_data(img)
                 img_mime = img.get("mime_type", "image/jpeg")
                 if img_data:
                     content_parts.append(
@@ -2600,18 +2600,27 @@ class GrokProvider(AIProvider):
         text_get_handler=None,
         text_edit_handler=None,
         wolfram_handler=None,
+        response_meta=None,
     ) -> str:
         """
         Generate a response using xAI's Responses API for Grok models.
 
-        This path is used primarily to enable web search via the built-in
-        `web_search` and `x_search` tools when the web search toggle is on.
+        Modern chat models use this path with optional web_search/x_search.
+        Complete outputs are retained for subsequent turns and tool rounds.
         """
         if not self.client:
             raise RuntimeError("Grok client not initialized")
 
-        input_items, instructions = self._build_responses_input(messages)
+        search_enabled = bool(
+            web_search_enabled and self._supports_web_search_tool(model)
+        )
+        # Search-state changes start from readable history instead of replaying
+        # opaque reasoning/tool state created under a different permission.
+        input_items, instructions = self._build_responses_input(
+            messages, model, search_enabled,
+        )
 
+        card = get_card(model)
         enabled_tools = build_enabled_tools_from_handlers(
             image_tool_handler,
             music_tool_handler,
@@ -2621,6 +2630,8 @@ class GrokProvider(AIProvider):
             text_edit_handler,
             wolfram_handler,
         )
+        if card and not card.capabilities.tool_use:
+            enabled_tools.clear()
         tools = self._build_responses_tools(enabled_tools, web_search_enabled, model)
 
         params = {
@@ -2628,28 +2639,27 @@ class GrokProvider(AIProvider):
             "input": input_items,
         }
 
+        # xAI rejects tool_choice (including "none") without any tools.
+        # Omitting both fields offers no tools and avoids that validation error.
+        if tools:
+            params["tools"] = tools
+            params["tool_choice"] = "auto"
+
         if instructions:
             params["instructions"] = instructions
 
         if temperature is not None:
             params["temperature"] = float(temperature)
 
-        if max_tokens and max_tokens > 0:
+        if max_tokens and max_tokens > 0 and not (
+            card and card.quirks.get("no_max_output_tokens")
+        ):
             params["max_output_tokens"] = int(max_tokens)
-
-        if tools:
-            params["tools"] = tools
-            params["tool_choice"] = "auto"
 
         print(
             f"[GrokProvider] Calling Responses API with {len(input_items)} input items, "
             f"{len(tools)} tools (web_search_enabled={web_search_enabled})"
         )
-
-        if not enabled_tools:
-            response = self.client.responses.create(**params)
-            text_content, _ = self._extract_responses_output(response)
-            return text_content
 
         tool_context = ToolContext(
             image_handler=image_tool_handler,
@@ -2668,15 +2678,18 @@ class GrokProvider(AIProvider):
         for _ in range(max_tool_rounds):
             response = self.client.responses.create(**{
                 **params,
-                "input": current_input,
+                "input": current_input.copy(),
             })
 
             text_content, function_calls = self._extract_responses_output(response)
+            # Replay complete outputs, including encrypted reasoning and search
+            # items, instead of reconstructing only the function calls.
+            current_input.extend(
+                item.model_dump(exclude_none=True) for item in (response.output or [])
+            )
 
-            if not function_calls:
-                if tool_result_snippets:
-                    return text_content + "\n\n" + "\n\n".join(tool_result_snippets)
-                return text_content
+            if not function_calls or not enabled_tools:
+                break
 
             for fc in function_calls:
                 parsed_args = parse_tool_arguments(fc["arguments"])
@@ -2686,16 +2699,34 @@ class GrokProvider(AIProvider):
                     tool_result_snippets.append(strip_hide_prefix(tool_result))
 
                 current_input.append({
-                    "type": "function_call",
-                    "call_id": fc["call_id"],
-                    "name": fc["name"],
-                    "arguments": fc["arguments"],
-                })
-                current_input.append({
                     "type": "function_call_output",
                     "call_id": fc["call_id"],
                     "output": strip_hide_prefix(tool_result) if tool_result else "",
                 })
+
+        turn_output = current_input[len(input_items):]
+        search_calls = {
+            "web": sum(item.get("type") == "web_search_call" for item in turn_output),
+            "x": sum(
+                item.get("type") == "x_search_call" or (
+                    item.get("type") == "custom_tool_call"
+                    and item.get("name") in {
+                        "x_search", "x_user_search", "x_keyword_search",
+                        "x_semantic_search", "x_thread_fetch",
+                    }
+                ) for item in turn_output
+            ),
+        }
+        print(f"[GrokProvider] New search activity: "
+              f"web={search_calls['web']}, x={search_calls['x']}")
+
+        if response_meta is not None:
+            response_meta["grok"] = {
+                "model": model,
+                "web_search_enabled": search_enabled,
+                "search_calls": search_calls,
+                "response_output": turn_output,
+            }
 
         final_text = text_content if text_content else ""
         if tool_result_snippets:
@@ -2704,50 +2735,62 @@ class GrokProvider(AIProvider):
 
     def get_available_models(self, disable_filter: bool = False):
         """
-        Return Grok models. If the xAI models.list endpoint is available,
-        use it; otherwise, fall back to a small, curated set.
+        Discover model IDs and aliases, falling back to reviewed defaults.
+
+        The server's inventory is authoritative; a static allowlist must not
+        hide new models. Realtime is an app entry and grok-latest is included
+        explicitly for the global endpoint.
         """
+        from model_cards.grok import (
+            GROK_DEFAULT_MODELS, GROK_UNSUPPORTED_MODEL_PREFIXES,
+            register_grok_model_aliases,
+        )
+
+        def collect_ids(payload):
+            if isinstance(payload, dict):
+                entries = payload.get("data") or payload.get("models") or []
+            else:
+                entries = getattr(payload, "data", None)
+                if entries is None:
+                    entries = getattr(payload, "models", None)
+                if entries is None:
+                    entries = payload
+            identifiers = set()
+            for entry in entries:
+                if isinstance(entry, dict):
+                    model_id = entry.get("id")
+                    aliases = entry.get("aliases") or []
+                else:
+                    model_id = getattr(entry, "id", None)
+                    aliases = getattr(entry, "aliases", None) or []
+                for identifier in [model_id, *aliases]:
+                    if isinstance(identifier, str) and identifier.strip():
+                        identifiers.add(identifier.strip())
+            return identifiers
+
+        model_ids = set()
         try:
-            models = self.client.models.list()
-            model_ids = [model.id for model in models]
-            # print(f"[GrokProvider] models returned: {model_ids}")
-
-            # Mock realtime entry (xAI realtime voice currently uses a fixed endpoint
-            # and does not expose a model id in the websocket URL).
-            rt_model_id = "grok-realtime"
-            if rt_model_id not in model_ids:
-                model_ids.append(rt_model_id)
-
-            # Hardcode the primary image model so it's always available for testing,
-            # even if it is not listed by the API.
-            image_model_id = "grok-2-image-1212"
-            if image_model_id not in model_ids:
-                model_ids.append(image_model_id)
-
-            # Allow disabling filtering via parameter or env var.
-            env_val = os.getenv('DISABLE_MODEL_FILTER', '')
-            disable_filter = disable_filter or env_val.strip().lower() in ('true', '1', 'yes')
-            if disable_filter:
-                return sorted(model_ids)
-
-            # Prefer commonly used Grok chat and image models.
-            allowed_models = {
-                "grok-2-1212",
-                "grok-2-vision-1212",
-                "grok-2-image-1212",
-                "grok-3",
-                "grok-3-mini",
-                "grok-4-1-fast-non-reasoning",
-                "grok-4-1-fast-reasoning",
-                "grok-4-fast-non-reasoning",
-                "grok-4-fast-reasoning",
-            }
-            filtered = [m for m in model_ids if m in allowed_models]
-            return sorted(filtered or model_ids)
+            model_ids.update(collect_ids(self.client.models.list()))
         except Exception as exc:
             print(f"Error fetching Grok models: {exc}")
-            # Fallback to a reasonable default set.
-            return sorted(["grok-realtime", "grok-2", "grok-2-mini", "grok-2-image-1212"])
+
+        # The richer endpoint exposes aliases that /models may omit. It can
+        # also recover chat discovery when /models is empty or unavailable.
+        try:
+            metadata = self.client.get("/language-models", cast_to=dict[str, Any])
+            register_grok_model_aliases(metadata)
+            model_ids.update(collect_ids(metadata))
+        except Exception as exc:
+            print(f"Error fetching Grok model aliases: {exc}")
+
+        if not model_ids:
+            print("Grok returned no models; using built-in defaults.")
+            model_ids.update(GROK_DEFAULT_MODELS)
+
+        model_ids.update(("grok-latest", "grok-realtime"))
+        # Keep unsupported video APIs out of the selectable chat/image list.
+        return sorted(model for model in model_ids
+                      if not model.startswith(GROK_UNSUPPORTED_MODEL_PREFIXES))
 
     def generate_chat_completion(
         self,
@@ -2756,7 +2799,6 @@ class GrokProvider(AIProvider):
         temperature=None,
         max_tokens=None,
         chat_id=None,
-        # response_meta kept for interface compatibility; not used by Grok.
         web_search_enabled: bool = False,
         response_meta=None,
         image_tool_handler=None,
@@ -2782,8 +2824,10 @@ class GrokProvider(AIProvider):
         if not self.client:
             raise RuntimeError("Grok client not initialized")
 
-        # Decide whether to route via the Responses API for web search.
-        if web_search_enabled and self._supports_web_search_tool(model):
+        # Modern models use Responses even when search is turned off.
+        if (card and card.api_family == "responses") or (
+            web_search_enabled and self._supports_web_search_tool(model)
+        ):
             return self._generate_with_responses_api(
                 messages=messages,
                 model=model,
@@ -2797,6 +2841,7 @@ class GrokProvider(AIProvider):
                 text_get_handler=text_get_handler,
                 text_edit_handler=text_edit_handler,
                 wolfram_handler=wolfram_handler,
+                response_meta=response_meta,
             )
 
         # Clean messages for the OpenAI-compatible schema; drop provider-specific keys.
@@ -2945,9 +2990,9 @@ class GrokProvider(AIProvider):
             return base_text + "\n\n" + "\n\n".join(tool_result_snippets)
         return base_text
 
-    def generate_image(self, prompt, chat_id, model="grok-2-image", image_data=None, mime_type=None):
+    def generate_image(self, prompt, chat_id, model="grok-imagine-image-2.0", image_data=None, mime_type=None):
         """
-        Generate an image using Grok image models (e.g. grok-2-image-1212).
+        Generate an image using Grok Imagine models.
         Currently supports text → image generation.
         """
         if not self.client:

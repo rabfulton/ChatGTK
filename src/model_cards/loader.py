@@ -37,6 +37,24 @@ def _infer_builtin_like_card(model_id: str) -> Optional[ModelCard]:
             capabilities=Capabilities(text=False, image_gen=True, image_edit=True),
         )
 
+    if model_lower.startswith("grok-imagine-image"):
+        return ModelCard(
+            id=model_id,
+            provider="grok",
+            api_family="images",
+            capabilities=Capabilities(text=False, image_gen=True),
+        )
+
+    # New Grok-4 variants can be discovered before this catalog is updated.
+    # Route chat correctly without assuming tools, vision, or search support.
+    if model_lower.startswith(("grok-4.", "grok-4-")):
+        return ModelCard(
+            id=model_id,
+            provider="grok",
+            api_family="responses",
+            capabilities=Capabilities(text=True),
+        )
+
     return None
 
 
@@ -238,3 +256,31 @@ def list_cards() -> Dict[str, ModelCard]:
 def clear_custom_cards() -> None:
     """Clear all registered custom cards. Useful for testing."""
     _custom_cards.clear()
+
+
+def resolve_model_id(value: str, custom_models: Optional[dict] = None) -> str:
+    """Resolve a known model ID or display label without guessing unknown IDs."""
+    requested = (value or "").strip()
+    if not requested:
+        return requested
+    cards = list_cards()
+    custom_models = custom_models or {}
+    identifiers = set(cards) | set(custom_models)
+    # Exact custom IDs may be case-sensitive and take precedence over labels.
+    if requested in identifiers:
+        return requested
+
+    folded = requested.casefold()
+    matches = {model for model in identifiers if model.casefold() == folded}
+    if matches:
+        return matches.pop() if len(matches) == 1 else requested
+
+    matches = {
+        model for model, card in cards.items()
+        if card.display_name and card.display_name.casefold() == folded
+    }
+    matches.update(
+        model for model, config in custom_models.items()
+        if (config.get("display_name") or "").casefold() == folded
+    )
+    return matches.pop() if len(matches) == 1 else requested

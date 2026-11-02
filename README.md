@@ -48,6 +48,7 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - [Usage](#usage)
 - [Getting API keys](#getting-api-keys)
 - [Custom Models](#custom-models)
+- [Grok Model Discovery and Search](#grok-model-discovery-and-search)
 - [Local Models](#local-models)
 - [Document Mode](#document-mode)
 - [Document Import / Conversion](#document-import--conversion)
@@ -195,6 +196,46 @@ You will need at least one API key for the application to function. Alternativel
   - You can integrate any custom provider that has an OpenAPI compatible endpoint.
   - Keys can be set as environment variables or inside the applications settings.
   - I have tested Openrouter, Mistral, Nvidia Cloud, Groq and Bytedance so far.
+
+## Grok Model Discovery and Search
+
+Grok support was reviewed on November 2, 2026 against xAI's
+[model documentation](https://docs.x.ai/developers/models) and live API results.
+ChatGTK discovers IDs from `/v1/models` and aliases from `/v1/language-models`.
+New models are not restricted by a provider-side allowlist. Use Refresh in the
+Models settings to update a cached listing, then select the models you want.
+
+Defaults include `grok-latest`, Grok 4.3/4.5/4.6/4.7, Imagine image generation,
+and ChatGTK's `grok-realtime` voice entry. Modern chat uses the Responses API
+with optional web/X search. Multi-agent models support server-side search but
+not client-side function tools. Video generation is not implemented.
+
+The catalog describes model capabilities rather than availability. Documented
+[retired models](https://docs.x.ai/developers/migration/may-15-retirement)
+remain as labelled compatibility cards for saved chats. xAI handles redirects;
+ChatGTK does not silently replace your selected model. The old shipped Grok
+whitelist migrates to current defaults while custom selections remain intact.
+
+With `XAI_API_KEY` or `GROK_API_KEY` exported, check your account from the repo:
+
+```sh
+python3 scripts/check_grok.py
+python3 scripts/check_grok.py --search
+python3 scripts/check_grok.py --check-search-toggle
+```
+
+The first command only checks model metadata; the second also performs a small
+billable generation and checks for actual web-search calls. The third makes
+two billable requests to check search on, then off, in the same conversation.
+Disabling search prevents new searches; earlier results remain in readable
+conversation history. The terminal reports fresh web/X search activity for
+each turn, independently of local history/document search tools. Credentials are
+never printed. A metadata 404 alone does not establish that an alias is invalid:
+`grok-latest` was observed to return a metadata 404 while successfully generating
+a searched answer on the global endpoint. It is not served on the
+[US regional endpoint](https://docs.x.ai/developers/advanced-api-usage/regions).
+Responses support requires OpenAI SDK 1.66 or newer; update from `requirements.txt`
+if an older installation lacks `client.responses`.
 
 ## Custom Models
 

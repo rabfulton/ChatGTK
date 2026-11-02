@@ -852,11 +852,14 @@ class ChatController:
         if provider_name == 'gemini':
             return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-3-pro-preview"]
         if provider_name == 'grok':
-            grok_key = (os.environ.get('GROK_API_KEY', '').strip() or self.api_keys.get('grok', '').strip())
-            models = ["grok-2", "grok-2-mini", "grok-2-image-1212"]
-            if grok_key:
-                models.insert(0, "grok-realtime")
-            return models
+            from model_cards.grok import GROK_DEFAULT_MODELS
+            grok_key = (
+                os.environ.get('GROK_API_KEY', '').strip()
+                or os.environ.get('XAI_API_KEY', '').strip()
+                or self.api_keys.get('grok', '').strip()
+            )
+            return [model for model in GROK_DEFAULT_MODELS
+                    if model != 'grok-realtime' or grok_key]
         if provider_name == 'claude':
             return ["claude-sonnet-4-5", "claude-3-5-sonnet-latest"]
         if provider_name == 'perplexity':
@@ -2292,7 +2295,7 @@ class ChatController:
                         kwargs.update(tool_handlers)
                 
                 # Add response_meta for providers that use it
-                if provider_name in ('gemini', 'perplexity', 'claude'):
+                if provider_name in ('gemini', 'perplexity', 'claude', 'grok'):
                     kwargs["response_meta"] = response_meta
                 
                 if is_cancelled():
@@ -2597,6 +2600,7 @@ class ChatController:
 
     def _run_compaction_background(self, history_obj, chat_id):
         """Execute compaction in background thread."""
+        update_scheduled = False
         try:
             from conversation import Message, ProviderMeta
             
@@ -2630,7 +2634,11 @@ class ChatController:
             last_msg = messages_to_compact[-1]
             
             # Summarize
-            model = self._settings_manager.get('DEFAULT_MODEL', 'gpt-4o-mini')
+            from model_cards import resolve_model_id
+            model = resolve_model_id(
+                self._settings_manager.get('DEFAULT_MODEL', 'gpt-4o-mini'),
+                self.custom_models,
+            )
             from config import DEFAULT_COMPACTION_PROMPT
             compaction_prompt = self._settings_manager.get('COMPACTION_PROMPT', DEFAULT_COMPACTION_PROMPT)
             
@@ -2659,7 +2667,6 @@ class ChatController:
             summary = provider.generate_chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
-                temperature=0.3,
                 max_tokens=1000
             )
             duration = (datetime.now() - start_time).total_seconds()
@@ -2700,9 +2707,12 @@ class ChatController:
 
             from gi.repository import GLib
             GLib.idle_add(update_history)
+            update_scheduled = True
 
         except Exception as e:
             print(f"[Compaction] Error: {e}")
             import traceback
             traceback.print_exc()
-            self._compaction_in_progress = False
+        finally:
+            if not update_scheduled:
+                self._compaction_in_progress = False

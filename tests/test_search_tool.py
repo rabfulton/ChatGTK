@@ -128,6 +128,19 @@ class TestToolSpec:
         assert "keyword" in params["properties"]
         assert "source" in params["properties"]
         assert "keyword" in params["required"]
+        assert "source" not in params["required"]
+
+    @pytest.mark.parametrize("provider", [
+        "openai", "grok", "claude", "custom", "gemini",
+    ])
+    def test_search_tool_declaration_requires_keyword(self, provider):
+        from tools import build_tools_for_provider
+
+        declarations = build_tools_for_provider({"search_memory"}, provider)
+        assert len(declarations) == 1
+        declaration = declarations[0].get("function", declarations[0])
+        assert declaration["name"] == "search_memory"
+        assert declaration["parameters"]["required"] == ["keyword"]
 
 
 class TestToolManager:

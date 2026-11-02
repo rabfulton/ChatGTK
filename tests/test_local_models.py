@@ -1,201 +1,118 @@
-"""
-test_local_models.py – Unit tests for the local_models module.
+"""Local servers use saved custom models and the OpenAI-compatible provider."""
 
-Tests cover:
-- LocalModelEntry and LocalModelCapabilities dataclasses
-- LocalModelHealth dataclass
-- JSON serialization/deserialization
-- OllamaBackend message conversion
-"""
-
-import sys
 import os
-
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+import sys
+from unittest.mock import Mock
 
 import pytest
-from unittest.mock import patch, MagicMock
 
-from services.local_models.types import (
-    LocalModelEntry,
-    LocalModelCapabilities,
-    LocalModelHealth,
-)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-
-class TestLocalModelCapabilities:
-    """Tests for the LocalModelCapabilities dataclass."""
-
-    def test_default_capabilities(self):
-        """Default capabilities should all be False."""
-        caps = LocalModelCapabilities()
-        assert caps.tools is False
-        assert caps.vision is False
-        assert caps.audio_in is False
-        assert caps.audio_out is False
-
-    def test_custom_capabilities(self):
-        """Can create capabilities with custom flags."""
-        caps = LocalModelCapabilities(tools=True, vision=True)
-        assert caps.tools is True
-        assert caps.vision is True
-        assert caps.audio_in is False
+import utils
+from ai_providers import CustomProvider
+from config import LOCAL_SERVER_PRESETS
+from model_cards import get_card
+from model_cards import loader, overrides
+from tools import ToolManager
 
 
-class TestLocalModelEntry:
-    """Tests for the LocalModelEntry dataclass."""
-
-    def test_minimal_entry(self):
-        """Can create an entry with required fields."""
-        entry = LocalModelEntry(
-            id="ollama:llama3.2:3b",
-            type="chat",
-            backend="ollama",
-            display_name="Llama 3.2 3B",
-        )
-        assert entry.id == "ollama:llama3.2:3b"
-        assert entry.type == "chat"
-        assert entry.backend == "ollama"
-        assert entry.enabled is True
-        assert entry.config == {}
-
-    def test_entry_with_config(self):
-        """Can create an entry with config dict."""
-        entry = LocalModelEntry(
-            id="ollama:mistral:latest",
-            type="chat",
-            backend="ollama",
-            display_name="Mistral",
-            config={
-                "base_url": "http://localhost:11434",
-                "model": "mistral:latest",
-                "keep_alive": "5m",
-            },
-        )
-        assert entry.config["base_url"] == "http://localhost:11434"
-        assert entry.config["keep_alive"] == "5m"
-
-    def test_from_dict(self):
-        """Can create entry from dictionary."""
-        data = {
-            "id": "ollama:phi3:mini",
-            "type": "chat",
-            "backend": "ollama",
-            "display_name": "Phi-3 Mini",
-            "enabled": True,
-            "config": {"model": "phi3:mini"},
-            "capabilities": {"vision": True},
-        }
-        entry = LocalModelEntry.from_dict(data)
-        assert entry.id == "ollama:phi3:mini"
-        assert entry.display_name == "Phi-3 Mini"
-        assert entry.capabilities.vision is True
-        assert entry.capabilities.tools is False
-
-    def test_from_dict_minimal(self):
-        """from_dict handles missing optional fields."""
-        data = {"id": "test-model"}
-        entry = LocalModelEntry.from_dict(data)
-        assert entry.id == "test-model"
-        assert entry.type == "chat"
-        assert entry.backend == "ollama"
-        assert entry.display_name == "test-model"
-
-    def test_to_dict(self):
-        """Can serialize entry to dictionary."""
-        entry = LocalModelEntry(
-            id="ollama:gemma2:2b",
-            type="chat",
-            backend="ollama",
-            display_name="Gemma 2 2B",
-            enabled=True,
-            config={"model": "gemma2:2b"},
-            capabilities=LocalModelCapabilities(vision=True),
-        )
-        data = entry.to_dict()
-        assert data["id"] == "ollama:gemma2:2b"
-        assert data["display_name"] == "Gemma 2 2B"
-        assert data["capabilities"]["vision"] is True
-        assert data["capabilities"]["tools"] is False
-
-    def test_roundtrip(self):
-        """Entry survives to_dict -> from_dict roundtrip."""
-        original = LocalModelEntry(
-            id="ollama:codellama:7b",
-            type="chat",
-            backend="ollama",
-            display_name="Code Llama 7B",
-            enabled=False,
-            config={"model": "codellama:7b", "threads": 4},
-            capabilities=LocalModelCapabilities(tools=True),
-        )
-        data = original.to_dict()
-        restored = LocalModelEntry.from_dict(data)
-        
-        assert restored.id == original.id
-        assert restored.display_name == original.display_name
-        assert restored.enabled == original.enabled
-        assert restored.config == original.config
-        assert restored.capabilities.tools == original.capabilities.tools
+@pytest.fixture(autouse=True)
+def isolate_model_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "CUSTOM_MODELS_FILE", str(tmp_path / "models.json"))
+    monkeypatch.setattr(overrides, "load_overrides", lambda: {})
+    monkeypatch.setattr(loader, "_custom_cards", {})
 
 
-class TestLocalModelHealth:
-    """Tests for the LocalModelHealth dataclass."""
+@pytest.mark.parametrize("preset_id", ["ollama", "lmstudio", "text-gen-webui"])
+def test_saved_local_model_sends_openai_compatible_chat(preset_id, monkeypatch):
+    preset = LOCAL_SERVER_PRESETS[preset_id]
+    model_id = "local-test-model"
+    server_model = "llama3.2:3b"
+    endpoint = preset["base_url"] + preset["chat_endpoint"]
+    models = {
+        model_id: {
+            "model_id": server_model,
+            "endpoint": endpoint,
+            "api_key": "",
+            "api_type": "chat.completions",
+            "display_name": f"{preset['display_name']}: Llama 3.2 3B",
+        },
+    }
+    utils.save_custom_models(models)
+    saved = utils.load_custom_models()
+    assert saved == models
 
-    def test_healthy(self):
-        """Can create healthy status."""
-        health = LocalModelHealth(ok=True, detail="Connected", latency_ms=50.0)
-        assert health.ok is True
-        assert health.detail == "Connected"
-        assert health.latency_ms == 50.0
+    card = get_card(model_id, saved)
+    assert card.provider == "custom"
+    assert card.api_family == "chat.completions"
+    assert card.base_url == endpoint
+    assert card.display_name == models[model_id]["display_name"]
+    assert ToolManager().get_provider_name_for_model(
+        model_id, custom_models=saved
+    ) == "custom"
 
-    def test_unhealthy(self):
-        """Can create unhealthy status."""
-        health = LocalModelHealth(ok=False, detail="Connection refused")
-        assert health.ok is False
-        assert health.latency_ms == 0.0
+    provider = CustomProvider()
+    config = saved[model_id]
+    provider.initialize(
+        api_key=config["api_key"],
+        endpoint=config["endpoint"],
+        model_id=config["model_id"],
+        api_type=config["api_type"],
+    )
+    response = Mock()
+    response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "Hello!"}}],
+    }
+    post = Mock(return_value=response)
+    monkeypatch.setattr(provider.session, "post", post)
+
+    messages = [
+        {"role": "system", "content": "Be helpful."},
+        {
+            "role": "user",
+            "content": "Hello",
+            "provider_meta": {"internal": True},
+            "model": model_id,
+        },
+    ]
+    result = provider.generate_chat_completion(messages, model=None)
+
+    assert result == "Hello!"
+    post.assert_called_once_with(
+        endpoint,
+        headers={"Content-Type": "application/json"},
+        json={
+            "model": server_model,
+            "messages": [
+                {"role": "system", "content": "Be helpful."},
+                {"role": "user", "content": "Hello"},
+            ],
+        },
+        timeout=60,
+    )
+    response.raise_for_status.assert_called_once()
+    assert messages[1]["provider_meta"] == {"internal": True}
 
 
-class TestOllamaBackendMessageConversion:
-    """Tests for OllamaBackend message format conversion."""
+@pytest.mark.parametrize("api_type, capability", [
+    ("chat.completions", "text"),
+    ("audio.transcriptions", "audio_in"),
+    ("tts", "audio_out"),
+])
+def test_local_model_cards_keep_cloud_features_disabled(api_type, capability):
+    model_id = "local-test-model"
+    card = get_card(model_id, {
+        model_id: {
+            "api_type": api_type,
+            "endpoint": "http://localhost:8080/v1",
+        },
+    })
 
-    def test_convert_simple_messages(self):
-        """Converts simple text messages correctly."""
-        from services.local_models.ollama_backend import OllamaBackend
-        
-        backend = OllamaBackend("http://localhost:11434")
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
-            {"role": "assistant", "content": "Hi there!"},
-        ]
-        
-        converted = backend._convert_messages(messages)
-        
-        assert len(converted) == 3
-        assert converted[0]["role"] == "system"
-        assert converted[0]["content"] == "You are a helpful assistant."
-        assert converted[1]["role"] == "user"
-        assert converted[2]["role"] == "assistant"
-
-    def test_skip_empty_messages(self):
-        """Skips messages with empty content."""
-        from services.local_models.ollama_backend import OllamaBackend
-        
-        backend = OllamaBackend("http://localhost:11434")
-        messages = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": ""},  # Empty
-            {"role": "user", "content": "Are you there?"},
-        ]
-        
-        converted = backend._convert_messages(messages)
-        
-        assert len(converted) == 2
-        assert converted[0]["content"] == "Hello"
-        assert converted[1]["content"] == "Are you there?"
+    assert card.provider == "custom"
+    assert getattr(card.capabilities, capability) is True
+    assert card.capabilities.web_search is False
+    assert card.capabilities.files is False
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    sys.exit(pytest.main([__file__, "-v"]))

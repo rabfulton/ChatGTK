@@ -20,6 +20,7 @@ from .loader import (
     register_card,
     unregister_card,
     clear_custom_cards,
+    resolve_model_id,
 )
 from .overrides import (
     load_overrides,
@@ -39,6 +40,7 @@ __all__ = [
     "register_card",
     "unregister_card",
     "clear_custom_cards",
+    "resolve_model_id",
     "load_overrides",
     "save_overrides",
     "get_override",

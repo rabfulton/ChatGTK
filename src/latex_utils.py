@@ -991,10 +991,10 @@ class ProtectedRegions:
     def protect_display_math(self, text: str) -> str:
         """
         Extract display math ($$...$$ or \\[...\\]) and replace with tokens.
-        Normalizes to $$...$$ format.
+        Preserve block delimiters; normalize embedded expressions to inline math.
         """
         # We only treat display math that is on its own line.
-        # Inline mentions like "use $$ ... $$" are escaped as plain text later.
+        # Expressions embedded in prose are normalized to inline math below.
         lines = text.split('\n')
         result_lines = []
         collecting_dollar = False
@@ -1332,27 +1332,14 @@ class ProtectedRegions:
 
             # Process cell content: allow bold/italic/math tokens, escape text
             def process_cell(content: str) -> str:
-                # Run bold/italic conversion with token-aware escaping
-                # This reuses the same logic as normal text, but is applied
-                # before the table block is tokenized, so later passes won't
-                # touch it again.
                 cell_text = process_bold_italic(content.strip())
-                
-                # Escape LaTeX special characters in the cell content
-                # We need to escape dollar signs and other special chars that aren't
-                # already part of LaTeX commands (like \textbf{})
-                # Split by LaTeX commands to preserve them while escaping plain text
-                token_pattern = r'\\[a-zA-Z]+\*?\{[^}]*\}'
-                parts = re.split(f'({token_pattern})', cell_text)
-                result_parts = []
-                for part in parts:
-                    if re.fullmatch(token_pattern, part):
-                        # This is a LaTeX command (like \textbf{...}) - keep as-is
-                        result_parts.append(part)
-                    else:
-                        # This is plain text - escape it (including dollar signs)
-                        result_parts.append(escape_latex_text_simple(part))
-                return ''.join(result_parts)
+                # Preserve generated commands and existing math/code tokens,
+                # just as we do for headings and ordinary message text.
+                cell_text = self.protect_latex_commands(cell_text)
+                return ''.join(
+                    segment if is_token else escape_latex_text_simple(segment)
+                    for is_token, segment in self.split_by_tokens(cell_text)
+                )
 
             header_tex = ' & '.join(process_cell(c) for c in header_cells) + r' \\ \hline'
             body_rows = []
@@ -1787,14 +1774,13 @@ def process_bold_italic(text: str) -> str:
     # Note: This won't match ***text*** because we already processed those
     text = re.sub(r'\*\*([^*\n]+)\*\*', make_bold, text)
     
-    # Italic: *text* → \textit{text}
-    # Important: Don't match list markers (which are * followed by space at start of line)
-    # List markers: "* " (asterisk + space/tab at start of line)
-    # Italic: "*text*" where text starts with non-whitespace character
-    # Strategy: Simply require that * is followed by non-whitespace
-    # This excludes "* " (list marker) but includes "*text*" (italic)
-    # The pattern [^*\n\s] ensures content starts with non-space, excluding list markers
-    text = re.sub(r'\*([^*\n\s][^*\n]*?)\*(?!\s)', make_italic, text)
+    # Italic delimiters must touch non-whitespace content. Whitespace after
+    # the closing delimiter is valid; whitespace after a list marker is not.
+    text = re.sub(
+        r'(?<!\*)\*([^*\n\s](?:[^*\n]*?[^*\n\s])?)\*(?!\*)',
+        make_italic,
+        text,
+    )
     
     return text
 

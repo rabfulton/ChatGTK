@@ -323,15 +323,19 @@ def process_inline_markup(text, font_size):
 
 def fix_rgb_colors_in_markup(text: str) -> str:
     """
-    Convert any occurrences of 'rgb(R, G, B)' in the string to '#RRGGBB'.
-    This does not attempt to parse attribute names or validate usage,
-    it just replaces the pattern wherever it appears.
+    Convert CSS rgb/rgba colors to Pango-compatible '#RRGGBB' colors.
+
+    GTK themes can return rgba colors, but Pango color attributes reject
+    CSS color functions. Use the RGB channels and discard theme opacity.
+    Replaces colors both on their own and inside markup strings.
     """
     if not text:
         return text
 
-    # Regex to match rgb(...) anywhere in the string
-    pattern = re.compile(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)')
+    pattern = re.compile(
+        r'rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*'
+        r'(?:,\s*\d*\.?\d+\s*)?\)'
+    )
 
     def replacer(match):
         rgb_str = f"rgb({match.group(1)},{match.group(2)},{match.group(3)})"

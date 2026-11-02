@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+from model_cards.grok import GROK_DEFAULT_MODELS
 
 # Base directory of the project source files (location of ChatGTK.py, icon.png, etc.)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -499,7 +500,7 @@ SETTINGS_CONFIG = {
     },
     'GROK_MODEL_WHITELIST': {
         'type': str,
-        'default': 'grok-realtime,grok-2-1212,grok-2-vision-1212,grok-2-image-1212,grok-3,grok-3-mini,grok-4-1-fast-non-reasoning,grok-4-1-fast-reasoning,grok-4-fast-non-reasoning,grok-4-fast-reasoning'
+        'default': ','.join(GROK_DEFAULT_MODELS)
     },
     'CLAUDE_MODEL_WHITELIST': {
         'type': str,

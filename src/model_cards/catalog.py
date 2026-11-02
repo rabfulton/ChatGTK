@@ -6,7 +6,10 @@ OpenAI, Gemini, Grok, Claude, and Perplexity. These serve as the default
 configuration and can be overridden by user-defined custom models.
 """
 
+from dataclasses import replace
+
 from .schema import ModelCard, Capabilities
+from .grok import GROK_CHAT_MODELS, GROK_IMAGE_MODELS, GROK_RETIRED_MODELS
 
 
 BUILTIN_CARDS: dict[str, ModelCard] = {
@@ -1395,3 +1398,69 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
         quirks={"always_web_search": True},
     ),
 }
+
+# Modern Grok chat and search use the Responses API. Do not enable file
+# uploads or image editing until the corresponding provider path supports them.
+for _model_id in GROK_CHAT_MODELS:
+    BUILTIN_CARDS[_model_id] = ModelCard(
+        id=_model_id,
+        provider="grok",
+        display_name="Grok Latest" if _model_id == "grok-latest" else _model_id,
+        api_family="responses",
+        capabilities=Capabilities(
+            text=True, vision=True, tool_use=True, web_search=True,
+        ),
+    )
+
+BUILTIN_CARDS["grok-build-0.1"] = ModelCard(
+    id="grok-build-0.1",
+    provider="grok",
+    display_name="Grok Build 0.1",
+    api_family="responses",
+    capabilities=Capabilities(text=True, vision=True, tool_use=True),
+)
+
+# The multi-agent API supports server-side search but not client-side tools.
+# https://docs.x.ai/developers/model-capabilities/text/multi-agent
+for _model_id in ("grok-4.20-multi-agent-0309", "grok-4.20-multi-agent",
+                  "grok-4.20-multi-agent-latest"):
+    BUILTIN_CARDS[_model_id] = ModelCard(
+        id=_model_id,
+        provider="grok",
+        api_family="responses",
+        capabilities=Capabilities(text=True, vision=True, web_search=True),
+        quirks={"no_max_output_tokens": True},
+    )
+
+for _model_id in GROK_IMAGE_MODELS:
+    BUILTIN_CARDS[_model_id] = ModelCard(
+        id=_model_id,
+        provider="grok",
+        display_name=_model_id,
+        api_family="images",
+        capabilities=Capabilities(text=False, image_gen=True),
+    )
+
+# Legacy cards describe history and explicit user choices, not availability.
+# Earlier models used Live Search, not the current Responses search tools.
+for _model_id in (
+    "grok-2", "grok-2-mini", "grok-2-1212", "grok-2-vision-1212",
+    "grok-2-image-1212", "grok-3-mini",
+):
+    _card = BUILTIN_CARDS[_model_id]
+    BUILTIN_CARDS[_model_id] = replace(
+        _card,
+        display_name=f"{_card.display_name} (legacy)",
+        capabilities=replace(_card.capabilities, web_search=False),
+        quirks={**_card.quirks, "legacy": True},
+    )
+
+for _model_id, _replacement in GROK_RETIRED_MODELS.items():
+    _target = BUILTIN_CARDS[_replacement]
+    BUILTIN_CARDS[_model_id] = replace(
+        _target,
+        id=_model_id,
+        display_name=f"{_model_id} (retired)",
+        capabilities=replace(_target.capabilities),
+        quirks={"deprecated": True, "replacement_model": _replacement},
+    )

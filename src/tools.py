@@ -230,6 +230,7 @@ SEARCH_TOOL_SPEC = ToolSpec(
                 ),
             },
         },
+        "required": ["keyword"],
     },
 )
 
@@ -883,10 +884,11 @@ class ToolManager:
         Return True if the given model should be offered the search/memory tool.
         """
         if not self.search_tool_enabled:
-            print(f"[SearchTool] Tool globally disabled (search_tool_enabled={self.search_tool_enabled})")
+            print(f"[MemorySearchTool] Local history/document search disabled "
+                  f"(search_tool_enabled={self.search_tool_enabled})")
             return False
         supports = self._model_supports_tool_calling(model_name, model_provider_map, custom_models)
-        print(f"[SearchTool] supports_search_tools({model_name}) = {supports}")
+        print(f"[MemorySearchTool] supports_search_tools({model_name}) = {supports}")
         return supports
 
     def supports_text_edit_tools(
@@ -932,7 +934,7 @@ class ToolManager:
         if self.supports_text_edit_tools(model_name, model_provider_map, custom_models):
             enabled.add("text_get")
             enabled.add("apply_text_edit")
-        print(f"[ToolManager] get_enabled_tools_for_model({model_name}) = {enabled}")
+        print(f"[ToolManager] Local function tools for {model_name}: {enabled}")
         return enabled
 
     def build_tool_context(
