@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
 from .base import Repository
+from .file_utils import atomic_write_json
 from .history_index import load_history_index, save_history_index, HISTORY_INDEX_FILENAME
 from conversation import ConversationHistory, Message
 from config import HISTORY_DIR
@@ -155,8 +156,7 @@ class ChatHistoryRepository(Repository[ConversationHistory]):
             if meta:
                 data['metadata'] = meta
             
-            with open(chat_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            atomic_write_json(chat_path, data, ensure_ascii=False)
 
             # Update history index for fast listing
             self._update_history_index(

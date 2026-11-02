@@ -5,6 +5,7 @@ Repository for managing projects (separate history folders).
 import os
 import json
 import shutil
+import re
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from datetime import datetime
 
 from config import PARENT_DIR
 from .history_index import load_history_index, save_history_index
+from .file_utils import atomic_write_json
 
 
 PROJECTS_FILE = os.path.join(PARENT_DIR, "projects.json")
@@ -38,6 +40,7 @@ class ProjectsRepository:
     
     def __init__(self):
         self._projects: Dict[str, Project] = {}
+        self._unsafe_projects = []
         self._load()
     
     def _load(self) -> None:
@@ -48,16 +51,22 @@ class ProjectsRepository:
                     data = json.load(f)
                 for p in data.get('projects', []):
                     proj = Project.from_dict(p)
+                    try:
+                        self.get_history_dir(proj.id)
+                    except ValueError:
+                        print(f"Ignoring unsafe project ID: {proj.id!r}")
+                        self._unsafe_projects.append(p)
+                        continue
                     self._projects[proj.id] = proj
             except (json.JSONDecodeError, IOError):
                 pass
     
     def _save(self) -> None:
         """Save projects to disk."""
-        data = {'projects': [p.to_dict() for p in self._projects.values()]}
+        data = {'projects': [p.to_dict() for p in self._projects.values()]
+                + self._unsafe_projects}
         os.makedirs(os.path.dirname(PROJECTS_FILE), exist_ok=True)
-        with open(PROJECTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+        atomic_write_json(PROJECTS_FILE, data)
     
     def get(self, project_id: str) -> Optional[Project]:
         """Get a project by ID."""
@@ -70,10 +79,15 @@ class ProjectsRepository:
     def create(self, name: str) -> Project:
         """Create a new project."""
         # Generate ID from name
-        project_id = name.lower().replace(' ', '_')
+        name = name.strip()
+        if not name:
+            raise ValueError("Project name cannot be empty")
+        project_id = re.sub(r'[^\w-]+', '_', name.lower()).strip('_') or 'project'
         base_id = project_id
         counter = 1
-        while project_id in self._projects:
+        while (project_id in self._projects
+               or (Path(PROJECTS_DIR) / project_id).exists()
+               or (Path(PROJECTS_DIR) / project_id).is_symlink()):
             project_id = f"{base_id}_{counter}"
             counter += 1
         
@@ -109,12 +123,26 @@ class ProjectsRepository:
         return True
     
     def get_history_dir(self, project_id: str) -> str:
-        """Get the history directory for a project."""
-        return os.path.join(PROJECTS_DIR, project_id, "history")
+        """Get a project history path contained within the project storage root."""
+        if (not isinstance(project_id, str) or not project_id
+                or project_id in ('.', '..')
+                or '/' in project_id or '\\' in project_id
+                or any(ord(char) < 32 for char in project_id)):
+            raise ValueError("Invalid project ID")
+        root = Path(PROJECTS_DIR).resolve()
+        project = root / project_id
+        history = project / 'history'
+        if (project.is_symlink() or history.is_symlink()
+                or project.resolve().parent != root
+                or history.resolve().parent != project.resolve()):
+            raise ValueError("Project history must stay inside its own directory")
+        return str(history)
     
     def copy_chat_to_project(self, chat_id: str, source_dir: str, project_id: str) -> bool:
         """Copy a chat and its associated files to a project."""
         dest_dir = self.get_history_dir(project_id)
+        if Path(source_dir).resolve() == Path(dest_dir).resolve():
+            return True
         os.makedirs(dest_dir, exist_ok=True)
         
         # Copy chat JSON file
@@ -147,6 +175,8 @@ class ProjectsRepository:
         else:
             dest_dir = HISTORY_DIR
         
+        if Path(source_dir).resolve() == Path(dest_dir).resolve():
+            return True
         os.makedirs(dest_dir, exist_ok=True)
         
         # Normalize chat_id

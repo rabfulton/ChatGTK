@@ -6,28 +6,56 @@ from utils import rgb_to_hex  # Add this import
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango
 
+def _protect_inline_code(text):
+    """Mask code spans before processing Markdown outside them."""
+    prefix = "\ue000"
+    while prefix in text:
+        prefix += "\ue000"
+    protected = {}
+    pattern = r'(?<!`)(`+)(?!`)([^\n]+?)(?<!`)\1(?!`)'
+
+    def replace(match):
+        token = f"{prefix}{len(protected)}\ue001"
+        protected[token] = (match.group(0), match.group(2))
+        return token
+
+    return re.sub(pattern, replace, text), protected
+
+
+def _map_fenced_blocks(text, format_plain):
+    """Process prose separately from fenced code, preserving code contents."""
+    opening = re.compile(r'(?m)^[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?\n')
+    parts = []
+    position = 0
+    while True:
+        match = opening.search(text, position)
+        if not match:
+            parts.append(format_plain(text[position:]))
+            break
+        parts.append(format_plain(text[position:match.start()]))
+        fence = match.group(1)
+        closing = re.compile(
+            r'(?m)^[ \t]*' + re.escape(fence[0]) + '{' + str(len(fence))
+            + r',}[ \t]*(?:\r?\n|$)'
+        ).search(text, match.end())
+        end = closing.start() if closing else len(text)
+        code = text[match.end():end]
+        info = match.group(2).strip().split()
+        language = info[0] if info else "plaintext"
+        if not re.fullmatch(r'[\w.+#-]+', language):
+            language = "plaintext"
+        # Delimiter newlines are separate from the literal code contents.
+        parts.append(f"--- Code Block Start ({language}) ---\n"
+                     f"{code}\n--- Code Block End ---")
+        if closing and closing.group(0).endswith("\n"):
+            parts.append("\n")
+        position = closing.end() if closing else len(text)
+    return ''.join(parts)
+
+
 def format_code_blocks(text):
-    """Format code blocks with language markers."""
-    # Updated pattern to capture optional language and content more precisely
-    pattern = r'```(\w+)?\s*(.*?)```'
-    
-    def replacer(match):
-        # If the user provided a language after the triple backticks, group(1) will have it
-        code_lang = match.group(1) or "plaintext"
-        code_content = match.group(2).strip()
-        
-        # Add markers with clear separation and ensure they're on their own lines
-        result = (
-            "--- Code Block Start (" + code_lang + ") ---\n" +
-            code_content +
-            "\n--- Code Block End ---"
-        )
-        return result
-    
-    # Replace all code blocks in the text
-    processed = re.sub(pattern, replacer, text, flags=re.DOTALL)
-    
-    return processed
+    """Wrap fenced code in renderer markers without modifying its contents."""
+    return _map_fenced_blocks(text, lambda plain: plain)
 
 def _is_table_header(line):
     """Return True if line looks like a markdown table header."""
@@ -134,23 +162,18 @@ def escape_for_pango_markup(text):
     return GLib.markup_escape_text(text)
 
 def format_response(text):
-    """Apply all formatting to a response."""
-    # Unescape literal \$ so currency renders correctly (avoid math delimiters).
-    text = text.replace(r"\$", "$")
+    """Apply block formatting outside fenced code and inline code spans."""
+    def format_plain(plain):
+        masked, protected = _protect_inline_code(plain)
+        masked = masked.replace(r"\$", "$")
+        masked = format_bullet_points(masked)
+        masked = format_horizontal_lines(masked)
+        masked = format_tables(masked)
+        for token, (original, _) in protected.items():
+            masked = masked.replace(token, original)
+        return masked
 
-    # Format bullet points first
-    text = format_bullet_points(text)
-
-    # Format horizontal lines
-    text = format_horizontal_lines(text)
-
-    # Format code blocks
-    text = format_code_blocks(text)
-
-    # Format tables
-    text = format_tables(text)
-
-    return text
+    return _map_fenced_blocks(text, format_plain)
 
 def format_headers(text):
     """Format markdown headers with appropriate styling."""
@@ -191,7 +214,7 @@ def _linkify(text: str) -> str:
         return text
 
     # 0) Grok-style footnote links: [[number]](https://example.com) -> [number] as clickable link
-    grok_footnote_pattern = re.compile(r'\[\[(\d+)\]\]\((https?://[^\s)]+)\)')
+    grok_footnote_pattern = re.compile(r'\[\[(\d+)\]\]\((https?://[^\s)\uE000]+)\)')
 
     def _grok_repl(match):
         footnote_num = match.group(1)
@@ -201,7 +224,7 @@ def _linkify(text: str) -> str:
     text = grok_footnote_pattern.sub(_grok_repl, text)
 
     # 1) Standard markdown links: [label](https://example.com) or [label](#anchor)
-    md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+|#[^\s)]+)\)')
+    md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\s)\uE000]+|#[^\s)\uE000]+)\)')
 
     def _md_repl(match):
         label = match.group(1)
@@ -215,7 +238,7 @@ def _linkify(text: str) -> str:
     # patterns like `https://example.com)[[2]](https://...)` do not get merged
     # into a single long link. Trailing punctuation is trimmed in the
     # replacement step.
-    url_pattern = re.compile(r'(?<!href=")(https?://[^\s<\[]+)')
+    url_pattern = re.compile(r'(?<!href=")(https?://[^\s<\[\uE000]+)')
 
     def _url_repl(match):
         url = match.group(1)
@@ -234,46 +257,35 @@ def _linkify(text: str) -> str:
     return text
 
 
+def _render_inline_markup(text, background, foreground):
+    """Format prose first and restore escaped code after all Markdown passes."""
+    masked, protected = _protect_inline_code(text)
+    masked = re.sub(r'\n?<audio_file>.*?</audio_file>', '', masked)
+    masked = escape_for_pango_markup(masked)
+    masked = _linkify(masked)
+    masked = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', masked)
+    masked = convert_single_asterisks_to_italic(masked)
+    masked = format_headers(masked)
+    for token, (_, code) in protected.items():
+        markup = (
+            f'<span font_family="monospace" background="{background}" '
+            f'foreground="{foreground}">{escape_for_pango_markup(code)}</span>'
+        )
+        masked = masked.replace(token, markup)
+    return masked
+
+
 def process_text_formatting(text, font_size):
-    """Process all inline text formatting (bold, italic, etc.)."""
-    # First, escape any existing markup
-    text = escape_for_pango_markup(text)
-
-    # Turn markdown links and bare URLs into clickable <a href="..."> tags.
-    text = _linkify(text)
-
-    # Handle code within bold text
-    pattern0 = r'\*\*`([^`]+)`\*\*'
-    text = re.sub(pattern0, r'<b><span font_family="monospace" background="#404040" foreground="#ffffff">\1</span></b>', text)
-
-    # Handle all bold text (allow single asterisks inside for nested italic)
-    pattern1 = r'\*\*(.+?)\*\*'
-    text = re.sub(pattern1, r'<b>\1</b>', text)
-
-    # Apply other formatting and normalize line breaks.
-    text = convert_single_asterisks_to_italic(text)
-    text = format_headers(text)
-    return text
+    """Format text and literal inline code beside rendered math/images."""
+    return _render_inline_markup(text, "#404040", "#ffffff")
 
 def process_inline_markup(text, font_size):
-    """Process text for inline code and other markup."""
-    # First, remove audio tags from display but keep the text content
-    text = re.sub(r'\n?<audio_file>.*?</audio_file>', '', text)
-
-    # First, escape any existing markup
-    text = escape_for_pango_markup(text)
-
-    # Turn markdown links and bare URLs into clickable <a href="..."> tags.
-    text = _linkify(text)
-    
-    # Get theme colors for code blocks
+    """Format prose and literal inline code using the current theme."""
     label = Gtk.Label()
     context = label.get_style_context()
     context.add_class('selection')
-    
-    bg_color = "#404040"  # Fallback dark gray
-    fg_color = "#ffffff"  # Fallback white
-    
+    bg_color = "#404040"
+    fg_color = "#ffffff"
     try:
         provider = Gtk.CssProvider()
         provider.load_from_data(b"""
@@ -283,43 +295,15 @@ def process_inline_markup(text, font_size):
             }
         """)
         context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        
-        # Get colors directly from context properties
-        bg_color = context.get_property('background-color', Gtk.StateFlags.SELECTED).to_string()
-        fg_color = context.get_property('color', Gtk.StateFlags.SELECTED).to_string()
-        bg_color = fix_rgb_colors_in_markup(bg_color)
-        fg_color = fix_rgb_colors_in_markup(fg_color)
-    except Exception as e:
-        print(f"Error getting theme colors: {e}")
-    
-    # Handle bold text with code inside - use theme colors
-    pattern0 = r'\*\*`([^`]+)`\*\*'
-    text = re.sub(pattern0, lambda m: f'<b><span font_family="monospace" background="{bg_color}" foreground="{fg_color}">{m.group(1)}</span></b>', text)
-    
-    # Handle remaining bold text (allow single asterisks inside for nested italic)
-    pattern1 = r'\*\*(.+?)\*\*'
-    text = re.sub(pattern1, r'<b>\1</b>', text)
-    
-    # Handle remaining inline code
-    parts = re.split(r'(`[^`]+`)', text)
-    processed_parts = []
-    
-    for part in parts:
-        if part.startswith("`") and part.endswith("`"):
-            code_content = part[1:-1]
-            processed_parts.append(
-                f'<span font_family="monospace" background="{bg_color}" foreground="{fg_color}">{code_content}</span>'
-            )
-        else:
-            processed_parts.append(part)
-    
-    # Apply remaining formatting
-    text = "".join(processed_parts)
-    text = convert_single_asterisks_to_italic(text)
-    text = format_headers(text)
-    #text = normalize_line_breaks(text)
-    
-    return text
+        bg_color = fix_rgb_colors_in_markup(
+            context.get_property('background-color', Gtk.StateFlags.SELECTED).to_string()
+        )
+        fg_color = fix_rgb_colors_in_markup(
+            context.get_property('color', Gtk.StateFlags.SELECTED).to_string()
+        )
+    except Exception as error:
+        print(f"Error getting theme colors: {error}")
+    return _render_inline_markup(text, bg_color, fg_color)
 
 def fix_rgb_colors_in_markup(text: str) -> str:
     """

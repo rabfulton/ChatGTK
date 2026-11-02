@@ -2973,8 +2973,7 @@ class SettingsDialog(Gtk.Dialog):
             info_label.set_line_wrap(True)
             vbox.pack_start(info_label, False, False, 0)
             list_box.add(row)
-            self.stack.add_named(scroll, "Memory")
-            return
+            return scroll
         
         # --- Enable Memory ---
         header_row = Gtk.ListBoxRow()

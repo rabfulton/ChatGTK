@@ -3,6 +3,7 @@ Repository for managing document persistence.
 """
 
 import json
+from .file_utils import atomic_write_json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -127,8 +128,7 @@ class DocumentRepository(Repository[Document]):
         """Save a document, returns the document ID."""
         doc.updated_at = datetime.now()
         path = self._get_path(doc.id)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(doc.to_dict(), f, indent=2)
+        atomic_write_json(path, doc.to_dict())
         self._update_history_index(doc, path)
         return doc.id
     

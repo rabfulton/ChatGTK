@@ -138,6 +138,10 @@ Optionally run the install script to add a desktop entry and set up the environm
 
 ## Usage
 
+Switching chats or projects discards pending responses and compaction results
+from the previous conversation. Requests already sent to an API may still
+finish remotely.
+
 The application looks for the following environment variables:
 
 - `OPENAI_API_KEY` (Currently required for some audio functions)

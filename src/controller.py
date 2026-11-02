@@ -19,6 +19,8 @@ import subprocess
 import tempfile
 import re
 import hashlib
+import threading
+from copy import deepcopy
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
@@ -69,6 +71,15 @@ class TextTarget:
     path: Optional[str] = None  # File path for undo persistence
 
 
+@dataclass(frozen=True)
+class ChatContext:
+    """Identity of a conversation and its storage when work is started."""
+    history: List[Dict[str, Any]]
+    repository: ChatHistoryRepository
+    message_count: int
+    last_message: Optional[Dict[str, Any]]
+
+
 class ChatController:
     """
     Manages application state and business logic for the chat client.
@@ -101,6 +112,8 @@ class ChatController:
         settings_manager : Optional[SettingsManager]
             Settings manager instance. If None, creates a new one.
         """
+        self._chat_state_lock = threading.RLock()
+        self._active_request_token = None
         # Initialize repositories
         self._settings_repo = settings_repo or SettingsRepository()
         if api_keys_repo is None:
@@ -467,7 +480,7 @@ class ChatController:
             self._suppress_text_edit_logging = False
         return True, "Undo applied."
 
-    def add_to_memory(self, text: str, role: str) -> None:
+    def add_to_memory(self, text: str, role: str, conversation_id: str = None) -> None:
         """Add a message to memory if enabled."""
         if not self._memory_service:
             return
@@ -484,7 +497,7 @@ class ChatController:
             self._memory_service.add_memory(
                 text=text,
                 role=role,
-                conversation_id=self.current_chat_id or 'unsaved',
+                conversation_id=conversation_id or self.current_chat_id or 'unsaved',
             )
         except Exception as e:
             print(f"[Memory] Failed to add memory: {e}")
@@ -587,7 +600,13 @@ class ChatController:
         current_project = self._settings_manager.get('CURRENT_PROJECT', '')
         
         if current_project:
-            history_dir = self._projects_repo.get_history_dir(current_project)
+            try:
+                history_dir = self._projects_repo.get_history_dir(current_project)
+            except ValueError:
+                # An unsafe ID in an older settings file must never redirect
+                # history access outside the project storage root.
+                self._settings_manager.set('CURRENT_PROJECT', '')
+                history_dir = HISTORY_DIR
         else:
             history_dir = HISTORY_DIR
         
@@ -609,31 +628,34 @@ class ChatController:
 
     def switch_project(self, project_id: str) -> None:
         """Switch to a different project.
-        
+
         Parameters
         ----------
         project_id : str
             The project ID to switch to, or empty string for default history.
         """
-        # Save current project setting
-        self._settings_manager.set('CURRENT_PROJECT', project_id)
-        self._settings_manager.save()
-        
-        # Reinitialize history repository
-        self._init_history_repo_for_project()
-        
-        # Clear current chat state
-        self.current_chat_id = None
-        self.conversation_history = [
-            create_system_message(self.system_message)
-        ]
-        
-        # Emit event for UI refresh
-        self._event_bus.publish(Event(
-            type=EventType.CHAT_CREATED,
-            data={'chat_id': '', 'project_switched': True},
-            source='controller'
-        ))
+        with self._chat_state_lock:
+            if project_id:
+                self._projects_repo.get_history_dir(project_id)
+            # Save current project setting
+            self._settings_manager.set('CURRENT_PROJECT', project_id)
+            self._settings_manager.save()
+
+            # Reinitialize history repository
+            self._init_history_repo_for_project()
+
+            # Clear current chat state
+            self.current_chat_id = None
+            self.conversation_history = [
+                create_system_message(self.system_message)
+            ]
+
+            # Emit event for UI refresh
+            self._event_bus.publish(Event(
+                type=EventType.CHAT_CREATED,
+                data={'chat_id': '', 'project_switched': True},
+                source='controller'
+            ))
 
     def get_current_project(self) -> Optional[str]:
         """Get the current project ID (empty string for default)."""
@@ -872,17 +894,18 @@ class ChatController:
 
     def new_chat(self, system_message: Optional[str] = None) -> None:
         """Reset the conversation for a new chat."""
-        self.current_chat_id = None
-        msg = system_message if system_message is not None else self.system_message
-        self.conversation_history = [create_system_message(msg)]
-        self.current_chat_metadata = {}
-        self._pending_text_edit_events = []
-        self._text_edit_history_by_message = {}
-        self._event_bus.publish(Event(
-            type=EventType.CHAT_CREATED,
-            data={'system_message': msg},
-            source='controller'
-        ))
+        with self._chat_state_lock:
+            self.current_chat_id = None
+            msg = system_message if system_message is not None else self.system_message
+            self.conversation_history = [create_system_message(msg)]
+            self.current_chat_metadata = {}
+            self._pending_text_edit_events = []
+            self._text_edit_history_by_message = {}
+            self._event_bus.publish(Event(
+                type=EventType.CHAT_CREATED,
+                data={'system_message': msg},
+                source='controller'
+            ))
 
     def update_system_message(self, content: str) -> None:
         """Update the system message in the current conversation."""
@@ -1097,58 +1120,60 @@ class ChatController:
     def load_chat(self, chat_id: str) -> bool:
         """
         Load a chat from disk by its ID (filename without .json).
-        
+
         Returns True if successful, False otherwise.
         """
-        try:
-            # Use chat service to load chat
-            conv_history = self._chat_service.load_chat(chat_id)
-            if conv_history:
-                self.conversation_history = conv_history.to_list()
-                self.current_chat_id = chat_id
-                self.current_chat_metadata = conv_history.metadata or {}
-                self._text_edit_history_by_message = {}
-                for idx, message in enumerate(self.conversation_history):
-                    events = message.get("text_edit_events")
-                    if events:
-                        self._text_edit_history_by_message[idx] = list(events)
-                return True
-        except Exception as e:
-            print(f"Error loading chat {chat_id}: {e}")
-        return False
+        with self._chat_state_lock:
+            try:
+                # Use chat service to load chat
+                conv_history = self._chat_service.load_chat(chat_id)
+                if conv_history:
+                    self.conversation_history = conv_history.to_list()
+                    self.current_chat_id = chat_id
+                    self.current_chat_metadata = conv_history.metadata or {}
+                    self._text_edit_history_by_message = {}
+                    for idx, message in enumerate(self.conversation_history):
+                        events = message.get("text_edit_events")
+                        if events:
+                            self._text_edit_history_by_message[idx] = list(events)
+                    return True
+            except Exception as e:
+                print(f"Error loading chat {chat_id}: {e}")
+            return False
 
     def save_current_chat(self, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """
         Save the current conversation history.
-        
+
         If this is a new chat, generates a name based on the first user message.
         Returns the chat_id (filename) or None on error.
         """
-        if not self.conversation_history:
-            return None
-        
-        try:
-            # Use existing ID or generate new one
-            chat_id = self.current_chat_id
-            if not chat_id:
-                # Generate a temporary ID that will be replaced by service
-                from datetime import datetime
-                chat_id = f"new_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            # Convert to ConversationHistory and save via service
-            merged_metadata = dict(self.current_chat_metadata)
-            if metadata:
-                merged_metadata.update(metadata)
-            conv_history = ConversationHistory.from_list(self.conversation_history, metadata=merged_metadata)
-            actual_chat_id = self._chat_service.save_chat(chat_id, conv_history)
-            self.current_chat_id = actual_chat_id
-            self.current_chat_metadata = merged_metadata
-            return actual_chat_id
-        except Exception as e:
-            print(f"Error saving chat: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+        with self._chat_state_lock:
+            if not self.conversation_history:
+                return None
+
+            try:
+                # Use existing ID or generate new one
+                chat_id = self.current_chat_id
+                if not chat_id:
+                    # Generate a temporary ID that will be replaced by service
+                    from datetime import datetime
+                    chat_id = f"new_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+                # Convert to ConversationHistory and save via service
+                merged_metadata = dict(self.current_chat_metadata)
+                if metadata:
+                    merged_metadata.update(metadata)
+                conv_history = ConversationHistory.from_list(self.conversation_history, metadata=merged_metadata)
+                actual_chat_id = self._chat_service.save_chat(chat_id, conv_history)
+                self.current_chat_id = actual_chat_id
+                self.current_chat_metadata = merged_metadata
+                return actual_chat_id
+            except Exception as e:
+                print(f"Error saving chat: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
 
     def list_chats(self) -> List[Dict[str, Any]]:
         """List all available chats via service."""
@@ -2050,7 +2075,7 @@ class ChatController:
     ) -> int:
         """
         Add a user message to the conversation history.
-        
+
         Parameters
         ----------
         content : str
@@ -2061,37 +2086,38 @@ class ChatController:
             List of file attachments.
         display_content : Optional[str]
             Alternative content for display (e.g., with attachment info).
-            
+
         Returns
         -------
         int
             The index of the added message.
         """
-        msg = self.prepare_message(content, images, files)
-        if display_content and display_content != content:
-            msg["display_content"] = display_content
-        msg_index = len(self.conversation_history)
-        self.conversation_history.append(msg)
-        
-        # Auto-assign chat ID on first user message
-        if self.current_chat_id is None and msg_index == 1:
-            from utils import generate_chat_name
-            self.current_chat_id = generate_chat_name(content)
-        
-        self._event_bus.publish(Event(
-            type=EventType.MESSAGE_SENT,
-            data={
-                'content': display_content or content,
-                'index': msg_index,
-                'role': 'user'
-            },
-            source='controller'
-        ))
-        
-        # Add to memory if enabled
-        self.add_to_memory(content, 'user')
-        
-        return msg_index
+        with self._chat_state_lock:
+            msg = self.prepare_message(content, images, files)
+            if display_content and display_content != content:
+                msg["display_content"] = display_content
+            msg_index = len(self.conversation_history)
+            self.conversation_history.append(msg)
+
+            # Auto-assign chat ID on first user message
+            if self.current_chat_id is None and msg_index == 1:
+                from utils import generate_chat_name
+                self.current_chat_id = generate_chat_name(content)
+
+            self._event_bus.publish(Event(
+                type=EventType.MESSAGE_SENT,
+                data={
+                    'content': display_content or content,
+                    'index': msg_index,
+                    'role': 'user'
+                },
+                source='controller'
+            ))
+
+            # Add to memory if enabled
+            self.add_to_memory(content, 'user')
+
+            return msg_index
 
     def add_assistant_message(self, content: str) -> int:
         """
@@ -2174,24 +2200,45 @@ class ChatController:
     # Message sending (main API call flow)
     # -----------------------------------------------------------------------
 
+    def capture_chat_context(self) -> ChatContext:
+        """Capture conversation identity before starting background work."""
+        with self._chat_state_lock:
+            history = self.conversation_history
+            return ChatContext(
+                history, self._chat_history_repo, len(history),
+                history[-1] if history else None,
+            )
+
+    def is_chat_context_current(self, context: ChatContext) -> bool:
+        """Return whether work still belongs to the open conversation."""
+        with self._chat_state_lock:
+            return (self.conversation_history is context.history
+                    and self._chat_history_repo is context.repository)
+
+    def _request_is_current(self, context, token) -> bool:
+        with self._chat_state_lock:
+            return (self.is_chat_context_current(context)
+                    and self._active_request_token is token)
+
     def send_message(
         self,
         model: str,
         tool_handlers: Optional[Dict[str, Callable]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        chat_context: Optional[ChatContext] = None,
     ) -> None:
         """
         Send the last user message to the AI and emit response via events.
-        
+
         This is the main entry point for AI requests. It handles:
         - Provider selection and initialization
         - Image model routing
         - Message preparation
         - Tool handler wiring
         - Response processing
-        
+
         Results are emitted via MESSAGE_RECEIVED or ERROR_OCCURRED events.
-        
+
         Parameters
         ----------
         model : str
@@ -2203,41 +2250,73 @@ class ChatController:
         """
         from model_cards import get_card
         from markup_utils import format_response
-        
+
+        context = chat_context or self.capture_chat_context()
+        token = object()
+        completed = False
+        with self._chat_state_lock:
+            if (not self.is_chat_context_current(context)
+                    or len(context.history) != context.message_count
+                    or not context.history
+                    or context.history[-1] is not context.last_message):
+                return
+            self._active_request_token = token
+            request_chat_id = self.current_chat_id
+
+        def owns_request():
+            return self._request_is_current(context, token)
+
         def is_cancelled():
-            return cancel_check() if cancel_check else False
-        
+            with self._chat_state_lock:
+                return (not owns_request()
+                        or (cancel_check() if cancel_check else False)
+                        or len(context.history) != context.message_count
+                        or context.history[-1] is not context.last_message)
+
+        def guard_handler(handler):
+            def guarded(*args, **kwargs):
+                if is_cancelled():
+                    return "Error: the originating chat request is no longer active."
+                return handler(*args, **kwargs)
+            return guarded
+
+        if tool_handlers:
+            tool_handlers = {
+                name: guard_handler(handler) if callable(handler) else handler
+                for name, handler in tool_handlers.items()
+            }
+
         try:
             # Emit thinking started
             self._event_bus.publish(Event(
                 type=EventType.THINKING_STARTED,
-                data={'model': model},
+                data={'model': model, 'is_current': owns_request},
                 source='controller'
             ))
-            
+
             if is_cancelled():
                 return
-            
+
             # Ensure valid model
             if not model:
                 model = "gpt-3.5-turbo"
-            
+
             provider_name = self.get_provider_name_for_model(model)
-            
+
             if is_cancelled():
                 return
-            
+
             # Get or initialize provider
             provider = self._get_or_init_provider(model, provider_name)
-            
-            last_msg = self.conversation_history[-1]
+
+            last_msg = context.last_message
             prompt = last_msg.get("content", "")
             has_attached_images = bool(last_msg.get("images"))
-            
+
             # Check for image model
             card = get_card(model, self.custom_models)
             is_image_model = card and card.capabilities.image_gen and not card.capabilities.text
-            
+
             if is_image_model:
                 image_kwargs = {}
                 if has_attached_images:
@@ -2261,7 +2340,7 @@ class ChatController:
                     model=model,
                     provider=provider,
                     provider_name=provider_name,
-                    chat_id=self.current_chat_id or "temp",
+                    chat_id=request_chat_id or "temp",
                     **image_kwargs,
                 )
                 assistant_provider_meta = None
@@ -2269,12 +2348,12 @@ class ChatController:
                 # Check for realtime models
                 if card and card.api_family == "realtime":
                     return
-                
+
                 # Prepare messages
                 messages_to_send = self.messages_for_model(model)
                 if provider_name == 'perplexity':
                     messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
-                
+
                 # Build kwargs
                 response_meta = {}
                 kwargs = {
@@ -2282,9 +2361,9 @@ class ChatController:
                     "model": model,
                     "temperature": self.get_temperature_for_model(model),
                     "max_tokens": self._settings_manager.get('MAX_TOKENS', 0) or None,
-                    "chat_id": self.current_chat_id,
+                    "chat_id": request_chat_id,
                 }
-                
+
                 # Add tool handlers and web search for non-perplexity
                 if provider_name != 'perplexity':
                     kwargs["web_search_enabled"] = self._settings_manager.get(
@@ -2293,50 +2372,51 @@ class ChatController:
                     )
                     if tool_handlers:
                         kwargs.update(tool_handlers)
-                
+
                 # Add response_meta for providers that use it
                 if provider_name in ('gemini', 'perplexity', 'claude', 'grok'):
                     kwargs["response_meta"] = response_meta
-                
+
                 if is_cancelled():
                     return
-                
+
                 # Call provider
                 answer = provider.generate_chat_completion(**kwargs)
                 assistant_provider_meta = response_meta if response_meta else None
-                
+
                 # Append Perplexity sources
                 if provider_name == 'perplexity':
                     answer = self._append_perplexity_sources(answer, response_meta)
-            
+
             if is_cancelled():
                 return
-            
-            # Normalize image tags
-            answer = self._normalize_image_tags(answer)
-            
-            # Add to conversation history
-            assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
-            if self._pending_text_edit_events:
-                assistant_message["text_edit_events"] = list(self._pending_text_edit_events)
-                print(f"[TextEditTool] Saving {len(self._pending_text_edit_events)} edit events to message")
-            message_index = len(self.conversation_history)
-            self.conversation_history.append(assistant_message)
-            if self._pending_text_edit_events:
-                self._text_edit_history_by_message[message_index] = list(self._pending_text_edit_events)
-                self._pending_text_edit_events = []
-            
-            # Add to memory if enabled
-            self.add_to_memory(answer, 'assistant')
-            
-            # Store model in system message (first message)
-            if self.conversation_history:
-                self.conversation_history[0]['model'] = model
-            
-            # Save chat
-            self.save_current_chat()
-            
-            # Emit response
+
+            with self._chat_state_lock:
+                if is_cancelled():
+                    return
+                # Normalize image tags
+                answer = self._normalize_image_tags(answer)
+
+                # Add to conversation history
+                assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
+                if self._pending_text_edit_events:
+                    assistant_message["text_edit_events"] = list(self._pending_text_edit_events)
+                    print(f"[TextEditTool] Saving {len(self._pending_text_edit_events)} edit events to message")
+                message_index = len(self.conversation_history)
+                self.conversation_history.append(assistant_message)
+                if self._pending_text_edit_events:
+                    self._text_edit_history_by_message[message_index] = list(self._pending_text_edit_events)
+                    self._pending_text_edit_events = []
+
+                # Store model in system message (first message)
+                if self.conversation_history:
+                    self.conversation_history[0]['model'] = model
+
+                # Save chat
+                self.save_current_chat()
+                saved_chat_id = self.current_chat_id
+
+                completed = True
             self._event_bus.publish(Event(
                 type=EventType.MESSAGE_RECEIVED,
                 data={
@@ -2345,30 +2425,36 @@ class ChatController:
                     'index': message_index,
                     'model': model,
                     'provider_meta': assistant_provider_meta,
+                    'chat_id': saved_chat_id,
+                    'is_current': lambda: self.is_chat_context_current(context),
                 },
                 source='controller'
             ))
-            
+            self.add_to_memory(answer, 'assistant', conversation_id=saved_chat_id)
+
         except Exception as error:
-            if not is_cancelled():
-                error_message = f"** Error: {str(error)} **"
-                message_index = len(self.conversation_history)
-                self.conversation_history.append(create_assistant_message(error_message))
-                
-                self._event_bus.publish(Event(
-                    type=EventType.ERROR_OCCURRED,
-                    data={'error': str(error), 'context': 'send_message', 'index': message_index},
-                    source='controller'
-                ))
+            with self._chat_state_lock:
+                if not is_cancelled():
+                    error_message = f"** Error: {str(error)} **"
+                    message_index = len(self.conversation_history)
+                    self.conversation_history.append(create_assistant_message(error_message))
+
+                    self._event_bus.publish(Event(
+                        type=EventType.ERROR_OCCURRED,
+                        data={'error': str(error), 'context': 'send_message', 'index': message_index,
+                              'is_current': lambda: self.is_chat_context_current(context)},
+                        source='controller'
+                    ))
         finally:
-            self._event_bus.publish(Event(
-                type=EventType.THINKING_STOPPED,
-                data={},
-                source='controller'
-            ))
-            
-            # Post-response maintenance
-            self._check_and_perform_compaction()
+            with self._chat_state_lock:
+                if owns_request():
+                    self._event_bus.publish(Event(
+                        type=EventType.THINKING_STOPPED,
+                        data={'is_current': owns_request},
+                        source='controller'
+                    ))
+                    if completed:
+                        self._check_and_perform_compaction()
 
     def _get_or_init_provider(self, model: str, provider_name: str) -> Any:
         """Get or initialize a provider for the given model."""
@@ -2550,167 +2636,131 @@ class ChatController:
     # -----------------------------------------------------------------------
 
     def _check_and_perform_compaction(self):
-        """Check if conversation exceeds size limit and compact if needed."""
-        if not self._settings_manager.get('COMPACTION_ENABLED', False):
-            return
-
-        limit_kb = self._settings_manager.get('COMPACTION_MAX_SIZE_KB', 100)
-        
-        # Use ChatService to get size of the EFFECTIVE conversation (what is sent to model)
-        from conversation import ConversationHistory
-        
-        # Remove notification-only messages from compaction sizing.
-        filtered_history = [
-            m for m in self.conversation_history
-            if not m.get("provider_meta", {}).get("is_notification", False)
-        ]
-
-        # Get the compacted view (System + Summary + Post-Compaction)
-        compacted_list, summary = self._apply_compaction_view(filtered_history)
-        
-        # If we have a summary, ensure it's counted in the size.
-        # _apply_compaction_view returns the list.
-        # If there's a summary, we usually inject it into the message content during prepare_messages_for_model.
-        # But here we just want a rough estimate.
-        # If we reconstruct a history object from the list, get_conversation_size_kb will dump it.
-        
-        # We need to manually inject the summary into the first message content for size calculation accuracy
-        # if it's not already there (it's returned separately by _apply_compaction_view).
-        
-        current_history = ConversationHistory.from_list(compacted_list)
-
-        size_kb = self._chat_service.get_conversation_size_kb(current_history)
-        
-        if size_kb > limit_kb:
-            # Avoid concurrent compaction
-            if getattr(self, '_compaction_in_progress', False):
+        """Start compaction with a stable snapshot of the current conversation."""
+        with self._chat_state_lock:
+            if (not self._settings_manager.get('COMPACTION_ENABLED', False)
+                    or getattr(self, '_compaction_in_progress', False)):
                 return
-            
-            print(f"[Compaction] Triggering compaction for {self.current_chat_id} (Size: {size_kb:.2f}KB > {limit_kb}KB)")
-            self._compaction_in_progress = True
-            
-            import threading
-            base_history = ConversationHistory.from_list(filtered_history)
-            thread = threading.Thread(
-                target=self._run_compaction_background,
-                args=(base_history, self.current_chat_id),
-                daemon=True
+            context = self.capture_chat_context()
+            snapshot = deepcopy(context.history)
+            filtered = [
+                message for message in snapshot
+                if not message.get("provider_meta", {}).get("is_notification", False)
+            ]
+            compacted, _ = self._apply_compaction_view(filtered)
+            size_kb = self._chat_service.get_conversation_size_kb(
+                ConversationHistory.from_list(compacted)
             )
-            thread.start()
+            limit_kb = self._settings_manager.get('COMPACTION_MAX_SIZE_KB', 100)
+            if size_kb <= limit_kb:
+                return
 
-    def _run_compaction_background(self, history_obj, chat_id):
-        """Execute compaction in background thread."""
+            print(f"[Compaction] Triggering compaction for {self.current_chat_id} "
+                  f"(Size: {size_kb:.2f}KB > {limit_kb}KB)")
+            self._compaction_in_progress = True
+            # Keep original indices, including notifications, for the cutoff.
+            history = ConversationHistory.from_list(snapshot)
+            threading.Thread(
+                target=self._run_compaction_background,
+                args=(history, self.current_chat_id, context),
+                daemon=True,
+            ).start()
+
+    def _run_compaction_background(self, history_obj, chat_id, chat_context=None):
+        """Summarize a snapshot and apply it only to the unchanged source prefix."""
         update_scheduled = False
+        context = chat_context or self.capture_chat_context()
         try:
-            from conversation import Message, ProviderMeta
-            
-            # Determine range to summarize: after last compaction or from beginning
+            if not self.is_chat_context_current(context):
+                return
             last_compaction = history_obj.get_last_compaction()
-            start_index = 0
-            previous_summary = ""
-            if last_compaction:
-                # Map indices from history snapshot to current range
-                start_index = last_compaction.get('end_index', -1) + 1
-                previous_summary = last_compaction.get("summary", "") or ""
-            # Skip system message
-            start_index = max(start_index, 1)
-            
-            # Keep last N turns (user+assistant pairs) uncompressed.
+            start_index = max(
+                last_compaction.get('end_index', -1) + 1 if last_compaction else 1,
+                1,
+            )
+            previous_summary = (last_compaction.get("summary", "") or ""
+                                if last_compaction else "")
             keep_turns = self._settings_manager.get('COMPACTION_KEEP_TURNS', 0) or 0
-            keep_count = max(int(keep_turns), 0) * 2
-            end_index = len(history_obj.messages) - keep_count - 1
-            
+            end_index = len(history_obj.messages) - max(int(keep_turns), 0) * 2 - 1
             if end_index <= start_index:
                 return
 
-            messages_to_compact = history_obj.messages[start_index:end_index+1]
-            if not messages_to_compact:
+            messages = [
+                message for message in history_obj.messages[start_index:end_index + 1]
+                if not message.provider_meta.get("is_notification", False)
+            ]
+            if not messages:
                 return
-
-            # Build transcript
-            transcript = ""
-            for msg in messages_to_compact:
-                transcript += f"{msg.role.upper()}: {msg.content}\n\n"
-            last_msg = messages_to_compact[-1]
-            
-            # Summarize
+            expected_prefix = deepcopy(history_obj.to_list()[:end_index + 1])
+            transcript = "".join(
+                f"{message.role.upper()}: {message.content}\n\n"
+                for message in messages
+            )
             from model_cards import resolve_model_id
+            from config import DEFAULT_COMPACTION_PROMPT
             model = resolve_model_id(
                 self._settings_manager.get('DEFAULT_MODEL', 'gpt-4o-mini'),
                 self.custom_models,
             )
-            from config import DEFAULT_COMPACTION_PROMPT
-            compaction_prompt = self._settings_manager.get('COMPACTION_PROMPT', DEFAULT_COMPACTION_PROMPT)
-            
+            compaction_prompt = self._settings_manager.get(
+                'COMPACTION_PROMPT', DEFAULT_COMPACTION_PROMPT,
+            )
             if previous_summary:
                 prompt = (
-                    f"{compaction_prompt}\n\n"
-                    "Existing summary:\n"
-                    f"{previous_summary}\n\n"
-                    "New conversation segment:\n"
-                    f"{transcript}\n\n"
-                    "Update the summary so it includes both the existing summary and the new segment."
+                    f"{compaction_prompt}\n\nExisting summary:\n{previous_summary}\n\n"
+                    f"New conversation segment:\n{transcript}\n\n"
+                    "Update the summary so it includes both the existing summary "
+                    "and the new segment."
                 )
             else:
-                prompt = (
-                    f"{compaction_prompt}\n\n"
-                    f"{transcript}"
-                )
-            
-            # Get provider and generate summary
+                prompt = f"{compaction_prompt}\n\n{transcript}"
+
             provider_name = self.get_provider_name_for_model(model)
             provider = self._get_or_init_provider(model, provider_name)
-            
-            print(f"[Compaction] Summarizing {len(messages_to_compact)} messages with {model}...")
-            
-            start_time = datetime.now()
+            if not self.is_chat_context_current(context):
+                return
+            print(f"[Compaction] Summarizing {len(messages)} messages with {model}...")
             summary = provider.generate_chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
-                max_tokens=1000
+                max_tokens=1000,
             )
-            duration = (datetime.now() - start_time).total_seconds()
-            print(f"[Compaction] Summary generated in {duration:.1f}s")
-            
-            # Create compaction metadata
+            if not isinstance(summary, str) or not summary.strip():
+                raise ValueError("Compaction returned an empty summary")
             compaction_data = {
                 "summary": summary,
                 "timestamp": datetime.now().isoformat(),
-                "start_index": start_index, 
+                "start_index": start_index,
                 "end_index": end_index,
                 "model": model,
-                "message_count": len(messages_to_compact),
+                "message_count": len(messages),
             }
-            
-            # Update history on main thread
+
             def update_history():
-                # Attach metadata to stable message at end_index in live history
-                history_len = len(history_obj.messages)
-                live_len = len(self.conversation_history)
-                delta = max(live_len - history_len, 0)
-                target_index = min(end_index + delta, live_len - 1)
-
-                if target_index < len(self.conversation_history):
-                    target_msg = self.conversation_history[target_index]
-
-                    if "provider_meta" not in target_msg:
-                        target_msg["provider_meta"] = {}
-
-                    if isinstance(target_msg["provider_meta"], dict):
-                        target_msg["provider_meta"]["compacted_data"] = compaction_data
-                    
-                    self.save_current_chat()
-                    print(f"[Compaction] Applied compaction data to message {target_index}")
-                    
-                self._compaction_in_progress = False
+                with self._chat_state_lock:
+                    try:
+                        if not self.is_chat_context_current(context):
+                            return False
+                        # Appended messages are allowed. Edits, deletions, or
+                        # replacements within the summarized prefix are not.
+                        prefix = ConversationHistory.from_list(
+                            self.conversation_history[:end_index + 1]
+                        ).to_list()
+                        if prefix != expected_prefix:
+                            return False
+                        target = self.conversation_history[end_index]
+                        target.setdefault("provider_meta", {})["compacted_data"] = compaction_data
+                        self.save_current_chat()
+                        print(f"[Compaction] Applied compaction data to message {end_index}")
+                    finally:
+                        self._compaction_in_progress = False
                 return False
 
             from gi.repository import GLib
             GLib.idle_add(update_history)
             update_scheduled = True
-
-        except Exception as e:
-            print(f"[Compaction] Error: {e}")
+        except Exception as error:
+            print(f"[Compaction] Error: {error}")
             import traceback
             traceback.print_exc()
         finally:

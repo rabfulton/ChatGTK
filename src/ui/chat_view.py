@@ -275,8 +275,18 @@ class ChatView(UIComponent):
     
     def _on_thinking_started(self, event):
         """Handle THINKING_STARTED event."""
-        self.show_thinking()
+        def show_if_current():
+            guard = event.data.get('is_current')
+            if guard is None or guard():
+                self._show_thinking_impl()
+            return False
+        self.schedule_ui_update(show_if_current)
     
     def _on_thinking_stopped(self, event):
         """Handle THINKING_STOPPED event."""
-        self.hide_thinking()
+        def hide_if_current():
+            guard = event.data.get('is_current')
+            if guard is None or guard():
+                self._hide_thinking_impl()
+            return False
+        self.schedule_ui_update(hide_if_current)

@@ -5,6 +5,7 @@ Shared history index helpers for fast sidebar listings.
 import json
 from pathlib import Path
 from typing import Dict, Any
+from .file_utils import atomic_write_json
 
 
 HISTORY_INDEX_FILENAME = ".history_index.json"
@@ -35,7 +36,6 @@ def save_history_index(history_dir: Path, data: Dict[str, Any]) -> None:
     """Persist the history index file."""
     path = history_dir / HISTORY_INDEX_FILENAME
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        atomic_write_json(path, data)
     except Exception:
         pass

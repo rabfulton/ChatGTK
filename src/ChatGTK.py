@@ -1283,11 +1283,19 @@ class OpenAIGTKClient(Gtk.Window):
         error = event.data.get('error', 'Unknown error')
         context = event.data.get('context', '')
         message = f"{context}: {error}" if context else error
-        GLib.idle_add(self.display_error, message)
+        def display_if_current():
+            guard = event.data.get('is_current')
+            if guard is None or guard():
+                self.display_error(message)
+            return False
+        GLib.idle_add(display_if_current)
 
     def _on_thinking_cancelled(self):
         """Handle cancel button click from ChatView."""
         self.request_cancelled = True
+        cancel_event = getattr(self, '_request_cancel_event', None)
+        if cancel_event is not None:
+            cancel_event.set()
         cancel_text = "** Request cancelled by user **"
         message_index = self.controller.add_notification(cancel_text, 'cancel')
         GLib.idle_add(lambda idx=message_index: self.append_message('ai', cancel_text, idx))
@@ -1618,6 +1626,10 @@ class OpenAIGTKClient(Gtk.Window):
     def emit_thinking_started(self, model: str = None):
         """Emit THINKING_STARTED event and show animation."""
         self.request_cancelled = False
+        previous = getattr(self, '_request_cancel_event', None)
+        if previous is not None:
+            previous.set()
+        self._request_cancel_event = threading.Event()
         self.controller.event_bus.publish(Event(
             type=EventType.THINKING_STARTED,
             data={'model': model},
@@ -1659,12 +1671,19 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Only handle if source is controller
         if event.source == 'controller':
-            GLib.idle_add(lambda: self.append_message('ai', content, index))
+            guard = event.data.get('is_current')
+            def append_if_current():
+                if guard is None or guard():
+                    self.append_message('ai', content, index)
+                return False
+            GLib.idle_add(append_if_current)
             
             # Read aloud if enabled (skip audio models)
             card = get_card(model, self.custom_models)
-            if not (card and card.capabilities.audio_out):
-                self.read_aloud_text(formatted, chat_id=self.current_chat_id)
+            if (guard is None or guard()) and not (card and card.capabilities.audio_out):
+                self.read_aloud_text(
+                    formatted, chat_id=event.data.get('chat_id', self.current_chat_id),
+                )
 
     def _on_image_generated_event(self, event):
         """Handle IMAGE_GENERATED event - log for debugging."""
@@ -1674,6 +1693,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _on_chat_created_event(self, event):
         """Handle CHAT_CREATED event - refresh history list."""
+        self.emit_thinking_stopped()
         GLib.idle_add(self.refresh_history_list)
 
     def _on_recording_started_event(self, event):
@@ -2671,21 +2691,27 @@ class OpenAIGTKClient(Gtk.Window):
         # Call provider API in a separate thread
         threading.Thread(
             target=self.call_ai_api,
-            args=(target_model,),
+            args=(target_model, self.controller.capture_chat_context(),
+                  self._request_cancel_event),
             daemon=True
         ).start()
 
-    def call_ai_api(self, model):
+    def call_ai_api(self, model, chat_context=None, cancel_event=None):
         """Call AI API - delegates to controller.send_message()."""
         # Build tool handlers (these reference UI methods)
-        last_msg = self.conversation_history[-1]
+        chat_context = chat_context or self.controller.capture_chat_context()
+        if not self.controller.is_chat_context_current(chat_context):
+            return
+        last_msg = chat_context.last_message or {}
         tool_handlers = self._build_tool_handlers(model, last_msg)
         
         # Delegate to controller
         self.controller.send_message(
             model=model,
             tool_handlers=tool_handlers,
-            cancel_check=lambda: getattr(self, 'request_cancelled', False),
+            cancel_check=(cancel_event.is_set if cancel_event is not None
+                          else lambda: getattr(self, 'request_cancelled', False)),
+            chat_context=chat_context,
         )
 
     def _show_recording_popover(self, message: str | None = None):
@@ -3998,6 +4024,7 @@ class OpenAIGTKClient(Gtk.Window):
         # Load via controller
         chat_id = filename.replace('.json', '') if filename.endswith('.json') else filename
         if self.controller.load_chat(chat_id):
+            self.emit_thinking_stopped()
             # Controller now owns the state
             history = self.conversation_history  # Read from controller
             

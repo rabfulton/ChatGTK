@@ -581,8 +581,8 @@ class MessageRenderer:
             if seg.startswith('--- Code Block Start ('):
                 lang_match = re.search(r'^--- Code Block Start \((.*?)\) ---', seg)
                 code_lang = lang_match.group(1) if lang_match else "plaintext"
-                code_content = re.sub(r'^--- Code Block Start \(.*?\) ---', '', seg)
-                code_content = re.sub(r'--- Code Block End ---$', '', code_content).strip('\n')
+                code_content = re.sub(r'^--- Code Block Start \(.*?\) ---\n', '', seg)
+                code_content = re.sub(r'\n--- Code Block End ---$', '', code_content)
                 source_view = create_source_view(
                     code_content, code_lang, 
                     self.settings.font_size, self.settings.source_theme
