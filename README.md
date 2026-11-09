@@ -201,6 +201,45 @@ You will need at least one API key for the application to function. Alternativel
   - Keys can be set as environment variables or inside the applications settings.
   - I have tested Openrouter, Mistral, Nvidia Cloud, Groq and Bytedance so far.
 
+## Streaming and Reasoning
+
+Reasoning and the live response stay hidden until you click the
+**Assistant is thinking…** box above the answer.
+It opens a scrollable preview of up to sixteen lines and scrolls it into view;
+click again to collapse it. On smaller windows the preview fits the available height.
+The preview labels reasoning and the streaming response separately, and follows
+new text until you scroll up. If no reasoning is returned, the response preview
+still shows progress. The finished answer is rendered in the main conversation.
+The completed reply keeps a collapsed **Reasoning** section, which
+is saved with the chat. Copy, read-aloud and semantic memory use the answer.
+
+| Provider | Streaming and reasoning support |
+| --- | --- |
+| OpenAI | Responses streaming; requests reasoning summaries for modern GPT reasoning models and supported o3/o4 models. Older chat models stream answers where supported. |
+| Gemini | Native streaming with thought summaries and signed function-call continuation. |
+| Grok | Responses streaming for modern models; displays reasoning or summaries when returned. Legacy chat streaming is also supported. |
+| OpenRouter | Custom chat endpoints; requests reasoning and preserves structured reasoning details for tool continuation. |
+| llama.cpp and other local servers | Custom chat endpoints; accepts `reasoning_content` and leading `<think>…</think>` blocks, including tags split across chunks. |
+
+Reasoning availability depends on the selected model and server configuration.
+OpenAI and Gemini expose summaries; some models return no visible reasoning.
+Servers returning a complete JSON response instead of an event stream still
+work, with the answer and reasoning shown when the response completes.
+
+During generation, text updates in batches to keep the UI responsive. Full
+Markdown, code, tables and formulas render when the answer completes. Scrolling
+up pauses automatic following. Cancel closes the active stream and keeps the
+partial reply marked **Stopped**. A broken or truncated stream keeps available
+output marked **Response interrupted**. Switching chats discards late updates.
+Image generation, audio, and providers without a streaming adapter retain their
+existing request paths.
+
+Protocol references: [OpenAI reasoning](https://developers.openai.com/api/docs/guides/reasoning),
+[Gemini thinking](https://ai.google.dev/gemini-api/docs/thinking),
+[Grok reasoning](https://docs.x.ai/developers/model-capabilities/text/reasoning),
+[OpenRouter reasoning](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens),
+and [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+
 ## Grok Model Discovery and Search
 
 Grok support was reviewed on November 2, 2026 against xAI's

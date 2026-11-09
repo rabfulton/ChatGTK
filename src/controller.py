@@ -40,6 +40,8 @@ from services import (
     ToolService,
     WolframService,
 )
+from services.response_stream import StreamCancelled
+from services.streaming_service import can_stream, stream_chat_completion
 from settings import SettingsManager
 from events import EventBus, EventType, Event, get_event_bus
 from utils import (
@@ -2254,6 +2256,10 @@ class ChatController:
         context = chat_context or self.capture_chat_context()
         token = object()
         completed = False
+        finalized = False
+        streamed = False
+        partial = {'text': '', 'reasoning': ''}
+        response_meta = {}
         with self._chat_state_lock:
             if (not self.is_chat_context_current(context)
                     or len(context.history) != context.message_count
@@ -2280,6 +2286,67 @@ class ChatController:
                 return handler(*args, **kwargs)
             return guarded
 
+        def receive_stream(kind, text):
+            if is_cancelled():
+                raise StreamCancelled()
+            if kind == 'reset':
+                partial['text'] = ''
+                if partial['reasoning']:
+                    partial['reasoning'] += '\n\n'
+            elif kind in partial:
+                partial[kind] += text
+            # ChatView coalesces these snapshots before touching GTK. Keeping
+            # every update here also delivers the last token before a pause.
+            self._event_bus.publish(Event(
+                type=EventType.MESSAGE_STREAMING,
+                data={**partial, 'model': model,
+                      'request_id': token,
+                      'is_current': lambda: not finalized and not is_cancelled()},
+                source='controller',
+            ))
+
+        def finish_response(answer, meta, status='complete', error=None):
+            nonlocal finalized, completed
+            with self._chat_state_lock:
+                if (not owns_request() or len(context.history) != context.message_count
+                        or context.history[-1] is not context.last_message):
+                    return
+                if status == 'complete' and is_cancelled():
+                    return
+                answer = self._normalize_image_tags(answer)
+                meta = dict(meta or {})
+                if partial['reasoning'].strip():
+                    meta['reasoning'] = {'text': partial['reasoning'].strip()}
+                if status != 'complete':
+                    meta['stream_status'] = status
+                    if error:
+                        meta['stream_error'] = str(error)
+                assistant_message = create_assistant_message(answer, provider_meta=meta)
+                if self._pending_text_edit_events:
+                    assistant_message['text_edit_events'] = list(self._pending_text_edit_events)
+                message_index = len(self.conversation_history)
+                self.conversation_history.append(assistant_message)
+                if self._pending_text_edit_events:
+                    self._text_edit_history_by_message[message_index] = list(self._pending_text_edit_events)
+                    self._pending_text_edit_events = []
+                self.conversation_history[0]['model'] = model
+                self.save_current_chat()
+                saved_chat_id = self.current_chat_id
+                finalized = True
+                completed = status == 'complete'
+            self._event_bus.publish(Event(
+                type=EventType.MESSAGE_RECEIVED,
+                data={'content': answer, 'formatted_content': format_response(answer),
+                      'index': message_index, 'model': model, 'provider_meta': meta,
+                      'chat_id': saved_chat_id, 'stream_status': status,
+                      'request_id': token,
+                      'streamed': streamed,
+                      'is_current': lambda: self.is_chat_context_current(context)},
+                source='controller',
+            ))
+            if completed:
+                self.add_to_memory(answer, 'assistant', conversation_id=saved_chat_id)
+
         if tool_handlers:
             tool_handlers = {
                 name: guard_handler(handler) if callable(handler) else handler
@@ -2290,7 +2357,7 @@ class ChatController:
             # Emit thinking started
             self._event_bus.publish(Event(
                 type=EventType.THINKING_STARTED,
-                data={'model': model, 'is_current': owns_request},
+                data={'model': model, 'is_current': owns_request, 'request_id': token},
                 source='controller'
             ))
 
@@ -2355,7 +2422,6 @@ class ChatController:
                     messages_to_send = self._clean_messages_for_perplexity(messages_to_send)
 
                 # Build kwargs
-                response_meta = {}
                 kwargs = {
                     "messages": messages_to_send,
                     "model": model,
@@ -2381,7 +2447,14 @@ class ChatController:
                     return
 
                 # Call provider
-                answer = provider.generate_chat_completion(**kwargs)
+                streamed = can_stream(provider, provider_name, model)
+                if streamed:
+                    answer = stream_chat_completion(
+                        provider, provider_name, kwargs, receive_stream,
+                        is_cancelled, response_meta,
+                    )
+                else:
+                    answer = provider.generate_chat_completion(**kwargs)
                 assistant_provider_meta = response_meta if response_meta else None
 
                 # Append Perplexity sources
@@ -2391,50 +2464,18 @@ class ChatController:
             if is_cancelled():
                 return
 
-            with self._chat_state_lock:
-                if is_cancelled():
-                    return
-                # Normalize image tags
-                answer = self._normalize_image_tags(answer)
+            finish_response(answer, assistant_provider_meta)
 
-                # Add to conversation history
-                assistant_message = create_assistant_message(answer, provider_meta=assistant_provider_meta)
-                if self._pending_text_edit_events:
-                    assistant_message["text_edit_events"] = list(self._pending_text_edit_events)
-                    print(f"[TextEditTool] Saving {len(self._pending_text_edit_events)} edit events to message")
-                message_index = len(self.conversation_history)
-                self.conversation_history.append(assistant_message)
-                if self._pending_text_edit_events:
-                    self._text_edit_history_by_message[message_index] = list(self._pending_text_edit_events)
-                    self._pending_text_edit_events = []
-
-                # Store model in system message (first message)
-                if self.conversation_history:
-                    self.conversation_history[0]['model'] = model
-
-                # Save chat
-                self.save_current_chat()
-                saved_chat_id = self.current_chat_id
-
-                completed = True
-            self._event_bus.publish(Event(
-                type=EventType.MESSAGE_RECEIVED,
-                data={
-                    'content': answer,
-                    'formatted_content': format_response(answer),
-                    'index': message_index,
-                    'model': model,
-                    'provider_meta': assistant_provider_meta,
-                    'chat_id': saved_chat_id,
-                    'is_current': lambda: self.is_chat_context_current(context),
-                },
-                source='controller'
-            ))
-            self.add_to_memory(answer, 'assistant', conversation_id=saved_chat_id)
-
+        except StreamCancelled:
+            # Only explicit cancellation may save partial output. Superseded
+            # workers must never append to another chat or a newer request.
+            if cancel_check and cancel_check():
+                finish_response(partial['text'], {}, 'stopped')
         except Exception as error:
             with self._chat_state_lock:
-                if not is_cancelled():
+                if not is_cancelled() and (partial['text'] or partial['reasoning']):
+                    finish_response(partial['text'], {}, 'interrupted', error)
+                elif not is_cancelled():
                     error_message = f"** Error: {str(error)} **"
                     message_index = len(self.conversation_history)
                     self.conversation_history.append(create_assistant_message(error_message))
@@ -2448,6 +2489,12 @@ class ChatController:
         finally:
             with self._chat_state_lock:
                 if owns_request():
+                    if not finalized and cancel_check and cancel_check():
+                        finish_response(
+                            partial['text'] or ('** Request cancelled by user **'
+                                                if not partial['reasoning'] else ''),
+                            {}, 'stopped',
+                        )
                     self._event_bus.publish(Event(
                         type=EventType.THINKING_STOPPED,
                         data={'is_current': owns_request},

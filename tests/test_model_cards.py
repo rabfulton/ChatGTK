@@ -465,9 +465,12 @@ class TestPhase2ProviderIntegration:
         card = get_card("gpt-4o")
         assert card.api_family == "responses"
 
-        # Chat completions models (reasoning)
-        card = get_card("o3")
-        assert card.api_family == "chat.completions"
+        # Reasoning summaries require Responses on supported o3/o4 models.
+        for model in ("o3", "o3-2025-04-16", "o4-mini", "o4-mini-2025-04-16"):
+            assert get_card(model).api_family == "responses"
+
+        # Older reasoning models retain their Chat Completions route.
+        assert get_card("o3-mini").api_family == "chat.completions"
 
         # Image models
         card = get_card("dall-e-3")

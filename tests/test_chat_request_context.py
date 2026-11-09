@@ -182,3 +182,88 @@ def test_queued_thinking_callback_does_not_hide_new_request():
     state["current"] = False
     pending[0]()
     view._hide_thinking_impl.assert_not_called()
+
+
+def test_streamed_reasoning_is_saved_separately_from_answer(controller, monkeypatch):
+    def stream(provider, name, kwargs, emit, cancelled, meta):
+        emit('reasoning', 'Consider the alternatives')
+        emit('text', 'The answer')
+        meta['openai'] = {'response_output': []}
+        return 'The answer'
+
+    monkeypatch.setattr('controller.can_stream', lambda *args: True)
+    monkeypatch.setattr('controller.stream_chat_completion', stream)
+    controller.send_message('gpt-5.2')
+    message = controller.conversation_history[-1]
+    assert message['content'] == 'The answer'
+    assert message['provider_meta']['reasoning']['text'] == 'Consider the alternatives'
+    assert received_events(controller)[0].data['streamed'] is True
+    assert ConversationHistory.from_list([message]).to_list()[-1] == message
+    controller.add_to_memory.assert_called_once_with(
+        'The answer', 'assistant', conversation_id='first_chat',
+    )
+    events = [call.args[0] for call in controller._event_bus.publish.call_args_list
+              if call.args[0].type == EventType.MESSAGE_STREAMING]
+    assert events
+    assert not events[0].data['is_current']()  # Queued previews cannot outlive finalization.
+
+
+@pytest.mark.parametrize('failure', ['cancel', 'network'])
+def test_partial_stream_is_saved_on_cancellation_or_error(controller, monkeypatch, failure):
+    from services.response_stream import StreamCancelled
+    cancel = threading.Event()
+
+    def stream(provider, name, kwargs, emit, cancelled, meta):
+        emit('reasoning', 'Working through it')
+        emit('text', 'Partial answer')
+        if failure == 'cancel':
+            cancel.set()
+            raise StreamCancelled()
+        raise RuntimeError('Connection lost')
+
+    monkeypatch.setattr('controller.can_stream', lambda *args: True)
+    monkeypatch.setattr('controller.stream_chat_completion', stream)
+    controller.send_message('gpt-5.2', cancel_check=cancel.is_set)
+    message = controller.conversation_history[-1]
+    assert message['content'] == 'Partial answer'
+    assert message['provider_meta']['reasoning']['text'] == 'Working through it'
+    assert message['provider_meta']['stream_status'] == ('stopped' if failure == 'cancel' else 'interrupted')
+    if failure == 'network':
+        assert message['provider_meta']['stream_error'] == 'Connection lost'
+    controller.save_current_chat.assert_called_once()
+    controller.add_to_memory.assert_not_called()
+    controller._check_and_perform_compaction.assert_not_called()
+    assert len(received_events(controller)) == 1
+
+
+def test_stream_cannot_append_after_chat_switch(controller, monkeypatch):
+    def stream(provider, name, kwargs, emit, cancelled, meta):
+        emit('text', 'Old answer')
+        controller.new_chat()
+        emit('text', 'Must not appear')
+
+    monkeypatch.setattr('controller.can_stream', lambda *args: True)
+    monkeypatch.setattr('controller.stream_chat_completion', stream)
+    controller.send_message('gpt-5.2')
+    assert len(controller.conversation_history) == 1
+    controller.save_current_chat.assert_not_called()
+    assert received_events(controller) == []
+
+
+def test_queued_stream_callback_is_discarded_after_chat_switch():
+    from ui.chat_view import ChatView
+    view = ChatView.__new__(ChatView)
+    view._stream_lock = threading.Lock()
+    view._stream_scheduled = False
+    view.schedule_ui_update = Mock()
+    view.widget = Mock()
+    state = {'current': True}
+    event = Event(EventType.MESSAGE_STREAMING, {
+        'text': 'Old answer', 'is_current': lambda: state['current'],
+    })
+    view._on_message_streaming(event)
+    view._on_message_streaming(event)
+    assert view.schedule_ui_update.call_count == 1
+    state['current'] = False
+    view._flush_stream()
+    view.widget.get_vadjustment.assert_not_called()

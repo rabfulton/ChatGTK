@@ -6,6 +6,7 @@ to improve code organization and testability.
 """
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from typing import Callable, List, Optional, Any
 import re
 import getpass
@@ -18,6 +19,7 @@ from gi.repository import Gtk, GtkSource, Gdk, GLib, Pango
 from markup_utils import format_response, process_inline_markup, process_text_formatting
 from latex_utils import process_tex_markup, insert_tex_image
 from gtk_utils import insert_resized_image
+from ui.reasoning_view import ReasoningView
 
 DOC_PREVIEW_LINE_BREAK = "---DOC-PREVIEW-BR---"
 
@@ -45,6 +47,7 @@ class RenderCallbacks:
     create_copy_button: Optional[Callable[[int], Gtk.Widget]] = None  # (msg_index) -> button
     create_undo_button: Optional[Callable[[int], Gtk.Widget]] = None  # (msg_index) -> button
     on_update_message_text: Optional[Callable[[int, str], None]] = None  # (msg_index, new_text)
+    get_message_metadata: Optional[Callable[[int], dict]] = None
 
 
 class MessageRenderer:
@@ -101,6 +104,16 @@ class MessageRenderer:
     def set_scroll_suppressed(self, suppressed: bool) -> None:
         """Control auto-scrolling when appending messages."""
         self._suppress_scroll = bool(suppressed)
+
+    @contextmanager
+    def suppress_scroll(self):
+        """Render in place while preserving the surrounding scroll policy."""
+        previous = self._suppress_scroll
+        self._suppress_scroll = True
+        try:
+            yield
+        finally:
+            self._suppress_scroll = previous
 
     def _apply_css_override(self, widget, css_string: str):
         """Apply CSS with USER priority to override existing styles."""
@@ -294,6 +307,25 @@ class MessageRenderer:
         # AI name label (header box)
         header_box = self._create_header_widget(f"{self.settings.ai_name}", is_user=False)
         content_container.pack_start(header_box, False, False, 0)
+
+        meta = (self.callbacks.get_message_metadata(message_index)
+                if self.callbacks.get_message_metadata else {})
+        reasoning = (meta.get('reasoning') or {}).get('text', '')
+        response_container.reasoning_expander = None
+        if reasoning:
+            expander = ReasoningView(reasoning)
+            response_container.reasoning_expander = expander
+            content_container.pack_start(expander, False, False, 0)
+        status = meta.get('stream_status')
+        if status in ('stopped', 'interrupted'):
+            label = Gtk.Label(label='Stopped' if status == 'stopped' else 'Response interrupted')
+            header_box.pack_start(label, False, False, 8)
+            if meta.get('stream_error'):
+                detail = Gtk.Label(label=meta['stream_error'])
+                detail.set_line_wrap(True)
+                detail.set_selectable(True)
+                detail.set_xalign(0)
+                content_container.pack_start(detail, False, False, 0)
         
         # Render markdown content
         block_state = {"index": 0}

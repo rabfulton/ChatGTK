@@ -917,6 +917,10 @@ class OpenAIGTKClient(Gtk.Window):
             create_copy_button=self.create_copy_button,
             create_undo_button=self.create_undo_button,
             on_update_message_text=self._on_message_text_updated,
+            get_message_metadata=lambda index: (
+                self.controller.conversation_history[index].get('provider_meta', {})
+                if 0 <= index < len(self.controller.conversation_history) else {}
+            ),
         )
         self.message_renderer = MessageRenderer(
             settings=settings,
@@ -1296,9 +1300,6 @@ class OpenAIGTKClient(Gtk.Window):
         cancel_event = getattr(self, '_request_cancel_event', None)
         if cancel_event is not None:
             cancel_event.set()
-        cancel_text = "** Request cancelled by user **"
-        message_index = self.controller.add_notification(cancel_text, 'cancel')
-        GLib.idle_add(lambda idx=message_index: self.append_message('ai', cancel_text, idx))
 
     # -----------------------------------------------------------------------
     # Document Mode callbacks
@@ -1674,13 +1675,26 @@ class OpenAIGTKClient(Gtk.Window):
             guard = event.data.get('is_current')
             def append_if_current():
                 if guard is None or guard():
-                    self.append_message('ai', content, index)
+                    follow = self._chat_view.is_at_bottom()
+                    expanded = self._chat_view.finish_stream(event.data.get('request_id'))
+                    if event.data.get('streamed'):
+                        with self.message_renderer.suppress_scroll():
+                            self.append_message('ai', content, index)
+                        if follow:
+                            self._chat_view.scroll_to_bottom()
+                    else:
+                        self.append_message('ai', content, index)
+                    if expanded and self.message_widgets:
+                        expander = getattr(self.message_widgets[-1], 'reasoning_expander', None)
+                        if expander is not None:
+                            expander.set_expanded(True)
                 return False
             GLib.idle_add(append_if_current)
             
             # Read aloud if enabled (skip audio models)
             card = get_card(model, self.custom_models)
-            if (guard is None or guard()) and not (card and card.capabilities.audio_out):
+            if (event.data.get('stream_status', 'complete') == 'complete'
+                    and (guard is None or guard()) and not (card and card.capabilities.audio_out)):
                 self.read_aloud_text(
                     formatted, chat_id=event.data.get('chat_id', self.current_chat_id),
                 )
