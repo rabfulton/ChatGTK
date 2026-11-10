@@ -55,6 +55,15 @@ def _infer_builtin_like_card(model_id: str) -> Optional[ModelCard]:
             capabilities=Capabilities(text=False, audio_out=True),
         )
 
+    if re.fullmatch(
+        r"(?:gpt-transcribe|gpt-4o(?:-mini)?-transcribe(?:-diarize)?)(?:-\d{4}-\d{2}-\d{2})?",
+        model_lower,
+    ):
+        return ModelCard(
+            id=model_id, provider="openai", api_family="transcription",
+            capabilities=Capabilities(text=False, audio_in=True),
+        )
+
     if (re.fullmatch(r"gpt-audio(?:-(?:mini|\d+(?:\.\d+)*))*", model_lower)
         or re.fullmatch(r"gpt-4o(?:-mini)?-audio-preview(?:-\d{4}-\d{2}-\d{2})?", model_lower)):
         return ModelCard(

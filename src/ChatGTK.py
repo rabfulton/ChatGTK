@@ -1910,10 +1910,16 @@ class OpenAIGTKClient(Gtk.Window):
 
             collected_models = []
             mapping = {}
+            from repositories import ModelCacheRepository
+            discovery_cache = ModelCacheRepository()
+            discovery_updated = False
             for name, provider in self.providers.items():
                 try:
                     # Fetch all models from the provider (no provider-side filtering)
                     provider_models = provider.get_available_models(disable_filter=True)
+                    if getattr(provider, "model_listing_succeeded", None) is not False:
+                        discovery_cache.set_models(name, provider_models)
+                        discovery_updated = True
                 except Exception as e:
                     print(f"Error fetching models for {name}: {e}")
                     provider_models = self._default_models_for_provider(name)
@@ -1926,6 +1932,12 @@ class OpenAIGTKClient(Gtk.Window):
                 for model in provider_models:
                     mapping[model] = name
                     collected_models.append(model)
+
+            if discovery_updated:
+                try:
+                    discovery_cache.save()
+                except OSError as exc:
+                    print(f"Error saving discovered models: {exc}")
 
             # Add custom models (persisted on disk)
             if self.custom_models:
@@ -2048,7 +2060,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         This is called when a model invokes the read_aloud tool to speak text
         to the user. Uses the unified TTS settings (tts_voice_provider, tts_voice,
-        tts_hd, tts_prompt_template) and blocks until playback is complete so 
+        tts_prompt_template) and blocks until playback is complete so
         the tool returns a proper status.
         """
         if not text:
@@ -2770,7 +2782,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Check if this is a custom STT model
         cfg = (self.custom_models or {}).get(stt_model, {})
-        is_custom_stt = (cfg.get("api_type") or "").lower() == "stt"
+        is_custom_stt = (cfg.get("api_type") or "").lower() in ("stt", "audio.transcriptions")
         
         if is_custom_stt:
             # Use CustomProvider for custom STT models
@@ -2780,7 +2792,7 @@ class OpenAIGTKClient(Gtk.Window):
             stt_provider.initialize(
                 api_key=resolve_api_key(cfg.get("api_key", "")),
                 endpoint=cfg.get("endpoint", ""),
-                model_id=stt_model,
+                model_id=cfg.get("model_name") or cfg.get("model_id") or stt_model,
                 api_type="stt",
             )
         else:
@@ -2920,7 +2932,7 @@ class OpenAIGTKClient(Gtk.Window):
         
         # Check if this is a custom STT model
         cfg = (self.custom_models or {}).get(stt_model, {})
-        is_custom_stt = (cfg.get("api_type") or "").lower() == "stt"
+        is_custom_stt = (cfg.get("api_type") or "").lower() in ("stt", "audio.transcriptions")
         
         if is_custom_stt:
             # Use CustomProvider for custom STT models
@@ -2930,7 +2942,7 @@ class OpenAIGTKClient(Gtk.Window):
             stt_provider.initialize(
                 api_key=resolve_api_key(cfg.get("api_key", "")),
                 endpoint=cfg.get("endpoint", ""),
-                model_id=stt_model,
+                model_id=cfg.get("model_name") or cfg.get("model_id") or stt_model,
                 api_type="stt",
             )
         else:
@@ -4753,15 +4765,13 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _get_tts_cache_path(self, text: str, chat_id: str) -> Path:
         """Get cache path - delegated to AudioService."""
-        provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
+        provider = self.settings.get('TTS_VOICE_PROVIDER', 'tts-1') or 'tts-1'
         voice = self.settings.get('TTS_VOICE', None) or 'alloy'
         card = get_card(provider, self.custom_models)
         # Other speech adapters check their own caches, including prompt text.
         if provider != 'openai' and not (card and card.provider == 'openai' and card.api_family == 'tts'):
             return None
-        model = provider if provider != 'openai' else (
-            'tts-1-hd' if self.settings.get('TTS_HD', False) else 'tts-1'
-        )
+        model = provider if provider != 'openai' else 'tts-1'
         return self.controller.audio_service._get_cache_path(
             self.controller.audio_service._clean_tts_text(text),
             chat_id, f"openai_{model}", voice
@@ -4769,7 +4779,7 @@ class OpenAIGTKClient(Gtk.Window):
 
     def _synthesize_and_play_selected_tts(self, text, *, chat_id, stop_event=None):
         """Route every read-aloud entry point through the selected speech model."""
-        selection = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
+        selection = self.settings.get('TTS_VOICE_PROVIDER', 'tts-1') or 'tts-1'
         card = get_card(selection, self.custom_models)
         kwargs = {"chat_id": chat_id, "stop_event": stop_event}
         if selection == 'openai':
@@ -4808,7 +4818,7 @@ class OpenAIGTKClient(Gtk.Window):
             stop_event=stop_event,
             chat_id=chat_id,
             voice=self.settings.get('TTS_VOICE', 'alloy'),
-            model=model_id or ('tts-1-hd' if self.settings.get('TTS_HD', False) else 'tts-1'),
+            model=model_id or 'tts-1',
         )
         return result
 

@@ -249,13 +249,40 @@ uses its [native model-list API](https://platform.claude.com/docs/en/api/models/
 including pagination, rather than a fixed list. Gemini discovery also follows
 pagination. Refreshed listings are cached for later sessions.
 
+The old five-model Claude preset cache is refreshed once when opening its
+whitelist with a configured provider. Discovery failures are labelled in the
+provider section, including HTTP status when available, rather than presenting
+fallback presets as a complete listing. Models returned by the API do not need a
+built-in card to appear. Select their checkboxes and save settings to include them
+in the conversation selector.
+
+Image, speech and file-transcription selectors combine supported capabilities
+with each provider's last successful model listing. These choices are independent
+of the conversation whitelist. Failed refreshes retain the cached listing, and
+custom endpoints remain available without remote discovery. Saved or manually
+entered choices are preserved; a saved TTS model missing from discovery is labelled
+**not in latest listing**. Historical cards remain available for older chats.
+
+Known deprecated models are grouped under a collapsed **Deprecated** section
+within each provider's whitelist. Hover over a model for its documented shutdown
+date and suggested replacement, where known. Selections and group expansion are
+preserved when refreshing; grouping does not change the selected model or remove
+older model cards. OpenAI lifecycle information was reviewed on November 10, 2026
+against its [deprecation schedule](https://developers.openai.com/api/docs/deprecations).
+
 Recognized variants of the GPT Image, conversational GPT Realtime, GPT Audio,
-OpenAI speech and Gemini image/TTS families inherit the app's existing routing.
+OpenAI speech/file-transcription and Gemini image/TTS families inherit the app's existing routing.
 Discovered image models appear in the image tool selector; supported speech
 models appear in **Audio > Text to Speech Model**, including dated snapshots.
 The selected speech model is used for playback, automatic read-aloud, the
-read-aloud tool and voice previews. Existing OpenAI/Gemini provider defaults
-remain available, and model-card overrides take precedence.
+read-aloud tool and voice previews. Speech selection now uses explicit model IDs;
+the TTS HD switch has been removed. Old OpenAI settings migrate to `tts-1` or
+`tts-1-hd` according to the saved HD preference; old Gemini settings migrate to
+`gemini-2.5-flash-preview-tts`. Model-card overrides take precedence.
+
+File transcription supports `gpt-transcribe` and recognized dated OpenAI
+transcription variants through the upload endpoint. Live-only transcription
+models are excluded until a dedicated streaming transcription adapter exists.
 
 Conversational GPT Realtime models use the
 [GA session format](https://developers.openai.com/api/docs/guides/realtime).
@@ -269,6 +296,14 @@ OpenAI's [Speech API retirement notice](https://developers.openai.com/api/docs/g
 sets January 6, 2027 as the shutdown date for `tts-1`, `tts-1-hd` and
 `gpt-4o-mini-tts`. Replacing read-aloud synthesis with a Realtime workflow is a
 separate migration; selecting a realtime model in the Speech API is not supported.
+
+The Speech Prompt Template is shared by the play button, automatic TTS and the
+read-aloud tool when using Gemini TTS or OpenAI chat-based audio models. Plain
+`tts-1` and `tts-1-hd` read the supplied text and do not support speech instructions.
+Although `gpt-4o-mini-tts` supports an API instructions field, ChatGTK's current
+Speech API adapter does not yet send it. Custom TTS adapters and voice previews
+also do not apply the saved template. Prompt support must be wired per adapter
+when adding the new Realtime synthesis path.
 
 ## Grok Model Discovery and Search
 

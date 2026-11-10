@@ -1803,9 +1803,11 @@ class OpenAIProvider(AIProvider):
     
     def get_available_models(self, disable_filter=False):
         import re
+        self.model_listing_succeeded = False
         try:
             models = self.client.models.list()
             models = list(models)
+            self.model_listing_succeeded = True
             register_discovered_models("openai", [model.id for model in models])
             
             # Check both parameter and environment variable
@@ -2313,7 +2315,10 @@ class OpenAIProvider(AIProvider):
             return bio
 
         # Preferred: transcription endpoint
-        if model in transcribe_models:
+        card = get_card(model)
+        if model in transcribe_models or (card and card.api_family in (
+            "transcription", "stt", "audio.transcriptions",
+        )):
             try:
                 payload_info = {
                     "endpoint": f"{getattr(client, '_base_url', None) or 'https://api.openai.com'}/audio/transcriptions",
@@ -2322,11 +2327,10 @@ class OpenAIProvider(AIProvider):
                 }
                 print(f"[Audio STT] Transcription payload: {json.dumps(payload_info)}")
                 with _make_file_obj() as f:
-                    transcript = client.audio.transcriptions.create(
-                        model=model,
-                        file=f,
-                        timeout=20
-                    )
+                    params = {"model": model, "file": f, "timeout": 20}
+                    if "diarize" in model:
+                        params["chunking_strategy"] = "auto"
+                    transcript = client.audio.transcriptions.create(**params)
                 return transcript.text
             except Exception as exc:
                 print(f"[Audio STT] Transcription endpoint failed for {model}: {exc}")
@@ -2747,6 +2751,7 @@ class GrokProvider(AIProvider):
             GROK_DEFAULT_MODELS, GROK_UNSUPPORTED_MODEL_PREFIXES,
             register_grok_model_aliases,
         )
+        self.model_listing_succeeded = False
 
         def collect_ids(payload):
             if isinstance(payload, dict):
@@ -2785,6 +2790,7 @@ class GrokProvider(AIProvider):
         except Exception as exc:
             print(f"Error fetching Grok model aliases: {exc}")
 
+        self.model_listing_succeeded = bool(model_ids)
         if not model_ids:
             print("Grok returned no models; using built-in defaults.")
             model_ids.update(GROK_DEFAULT_MODELS)
@@ -3064,6 +3070,8 @@ class ClaudeProvider(AIProvider):
 
     def get_available_models(self, disable_filter: bool = False):
         """List Claude models through Anthropic's native, paginated endpoint."""
+        self.model_listing_succeeded = False
+        self.model_listing_error = None
         allowed_models = {
             "claude-sonnet-4-5", 
             "claude-haiku-4-5",
@@ -3073,6 +3081,7 @@ class ClaudeProvider(AIProvider):
         }
 
         if not self.client:
+            self.model_listing_error = "Claude provider is not initialized."
             return sorted(allowed_models)
         models = set()
         params = {"limit": 100}
@@ -3096,6 +3105,7 @@ class ClaudeProvider(AIProvider):
                     if isinstance(model_id, str) and model_id:
                         models.add(model_id)
                 if not data.get("has_more"):
+                    self.model_listing_succeeded = True
                     return sorted(models)
                 cursor = data.get("last_id")
                 if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
@@ -3103,6 +3113,12 @@ class ClaudeProvider(AIProvider):
                 seen_cursors.add(cursor)
                 params["after_id"] = cursor
         except Exception as exc:
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            self.model_listing_error = (
+                f"Anthropic model discovery returned HTTP {status}."
+                if status else "Anthropic model discovery failed."
+            )
             print(f"Error fetching Claude models: {exc}")
             if models:
                 return sorted(models)
@@ -3536,6 +3552,7 @@ class GeminiProvider(AIProvider):
         return None
     
     def get_available_models(self, disable_filter=False):
+        self.model_listing_succeeded = False
         self._require_key()
         try:
             models = []
@@ -3560,6 +3577,7 @@ class GeminiProvider(AIProvider):
                 seen_tokens.add(token)
                 params["pageToken"] = token
             register_discovered_models("gemini", models)
+            self.model_listing_succeeded = True
 
             # Check both parameter and environment variable
             disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')

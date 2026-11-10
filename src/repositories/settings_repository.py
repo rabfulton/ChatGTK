@@ -54,6 +54,11 @@ class SettingsRepository:
                         key, value = line.split('=', 1)
                         key = key.strip().upper()
                         value = value.strip()
+
+                        # Read the removed toggle only to preserve its model choice.
+                        if key == 'TTS_HD':
+                            self._settings[key] = value.lower() == 'true'
+                            continue
                         
                         if key in SETTINGS_CONFIG:
                             self._explicit_keys.add(key)
@@ -109,6 +114,15 @@ class SettingsRepository:
             legacy_template = self._settings.get('READ_ALOUD_AUDIO_PROMPT_TEMPLATE', '')
             if legacy_template:
                 self._settings['TTS_PROMPT_TEMPLATE'] = legacy_template
+
+        selection = self._settings['TTS_VOICE_PROVIDER']
+        if selection == 'openai':
+            self._settings['TTS_VOICE_PROVIDER'] = (
+                'tts-1-hd' if self._settings.get('TTS_HD', False) else 'tts-1'
+            )
+        elif selection == 'gemini':
+            self._settings['TTS_VOICE_PROVIDER'] = 'gemini-2.5-flash-preview-tts'
+        self._settings.pop('TTS_HD', None)
 
     def _migrate_tool_menu_settings(self) -> None:
         """Default tool menu toggles to visibility settings when missing."""

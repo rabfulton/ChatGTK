@@ -444,12 +444,9 @@ SETTINGS_CONFIG = {
     # Speech-to-text model for voice input. Currently only Whisper variants are supported,
     # but future releases will list any model with audio input capability.
     'SPEECH_TO_TEXT_MODEL': {'type': str, 'default': 'whisper-1'},
-    # TTS Voice Provider: 'openai' uses OpenAI TTS (tts-1/tts-1-hd), 'gemini' uses Gemini TTS,
-    # 'gpt-4o-audio-preview' or 'gpt-4o-mini-audio-preview' uses audio-preview models.
-    # This is the unified TTS setting used by the play button, auto read-aloud, and read-aloud tool.
-    'TTS_VOICE_PROVIDER': {'type': str, 'default': 'openai'},
+    # Explicit speech model ID, shared by play, auto TTS and the read-aloud tool.
+    'TTS_VOICE_PROVIDER': {'type': str, 'default': 'tts-1'},
     'TTS_VOICE': {'type': str, 'default': 'alloy'},
-    'TTS_HD': {'type': bool, 'default': False},
     # Speech prompt template for Gemini TTS and audio-preview models. Use {text} as placeholder.
     'TTS_PROMPT_TEMPLATE': {'type': str, 'default': ''},
     'REALTIME_VOICE': {'type': str, 'default': 'alloy'},

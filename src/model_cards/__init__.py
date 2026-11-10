@@ -32,11 +32,13 @@ from .overrides import (
     apply_override_to_card,
     card_to_override_dict,
 )
+from .lifecycle import get_model_deprecation
 
 __all__ = [
     "ModelCard",
     "Capabilities",
     "get_card",
+    "get_model_deprecation",
     "list_cards",
     "register_card",
     "register_discovered_models",

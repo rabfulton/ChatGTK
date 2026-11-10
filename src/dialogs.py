@@ -27,7 +27,11 @@ if TYPE_CHECKING:
     import sounddevice as sd  # noqa: F401
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
-from model_cards import get_card, list_cards, resolve_model_id, register_discovered_models
+from model_cards import (
+    get_card, get_model_deprecation, list_cards, resolve_model_id,
+    register_discovered_models,
+)
+from model_cards.selection import get_feature_models
 from repositories import ModelCacheRepository, SettingsRepository
 from utils import (
     parse_color_to_rgba,
@@ -72,7 +76,7 @@ def load_model_cache() -> dict:
     result = {}
     for provider in ['openai', 'gemini', 'grok', 'claude', 'perplexity', 'custom']:
         models = repo.get_models(provider)
-        if models:
+        if provider in repo.get_all_cached_providers():
             result[provider] = models
             register_discovered_models(provider, models)
     return result
@@ -1675,43 +1679,9 @@ class SettingsDialog(Gtk.Dialog):
         self.combo_stt_model = Gtk.ComboBoxText.new_with_entry()
         self.combo_stt_model.set_entry_text_column(0)
 
-        # Known transcription models (client.audio.transcriptions.create)
-        stt_models = [
-            "whisper-1",
-            "gpt-4o-transcribe",
-            "gpt-4o-mini-transcribe",
-        ]
-
-        # Add any audio-input (non-audio-output) capable models (builtin + custom)
-        extra_models = set()
-        try:
-            for mid, card in list_cards().items():
-                if card.capabilities.audio_in and not card.capabilities.audio_out:
-                    extra_models.add(mid)
-            for mid, cfg in (self.custom_models or {}).items():
-                # Include custom models with api_type "stt"
-                if (cfg.get("api_type") or "").lower() == "stt":
-                    extra_models.add(mid)
-                else:
-                    card = get_card(mid, self.custom_models)
-                    if card and card.capabilities.audio_in and not card.capabilities.audio_out:
-                        extra_models.add(mid)
-        except Exception as e:
-            print(f"Error gathering STT models: {e}")
-
-        for model in sorted(m for m in extra_models if m not in stt_models):
-            stt_models.append(model)
-        for model in stt_models:
-            self.combo_stt_model.append_text(model)
-
-        current_stt = getattr(self, "speech_to_text_model", "") or stt_models[0]
-        if current_stt in stt_models:
-            self.combo_stt_model.set_active(stt_models.index(current_stt))
-        else:
-            self.combo_stt_model.set_active(0)
-            entry = self.combo_stt_model.get_child()
-            if entry and hasattr(entry, "set_text"):
-                entry.set_text(current_stt)
+        stt_models = list(self._get_feature_model_options("stt"))
+        current_stt = getattr(self, "speech_to_text_model", "") or "whisper-1"
+        self._populate_stt_model_dropdown(stt_models, current_stt)
 
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.combo_stt_model, False, True, 0)
@@ -1739,26 +1709,10 @@ class SettingsDialog(Gtk.Dialog):
         label.set_hexpand(True)
         self.combo_tts_provider = Gtk.ComboBoxText()
 
-        # Built-in TTS provider options (these use dedicated TTS APIs)
-        tts_providers = [
-            ("openai", "OpenAI TTS (tts-1 / tts-1-hd)"),
-            ("gemini", "Gemini TTS"),
-        ]
-        for provider_id, display_name in tts_providers:
-            self.combo_tts_provider.append(provider_id, display_name)
-
-        for model_id, display_name in self._get_tts_model_options().items():
-            self.combo_tts_provider.append(model_id, display_name)
-
-        # Add custom TTS models from custom_models.json
-        for model_id, cfg in self.custom_models.items():
-            if (cfg.get("api_type") or "").lower() == "tts":
-                display_name = cfg.get("display_name") or model_id
-                self.combo_tts_provider.append(model_id, f"{display_name} (custom)")
-
-        current_tts_provider = getattr(self, "tts_voice_provider", "openai") or "openai"
-        self.combo_tts_provider.set_active_id(current_tts_provider)
-        self.combo_tts_provider.connect("changed", self._on_tts_provider_changed)
+        self._refresh_tts_model_dropdown()
+        self._tts_provider_changed_id = self.combo_tts_provider.connect(
+            "changed", self._on_tts_provider_changed,
+        )
 
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(self.combo_tts_provider, False, True, 0)
@@ -1785,20 +1739,6 @@ class SettingsDialog(Gtk.Dialog):
         hbox.pack_start(label, True, True, 0)
         hbox.pack_start(voice_box, False, True, 0)
         list_box.add(row)
-
-        # HD Voice Toggle (only applies to OpenAI TTS)
-        self.row_hd_voice = Gtk.ListBoxRow()
-        _add_listbox_row_margins(self.row_hd_voice)
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        self.row_hd_voice.add(hbox)
-        label = Gtk.Label(label="TTS HD Voice", xalign=0)
-        label.set_hexpand(True)
-        label.set_tooltip_text("Use tts-1-hd model for higher quality (OpenAI TTS only)")
-        self.switch_hd = Gtk.Switch()
-        self.switch_hd.set_active(self.tts_hd)
-        hbox.pack_start(label, True, True, 0)
-        hbox.pack_start(self.switch_hd, False, True, 0)
-        list_box.add(self.row_hd_voice)
 
         # Speech Prompt Template (for Gemini TTS and audio-preview models)
         self.row_prompt_template = Gtk.ListBoxRow()
@@ -2432,14 +2372,13 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     def _get_all_image_models(self):
         """List discovered and configured models callable by the image tool."""
-        load_model_cache()
-        image_models = []
-        for model_id in set(list_cards()) | set(self.custom_models):
-            card = get_card(model_id, self.custom_models)
-            if (card and card.capabilities.image_gen
-                and (card.api_family == "images" or card.quirks.get("multimodal_image_gen"))):
-                image_models.append(model_id)
-        return sorted(image_models)
+        return list(self._get_feature_model_options("image"))
+
+    def _get_feature_model_options(self, feature):
+        """Intersect adapter capabilities with the last discovered provider lists."""
+        model_lists = load_model_cache()
+        model_lists.update(getattr(self, "_model_cache", None) or {})
+        return get_feature_models(model_lists, self.custom_models, feature)
 
     def _refresh_image_model_dropdown(self):
         """Refresh the image model dropdown to include all image-capable models."""
@@ -4457,6 +4396,10 @@ class SettingsDialog(Gtk.Dialog):
         """
         # Optionally capture existing selections
         previous_selections = {}
+        previous_expansion = {
+            provider: expander.get_expanded()
+            for provider, expander in getattr(self, "_deprecated_expanders", {}).items()
+        }
         if preserve_selections and self.model_checkboxes:
             for pkey, cbs in self.model_checkboxes.items():
                 previous_selections[pkey] = {mid for mid, cb in cbs.items() if cb.get_active()}
@@ -4467,6 +4410,7 @@ class SettingsDialog(Gtk.Dialog):
         self.model_checkboxes = {}
         self.model_display_entries = {}  # Initialize display name entries storage
         self._model_widgets_by_provider = {}
+        self._deprecated_expanders = {}
 
         # Add header row with column labels
         header_row = Gtk.ListBoxRow()
@@ -4505,6 +4449,17 @@ class SettingsDialog(Gtk.Dialog):
 
             # Determine available models (from disk cache or network)
             available_models = self._get_available_models_for_provider(provider_key)
+            status = getattr(self, "_model_fetch_status", {}).get(provider_key)
+            if status:
+                status_row = Gtk.ListBoxRow()
+                status_row.set_selectable(False)
+                status_row.set_activatable(False)
+                _add_listbox_row_margins(status_row)
+                status_label = Gtk.Label(label=status, xalign=0)
+                status_label.set_line_wrap(True)
+                status_row.add(status_label)
+                self._whitelist_outer_box.add(status_row)
+                widgets_for_provider.append(status_row)
 
             # Determine which models should be checked
             if preserve_selections and provider_key in previous_selections:
@@ -4513,14 +4468,37 @@ class SettingsDialog(Gtk.Dialog):
                 whitelist_str = getattr(self, whitelist_attr, "") or ""
                 whitelist_set = set(m.strip() for m in whitelist_str.split(",") if m.strip())
 
-            # Split into enabled and disabled, sort each alphabetically
-            enabled_models = sorted([m for m in available_models if m in whitelist_set])
-            disabled_models = sorted([m for m in available_models if m not in whitelist_set])
+            deprecations = {
+                model: get_model_deprecation(model, provider_key, self.custom_models)
+                for model in available_models
+            }
+            # Keep enabled models first within each lifecycle group.
+            ordered_models = sorted(set(available_models), key=lambda model: (
+                deprecations[model] is not None, model not in whitelist_set, model,
+            ))
+            deprecated_count = sum(info is not None for info in deprecations.values())
+            deprecated_list = None
 
             # Create checkboxes with display name support
             self.model_checkboxes[provider_key] = {}
-            self.model_display_entries = {}  # Store entry widgets for display names
-            for model_id in enabled_models + disabled_models:
+            for model_id in ordered_models:
+                deprecation = deprecations[model_id]
+                if deprecation is not None and deprecated_list is None:
+                    group_row = Gtk.ListBoxRow()
+                    group_row.set_selectable(False)
+                    group_row.set_activatable(False)
+                    _add_listbox_row_margins(group_row)
+                    expander = Gtk.Expander(label=f"Deprecated ({deprecated_count})")
+                    expander.set_expanded(previous_expansion.get(provider_key, False))
+                    deprecated_list = Gtk.ListBox()
+                    deprecated_list.set_selection_mode(Gtk.SelectionMode.NONE)
+                    deprecated_list.set_margin_start(16)
+                    expander.add(deprecated_list)
+                    group_row.add(expander)
+                    self._whitelist_outer_box.add(group_row)
+                    widgets_for_provider.append(group_row)
+                    self._deprecated_expanders[provider_key] = expander
+
                 row = Gtk.ListBoxRow()
                 _add_listbox_row_margins(row)
                 
@@ -4536,7 +4514,14 @@ class SettingsDialog(Gtk.Dialog):
                 cb.add(cb_label)
                 cb.set_active(model_id in whitelist_set)
                 cb.set_size_request(250, -1)
-                cb.set_tooltip_text(self._get_capability_tooltip(model_id))
+                tooltip = self._get_capability_tooltip(model_id)
+                if deprecation is not None:
+                    tooltip += "\nDeprecated"
+                    if deprecation.get("shutdown_date"):
+                        tooltip += f"\nShutdown: {deprecation['shutdown_date']}"
+                    if deprecation.get("replacement_model"):
+                        tooltip += f"\nSuggested replacement: {deprecation['replacement_model']}"
+                cb.set_tooltip_text(tooltip)
                 hbox.pack_start(cb, False, False, 0)
                 
                 # Spacer to push entry box to the right
@@ -4566,9 +4551,11 @@ class SettingsDialog(Gtk.Dialog):
                     self.model_display_entries[provider_key] = {}
                 self.model_display_entries[provider_key][model_id] = display_name_entry
                 
-                self._whitelist_outer_box.add(row)
+                target_list = deprecated_list if deprecation is not None else self._whitelist_outer_box
+                target_list.add(row)
                 self.model_checkboxes[provider_key][model_id] = cb
-                widgets_for_provider.append(row)
+                if deprecation is None:
+                    widgets_for_provider.append(row)
 
             # Separator between providers
             row = Gtk.ListBoxRow()
@@ -4622,6 +4609,7 @@ class SettingsDialog(Gtk.Dialog):
                 self._populate_model_whitelist_sections(preserve_selections=True)
                 self._refresh_image_model_dropdown()
                 self._refresh_tts_model_dropdown()
+                self._refresh_stt_model_dropdown()
                 button.set_sensitive(True)
                 button.set_label("Refresh Models")
                 return False
@@ -4754,13 +4742,15 @@ class SettingsDialog(Gtk.Dialog):
         Return a list of available models for the given provider.
 
         By default, reads from the on-disk cache (self._model_cache). If the
-        cache is empty for this provider, or if `force_refresh` is True,
-        fetches models from the provider API (or falls back to SETTINGS_CONFIG
-        defaults) and updates the disk cache.
+        cache is missing, contains the old Claude preset list, or `force_refresh`
+        is True, fetches models from the provider API. Failed discovery keeps
+        cached results or labelled defaults without caching them as availability.
         """
         # Ensure we have an in-memory copy of the disk cache
         if not hasattr(self, '_model_cache') or self._model_cache is None:
             self._model_cache = load_model_cache()
+        if not hasattr(self, "_model_fetch_status"):
+            self._model_fetch_status = {}
 
         def has_api_key_for_provider(pkey: str) -> bool:
             pkey = (pkey or "").lower()
@@ -4780,7 +4770,19 @@ class SettingsDialog(Gtk.Dialog):
             return models
 
         cached = self._model_cache.get(provider_key)
-        if cached and not force_refresh:
+        provider = self.providers.get(provider_key)
+        if provider_key == "claude" and provider and not force_refresh:
+            preset_models = set(SETTINGS_CONFIG["CLAUDE_MODEL_WHITELIST"]["default"].split(","))
+            if (cached is not None and set(cached) == preset_models
+                and not getattr(self, "_legacy_claude_refresh_attempted", False)):
+                self._legacy_claude_refresh_attempted = True
+                force_refresh = True
+        if not provider:
+            source = "cached models" if cached is not None else "preset models"
+            self._model_fetch_status[provider_key] = (
+                f"Provider is not configured. Showing {source}."
+            )
+        if cached is not None and not force_refresh:
             models = list(cached)
             if provider_key == "grok":
                 if has_api_key_for_provider("grok"):
@@ -4797,18 +4799,29 @@ class SettingsDialog(Gtk.Dialog):
 
         # Need to fetch from provider (network call) or fall back to defaults
         models = []
-        provider = self.providers.get(provider_key)
+        fetched = False
         if provider:
             try:
                 models = provider.get_available_models(disable_filter=True)
+                fetched = getattr(provider, "model_listing_succeeded", None) is not False
             except Exception as e:
                 print(f"Error fetching models for {provider_key}: {e}")
 
         # If still empty, fall back to SETTINGS_CONFIG defaults
-        if not models:
+        if not fetched:
+            if provider:
+                message = getattr(provider, "model_listing_error", None)
+                if not isinstance(message, str) or not message:
+                    message = "Could not refresh models."
+                source = "cached models" if cached is not None else "preset models"
+                self._model_fetch_status[provider_key] = f"{message} Showing {source}."
+            if cached is not None:
+                return list(cached)
             config_key = f"{provider_key.upper()}_MODEL_WHITELIST"
             default_str = SETTINGS_CONFIG.get(config_key, {}).get('default', '')
-            models = [m.strip() for m in default_str.split(",") if m.strip()]
+            # Fallbacks can populate the whitelist, but are not evidence of
+            # account availability for feature selectors.
+            return [m.strip() for m in default_str.split(",") if m.strip()]
         elif provider_key == "grok":
             if has_api_key_for_provider("grok"):
                 if "grok-realtime" not in models:
@@ -4819,6 +4832,7 @@ class SettingsDialog(Gtk.Dialog):
                 models = [m for m in models if m != "grok-realtime"]
 
         # Update in-memory and disk cache
+        self._model_fetch_status.pop(provider_key, None)
         self._model_cache[provider_key] = models
         register_discovered_models(provider_key, models)
         save_model_cache(self._model_cache)
@@ -5021,7 +5035,7 @@ class SettingsDialog(Gtk.Dialog):
     # -----------------------------------------------------------------------
     def on_preview_voice(self, widget):
         """Preview the selected TTS voice. Generate and save if missing."""
-        selected_provider = self.combo_tts_provider.get_active_id() or "openai"
+        selected_provider = self.combo_tts_provider.get_active_id() or "tts-1"
         selected_voice = self.combo_tts.get_active_text()
         voice_name_lower = selected_voice.lower() if selected_voice else ""
 
@@ -5093,83 +5107,7 @@ class SettingsDialog(Gtk.Dialog):
                 self._show_preview_error(str(e))
             return
 
-        if selected_provider == "gemini":
-            # Gemini TTS preview
-            preview_dir = Path(BASE_DIR) / "gemini_preview"
-            preview_file = preview_dir / f"chirp3-hd-{voice_name_lower}.wav"
-
-            if preview_file.exists():
-                # Play existing preview
-                try:
-                    subprocess.Popen(['paplay', str(preview_file)])
-                except Exception as e:
-                    self._show_preview_error(str(e))
-                return
-
-            # Generate missing Gemini preview
-            gemini_provider = self.providers.get('gemini')
-            if not gemini_provider:
-                self._show_preview_error("Gemini API key not configured. Please add your Gemini API key in Settings > API Keys.")
-                return
-
-            preview_text = f"Hello! This is the {selected_voice} voice."
-
-            try:
-                # Ensure preview directory exists
-                preview_dir.mkdir(parents=True, exist_ok=True)
-
-                # Generate speech using Gemini TTS
-                audio_bytes = gemini_provider.generate_speech(preview_text, selected_voice)
-
-                # Save to preview file
-                with open(preview_file, 'wb') as f:
-                    f.write(audio_bytes)
-
-                # Play the generated preview
-                subprocess.Popen(['paplay', str(preview_file)])
-
-            except Exception as e:
-                self._show_preview_error(str(e))
-            return
-
-        # OpenAI TTS preview
-        preview_dir = Path(BASE_DIR) / "preview"
-        preview_file = preview_dir / f"{voice_name_lower}.wav"
-
-        if preview_file.exists():
-            # Play existing preview
-            try:
-                subprocess.Popen(['paplay', str(preview_file)])
-            except Exception as e:
-                self._show_preview_error(str(e))
-            return
-
-        # Generate missing OpenAI preview
-        if not self.ai_provider:
-            self._show_preview_error("OpenAI API key not configured. Please add your API key in Settings > API Keys.")
-            return
-
-        preview_text = f"Hello! This is the {selected_voice} voice."
-
-        try:
-            # Ensure preview directory exists
-            preview_dir.mkdir(parents=True, exist_ok=True)
-
-            # Generate speech using OpenAI TTS and save to preview file
-            with self.ai_provider.audio.speech.with_streaming_response.create(
-                model="tts-1-hd" if self.tts_hd else "tts-1",
-                voice=selected_voice,
-                input=preview_text
-            ) as response:
-                with open(preview_file, 'wb') as f:
-                    for chunk in response.iter_bytes():
-                        f.write(chunk)
-
-            # Play the generated preview
-            subprocess.Popen(['paplay', str(preview_file)])
-
-        except Exception as e:
-            self._show_preview_error(str(e))
+        self._show_preview_error(f"Unsupported speech model: {selected_provider}")
 
     def _show_preview_error(self, message: str):
         """Show an error dialog for voice preview failures."""
@@ -5235,7 +5173,7 @@ class SettingsDialog(Gtk.Dialog):
         self.combo_tts.remove_all()
 
         # Get the selected provider
-        provider_id = self.combo_tts_provider.get_active_id() or "openai"
+        provider_id = self.combo_tts_provider.get_active_id() or "tts-1"
 
         # Check if this is a custom TTS model
         custom_model_cfg = self.custom_models.get(provider_id) if hasattr(self, 'custom_models') else None
@@ -5271,19 +5209,12 @@ class SettingsDialog(Gtk.Dialog):
             self.combo_tts.set_active(0)
 
     def _update_tts_option_visibility(self):
-        """Show/hide HD Voice and Prompt Template rows based on the selected TTS provider."""
-        provider_id = self.combo_tts_provider.get_active_id() or "openai"
+        """Show speech instructions only for adapters that support them."""
+        provider_id = self.combo_tts_provider.get_active_id() or "tts-1"
         
         # Check if this is a custom TTS model
         custom_model_cfg = self.custom_models.get(provider_id) if hasattr(self, 'custom_models') else None
         is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
-        
-        # HD Voice only applies to OpenAI TTS (tts-1 / tts-1-hd), not custom models
-        if hasattr(self, 'row_hd_voice'):
-            if provider_id == "openai" and not is_custom_tts:
-                self.row_hd_voice.show()
-            else:
-                self.row_hd_voice.hide()
         
         # Prompt Template only applies to Gemini TTS and audio-modality models (not custom)
         if hasattr(self, 'row_prompt_template'):
@@ -5303,30 +5234,46 @@ class SettingsDialog(Gtk.Dialog):
         self._update_tts_option_visibility()
 
     def _refresh_tts_model_dropdown(self):
-        """Add newly discovered speech models without changing the selection."""
+        """Refresh available speech choices while preserving the selected model."""
         if not hasattr(self, "combo_tts_provider"):
             return
-        existing = {row[1] for row in self.combo_tts_provider.get_model()}
-        for model_id, display_name in self._get_tts_model_options().items():
-            if model_id not in existing:
+        current = self.combo_tts_provider.get_active_id() or getattr(
+            self, "tts_voice_provider", "tts-1",
+        ) or "tts-1"
+        options = self._get_tts_model_options()
+        handler_id = getattr(self, "_tts_provider_changed_id", None)
+        if handler_id:
+            self.combo_tts_provider.handler_block(handler_id)
+        try:
+            self.combo_tts_provider.remove_all()
+            for model_id, display_name in options.items():
                 self.combo_tts_provider.append(model_id, display_name)
+            if current not in options:
+                self.combo_tts_provider.append(current, f"{current} (not in latest listing)")
+            self.combo_tts_provider.set_active_id(current)
+        finally:
+            if handler_id:
+                self.combo_tts_provider.handler_unblock(handler_id)
 
     def _get_tts_model_options(self):
         """List speech models supported by the app's synthesis adapters."""
-        load_model_cache()
-        options = {}
-        for model_id in sorted(list_cards()):
-            custom_config = self.custom_models.get(model_id, {})
-            if (custom_config.get("api_type") or "").lower() == "tts":
-                continue  # Custom speech models have their own selector entries.
-            card = get_card(model_id, self.custom_models)
-            supported = (
-                card.api_family == "tts" and card.provider in ("openai", "gemini")
-                or card.provider == "openai" and card.quirks.get("requires_audio_modality")
-            )
-            if supported and card.capabilities.audio_out and not card.is_realtime_model():
-                options[model_id] = card.get_display_name()
-        return options
+        return self._get_feature_model_options("tts")
+
+    def _populate_stt_model_dropdown(self, models, current):
+        """Update transcription suggestions without replacing a saved or typed ID."""
+        self.combo_stt_model.remove_all()
+        for model in models:
+            self.combo_stt_model.append_text(model)
+        if current in models:
+            self.combo_stt_model.set_active(models.index(current))
+        else:
+            self.combo_stt_model.get_child().set_text(current)
+
+    def _refresh_stt_model_dropdown(self):
+        """Refresh supported file transcription models after discovery."""
+        if hasattr(self, "combo_stt_model"):
+            current = self.combo_stt_model.get_active_text() or ""
+            self._populate_stt_model_dropdown(list(self._get_feature_model_options("stt")), current)
 
     def _on_compaction_enabled_toggled(self, switch, gparam):
         """Toggle sensitivity of compaction size spinbutton."""
@@ -5537,7 +5484,7 @@ class SettingsDialog(Gtk.Dialog):
                 or (self.combo_stt_model.get_child().get_text() if self.combo_stt_model.get_child() else '')
                 or 'whisper-1'
             )
-            tts_voice_provider = self.combo_tts_provider.get_active_id() or 'openai'
+            tts_voice_provider = self.combo_tts_provider.get_active_id() or 'tts-1'
             tts_voice = self.combo_tts.get_active_text()
             realtime_voice_provider = self.combo_realtime_provider.get_active_id() or 'openai'
             realtime_voice = self.combo_realtime.get_active_text()
@@ -5546,11 +5493,10 @@ class SettingsDialog(Gtk.Dialog):
             mute_mic_during_playback = self.switch_mute_mic_playback.get_active()
             read_aloud_enabled = self.switch_read_aloud.get_active()
             tts_prompt_template = self.entry_audio_prompt_template.get_text().strip()
-            tts_hd = self.switch_hd.get_active()
         else:
             microphone = getattr(self, "microphone", "default") or "default"
             speech_to_text_model = getattr(self, "speech_to_text_model", "whisper-1") or "whisper-1"
-            tts_voice_provider = getattr(self, "tts_voice_provider", "openai") or "openai"
+            tts_voice_provider = getattr(self, "tts_voice_provider", "tts-1") or "tts-1"
             tts_voice = getattr(self, "tts_voice", "")
             realtime_voice_provider = getattr(self, "realtime_voice_provider", "openai") or "openai"
             realtime_voice = getattr(self, "realtime_voice", "")
@@ -5562,7 +5508,6 @@ class SettingsDialog(Gtk.Dialog):
                 getattr(self, "tts_prompt_template", "")
                 or getattr(self, "read_aloud_audio_prompt_template", "")
             )
-            tts_hd = bool(getattr(self, "tts_hd", False))
 
         read_aloud_tool_enabled = self.switch_read_aloud_tool.get_active()
         if read_aloud_tool_enabled and read_aloud_enabled:
@@ -5615,7 +5560,6 @@ class SettingsDialog(Gtk.Dialog):
             'source_theme': self.combo_theme.get_active_text(),
             'latex_dpi': int(self.spin_latex_dpi.get_value()),
             'latex_color': self.btn_latex_color.get_rgba().to_string(),
-            'tts_hd': tts_hd,
             'compaction_enabled': self.switch_compaction_enabled.get_active(),
             'compaction_max_size_kb': int(self.spin_compaction_max_size.get_value()),
             'compaction_keep_turns': int(self.spin_compaction_keep_turns.get_value()),
