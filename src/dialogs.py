@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     import sounddevice as sd  # noqa: F401
 
 from config import BASE_DIR, PARENT_DIR, SETTINGS_CONFIG, MODEL_CACHE_FILE
-from model_cards import get_card, list_cards, resolve_model_id
+from model_cards import get_card, list_cards, resolve_model_id, register_discovered_models
 from repositories import ModelCacheRepository, SettingsRepository
 from utils import (
     parse_color_to_rgba,
@@ -74,6 +74,7 @@ def load_model_cache() -> dict:
         models = repo.get_models(provider)
         if models:
             result[provider] = models
+            register_discovered_models(provider, models)
     return result
 
 
@@ -125,6 +126,7 @@ def save_model_cache(cache: dict) -> None:
     for provider, models in cache.items():
         if isinstance(models, list):
             repo.set_models(provider, models)
+    repo.save()
 
 
 # ---------------------------------------------------------------------------
@@ -1745,20 +1747,8 @@ class SettingsDialog(Gtk.Dialog):
         for provider_id, display_name in tts_providers:
             self.combo_tts_provider.append(provider_id, display_name)
 
-        # Dynamically add audio models from catalog (models with audio_out capability)
-        from model_cards import list_cards as get_all_cards
-        audio_models_added = set()
-        for card in get_all_cards().values():
-            # Include models with audio_out that use the audio modality (chat-based TTS)
-            # Exclude pure TTS models (no text input) and realtime models (websocket)
-            if (card.capabilities.audio_out
-                and card.capabilities.text  # Must accept text input
-                and card.quirks.get("requires_audio_modality")
-                and not card.quirks.get("realtime_websocket")
-                and card.id not in audio_models_added):
-                # Prefer base model names over dated variants
-                self.combo_tts_provider.append(card.id, card.get_display_name())
-                audio_models_added.add(card.id)
+        for model_id, display_name in self._get_tts_model_options().items():
+            self.combo_tts_provider.append(model_id, display_name)
 
         # Add custom TTS models from custom_models.json
         for model_id, cfg in self.custom_models.items():
@@ -2441,27 +2431,14 @@ class SettingsDialog(Gtk.Dialog):
     # Tool Options page
     # -----------------------------------------------------------------------
     def _get_all_image_models(self):
-        """
-        Get all image-capable models from the catalog and custom models.
-        
-        Returns a sorted list of model IDs that have image generation capability.
-        """
-        image_models = set()
-        
-        # Get image models from the catalog
-        for model_id, card in list_cards().items():
-            if card.is_image_model() or card.capabilities.image_gen:
-                image_models.add(model_id)
-        
-        # Add custom image models (from custom_models.json)
-        for model_id, cfg in self.custom_models.items():
-            if (cfg.get("api_type") or "").lower() == "images":
-                image_models.add(model_id)
-            # Also check if there's a card override with image_gen capability
+        """List discovered and configured models callable by the image tool."""
+        load_model_cache()
+        image_models = []
+        for model_id in set(list_cards()) | set(self.custom_models):
             card = get_card(model_id, self.custom_models)
-            if card and (card.is_image_model() or card.capabilities.image_gen):
-                image_models.add(model_id)
-        
+            if (card and card.capabilities.image_gen
+                and (card.api_family == "images" or card.quirks.get("multimodal_image_gen"))):
+                image_models.append(model_id)
         return sorted(image_models)
 
     def _refresh_image_model_dropdown(self):
@@ -4643,6 +4620,8 @@ class SettingsDialog(Gtk.Dialog):
 
             def finish_refresh():
                 self._populate_model_whitelist_sections(preserve_selections=True)
+                self._refresh_image_model_dropdown()
+                self._refresh_tts_model_dropdown()
                 button.set_sensitive(True)
                 button.set_label("Refresh Models")
                 return False
@@ -4841,6 +4820,7 @@ class SettingsDialog(Gtk.Dialog):
 
         # Update in-memory and disk cache
         self._model_cache[provider_key] = models
+        register_discovered_models(provider_key, models)
         save_model_cache(self._model_cache)
 
         return models
@@ -5045,10 +5025,34 @@ class SettingsDialog(Gtk.Dialog):
         selected_voice = self.combo_tts.get_active_text()
         voice_name_lower = selected_voice.lower() if selected_voice else ""
 
-        # Check for custom TTS providers
-        custom_model_cfg = self.custom_models.get(selected_provider) if hasattr(self, 'custom_models') else None
+        custom_model_cfg = self.custom_models.get(selected_provider)
         is_custom_tts = custom_model_cfg and (custom_model_cfg.get("api_type") or "").lower() == "tts"
+        card = get_card(selected_provider, self.custom_models)
+        if (not is_custom_tts and card and card.provider in ("openai", "gemini")
+            and (card.api_family == "tts" or card.quirks.get("requires_audio_modality"))):
+            from services.audio_service import AudioService
+            service = AudioService()
+            provider = self.providers.get(card.provider)
+            if not provider:
+                self._show_preview_error(f"{card.provider.title()} API key not configured.")
+                return
+            text = f"Hello! This is the {selected_voice} voice."
+            if card.quirks.get("requires_audio_modality"):
+                path = service.synthesize_audio_preview(text, provider, card.id, selected_voice)
+            elif card.provider == "openai":
+                path = service.synthesize_openai_tts(text, provider, selected_voice, model=card.id)
+            else:
+                path = service.synthesize_gemini_tts(text, provider, selected_voice, model=card.id)
+            if path:
+                try:
+                    subprocess.Popen(['paplay', str(path)])
+                except Exception as exc:
+                    self._show_preview_error(str(exc))
+            else:
+                self._show_preview_error("Speech synthesis failed.")
+            return
 
+        # Check for custom TTS providers
         if is_custom_tts:
             # Use a cached preview if available
             safe_provider = "".join(c if c.isalnum() else "_" for c in selected_provider)
@@ -5248,7 +5252,7 @@ class SettingsDialog(Gtk.Dialog):
                 voices.insert(0, custom_voice)
             if not voices:
                 voices = ["default"]
-        elif provider_id == "gemini":
+        elif provider_id == "gemini" or (get_card(provider_id) and get_card(provider_id).provider == "gemini"):
             voices = self.GEMINI_TTS_VOICES
         else:
             # OpenAI TTS and audio-preview models use the same OpenAI voices
@@ -5288,7 +5292,7 @@ class SettingsDialog(Gtk.Dialog):
             card = get_card(provider_id)
             is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
             
-            if (provider_id == "gemini" or is_audio_modality_model) and not is_custom_tts:
+            if (provider_id == "gemini" or (card and card.provider == "gemini") or is_audio_modality_model) and not is_custom_tts:
                 self.row_prompt_template.show()
             else:
                 self.row_prompt_template.hide()
@@ -5297,6 +5301,32 @@ class SettingsDialog(Gtk.Dialog):
         """Handle TTS provider selection change."""
         self._populate_tts_voices()
         self._update_tts_option_visibility()
+
+    def _refresh_tts_model_dropdown(self):
+        """Add newly discovered speech models without changing the selection."""
+        if not hasattr(self, "combo_tts_provider"):
+            return
+        existing = {row[1] for row in self.combo_tts_provider.get_model()}
+        for model_id, display_name in self._get_tts_model_options().items():
+            if model_id not in existing:
+                self.combo_tts_provider.append(model_id, display_name)
+
+    def _get_tts_model_options(self):
+        """List speech models supported by the app's synthesis adapters."""
+        load_model_cache()
+        options = {}
+        for model_id in sorted(list_cards()):
+            custom_config = self.custom_models.get(model_id, {})
+            if (custom_config.get("api_type") or "").lower() == "tts":
+                continue  # Custom speech models have their own selector entries.
+            card = get_card(model_id, self.custom_models)
+            supported = (
+                card.api_family == "tts" and card.provider in ("openai", "gemini")
+                or card.provider == "openai" and card.quirks.get("requires_audio_modality")
+            )
+            if supported and card.capabilities.audio_out and not card.is_realtime_model():
+                options[model_id] = card.get_display_name()
+        return options
 
     def _on_compaction_enabled_toggled(self, switch, gparam):
         """Toggle sensitivity of compaction size spinbutton."""

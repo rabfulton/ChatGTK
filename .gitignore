@@ -22,7 +22,10 @@ debug_failed.log
 PKGBUILD
 *.txt
 .SRCINFO
+!/PKGBUILD
+!/.SRCINFO
 *.md
+!docs/BACKGROUND_REQUESTS_INVESTIGATION.md
 broadway-chatgtk.sh
 pwa/
 models/

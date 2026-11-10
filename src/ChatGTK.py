@@ -2055,47 +2055,10 @@ class OpenAIGTKClient(Gtk.Window):
             return "No text provided to read aloud."
         
         try:
-            # Use unified TTS settings (tts_voice_provider)
-            provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
-            
-            # Check if this is a custom TTS model
-            custom_models = getattr(self, 'custom_models', {}) or {}
-            is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
-            
-            # Check if this is an audio-modality model (gpt-audio, gpt-4o-audio-preview, etc.)
-            from model_cards import get_card
-            card = get_card(provider)
-            is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
-            
-            if provider == 'openai':
-                success = self._synthesize_and_play_tts(
-                    text,
-                    chat_id=self.current_chat_id,
-                    stop_event=None
-                )
-            elif provider == 'gemini':
-                success = self._synthesize_and_play_gemini_tts(
-                    text,
-                    chat_id=self.current_chat_id,
-                    stop_event=None
-                )
-            elif is_audio_modality_model:
-                success = self._synthesize_and_play_audio_preview(
-                    text,
-                    chat_id=self.current_chat_id,
-                    model_id=provider,
-                    stop_event=None
-                )
-            elif is_custom_tts:
-                success = self._synthesize_and_play_custom_tts(
-                    text,
-                    chat_id=self.current_chat_id,
-                    model_id=provider,
-                    stop_event=None
-                )
-            else:
-                return f"Unknown TTS provider: {provider}"
-            
+            success = self._synthesize_and_play_selected_tts(
+                text, chat_id=self.current_chat_id,
+            )
+
             if success:
                 return "Text was read aloud successfully."
             else:
@@ -2537,7 +2500,8 @@ class OpenAIGTKClient(Gtk.Window):
         model_temperature = self._get_temperature_for_model(target_model)
 
         # Check if we're in realtime mode
-        if "realtime" in target_model.lower():
+        target_card = get_card(target_model, self.custom_models)
+        if target_card and target_card.is_realtime_model():
             ws_provider = self._get_realtime_ws_provider(provider_name)
             # Keep a convenience reference for legacy callers.
             self.ws_provider = ws_provider
@@ -3617,7 +3581,8 @@ class OpenAIGTKClient(Gtk.Window):
         
         model_temperature = self._get_temperature_for_model(current_model)
 
-        if "realtime" not in current_model.lower():
+        current_card = get_card(current_model, self.custom_models)
+        if not (current_card and current_card.is_realtime_model()):
             if self._in_document_mode and self._document_view:
                 if self._document_view.editor_has_focus():
                     self._audio_transcription_to_textview(self._document_view.get_editor_view())
@@ -4622,45 +4587,11 @@ class OpenAIGTKClient(Gtk.Window):
                             audio_service.play_audio_auto(Path(cached_file), stop_event)
                             return
                         
-                        # No cached file, use TTS synthesis based on current provider
-                        provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
-                        
-                        # Check if this is a custom TTS model
-                        custom_models = getattr(self, 'custom_models', {}) or {}
-                        is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
-                        
-                        # Check if this is an audio-modality model
-                        from model_cards import get_card
-                        card = get_card(provider)
-                        is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
-                        
-                        if provider == 'openai':
-                            self._synthesize_and_play_tts(
-                                text_content,
-                                chat_id=self.current_chat_id,
-                                stop_event=stop_event
-                            )
-                        elif provider == 'gemini':
-                            self._synthesize_and_play_gemini_tts(
-                                text_content,
-                                chat_id=self.current_chat_id,
-                                stop_event=stop_event
-                            )
-                        elif is_audio_modality_model:
-                            self._synthesize_and_play_audio_preview(
-                                text_content,
-                                chat_id=self.current_chat_id,
-                                model_id=provider,
-                                stop_event=stop_event
-                            )
-                        elif is_custom_tts:
-                            self._synthesize_and_play_custom_tts(
-                                text_content,
-                                chat_id=self.current_chat_id,
-                                model_id=provider,
-                                stop_event=stop_event
-                            )
-                    
+                        self._synthesize_and_play_selected_tts(
+                            text_content, chat_id=self.current_chat_id,
+                            stop_event=stop_event,
+                        )
+
                     except Exception as e:
                         GLib.idle_add(self.append_message, 'ai', f"Error playing audio: {str(e)}")
                     finally:
@@ -4824,13 +4755,46 @@ class OpenAIGTKClient(Gtk.Window):
         """Get cache path - delegated to AudioService."""
         provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
         voice = self.settings.get('TTS_VOICE', None) or 'alloy'
-        model = "tts-1-hd" if provider == 'openai' and self.settings.get('TTS_HD', False) else "tts-1"
+        card = get_card(provider, self.custom_models)
+        # Other speech adapters check their own caches, including prompt text.
+        if provider != 'openai' and not (card and card.provider == 'openai' and card.api_family == 'tts'):
+            return None
+        model = provider if provider != 'openai' else (
+            'tts-1-hd' if self.settings.get('TTS_HD', False) else 'tts-1'
+        )
         return self.controller.audio_service._get_cache_path(
             self.controller.audio_service._clean_tts_text(text),
-            chat_id, f"{provider}_{model}", voice
+            chat_id, f"openai_{model}", voice
         )
 
-    def _synthesize_and_play_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
+    def _synthesize_and_play_selected_tts(self, text, *, chat_id, stop_event=None):
+        """Route every read-aloud entry point through the selected speech model."""
+        selection = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
+        card = get_card(selection, self.custom_models)
+        kwargs = {"chat_id": chat_id, "stop_event": stop_event}
+        if selection == 'openai':
+            return self._synthesize_and_play_tts(text, **kwargs)
+        if selection == 'gemini':
+            return self._synthesize_and_play_gemini_tts(text, **kwargs)
+        custom_config = self.custom_models.get(selection, {})
+        if (custom_config.get('api_type') or '').lower() == 'tts':
+            return self._synthesize_and_play_custom_tts(text, model_id=selection, **kwargs)
+        if card and card.provider == 'custom' and card.api_family == 'tts':
+            return self._synthesize_and_play_custom_tts(text, model_id=selection, **kwargs)
+        if card and card.api_family == 'tts':
+            if card.provider == 'openai':
+                return self._synthesize_and_play_tts(text, model_id=selection, **kwargs)
+            if card.provider == 'gemini':
+                return self._synthesize_and_play_gemini_tts(text, model_id=selection, **kwargs)
+        if card and card.provider == 'openai' and card.quirks.get('requires_audio_modality'):
+            return self._synthesize_and_play_audio_preview(text, model_id=selection, **kwargs)
+        print(f"Unknown TTS model: {selection}")
+        return False
+
+    def _synthesize_and_play_tts(
+        self, text: str, *, chat_id: str,
+        stop_event: threading.Event = None, model_id: str = None,
+    ) -> bool:
         """Synthesize text using OpenAI TTS and play it."""
         provider = self.controller.get_provider('openai')
         if not provider:
@@ -4844,7 +4808,7 @@ class OpenAIGTKClient(Gtk.Window):
             stop_event=stop_event,
             chat_id=chat_id,
             voice=self.settings.get('TTS_VOICE', 'alloy'),
-            model='tts-1-hd' if self.settings.get('TTS_HD', False) else 'tts-1',
+            model=model_id or ('tts-1-hd' if self.settings.get('TTS_HD', False) else 'tts-1'),
         )
         return result
 
@@ -4866,7 +4830,10 @@ class OpenAIGTKClient(Gtk.Window):
             prompt_template=self.settings.get('TTS_PROMPT_TEMPLATE', '') or 'Please say the following verbatim: "{text}"',
         )
 
-    def _synthesize_and_play_gemini_tts(self, text: str, *, chat_id: str, stop_event: threading.Event = None) -> bool:
+    def _synthesize_and_play_gemini_tts(
+        self, text: str, *, chat_id: str,
+        stop_event: threading.Event = None, model_id: str = None,
+    ) -> bool:
         """Synthesize text using Gemini TTS."""
         provider = self.controller.get_provider('gemini')
         if not provider:
@@ -4876,6 +4843,7 @@ class OpenAIGTKClient(Gtk.Window):
         return self.controller.audio_service.synthesize_and_play(
             text=text,
             provider_type='gemini',
+            model=model_id or 'gemini-2.5-flash-preview-tts',
             provider=provider,
             stop_event=stop_event,
             chat_id=chat_id,
@@ -4950,47 +4918,10 @@ class OpenAIGTKClient(Gtk.Window):
         self.read_aloud_stop_event = threading.Event()
         
         def read_aloud_thread():
-            # Use unified TTS settings (tts_voice_provider)
-            provider = self.settings.get('TTS_VOICE_PROVIDER', 'openai') or 'openai'
-            
-            # Check if this is a custom TTS model
-            custom_models = getattr(self, 'custom_models', {}) or {}
-            is_custom_tts = provider in custom_models and (custom_models[provider].get('api_type') or '').lower() == 'tts'
-            
-            # Check if this is an audio-modality model
-            from model_cards import get_card
-            card = get_card(provider)
-            is_audio_modality_model = card and card.quirks.get('requires_audio_modality')
-            
             try:
-                if provider == 'openai':
-                    self._synthesize_and_play_tts(
-                        text,
-                        chat_id=chat_id,
-                        stop_event=self.read_aloud_stop_event
-                    )
-                elif provider == 'gemini':
-                    self._synthesize_and_play_gemini_tts(
-                        text,
-                        chat_id=chat_id,
-                        stop_event=self.read_aloud_stop_event
-                    )
-                elif is_audio_modality_model:
-                    self._synthesize_and_play_audio_preview(
-                        text,
-                        chat_id=chat_id,
-                        model_id=provider,
-                        stop_event=self.read_aloud_stop_event
-                    )
-                elif is_custom_tts:
-                    self._synthesize_and_play_custom_tts(
-                        text,
-                        chat_id=chat_id,
-                        model_id=provider,
-                        stop_event=self.read_aloud_stop_event
-                    )
-                else:
-                    print(f"Read Aloud: Unknown TTS provider '{provider}'")
+                self._synthesize_and_play_selected_tts(
+                    text, chat_id=chat_id, stop_event=self.read_aloud_stop_event,
+                )
             except Exception as e:
                 print(f"Read Aloud error: {e}")
             finally:

@@ -6,6 +6,7 @@ with support for built-in cards, user-defined custom cards, user overrides,
 and automatic synthesis from legacy custom_models.json entries.
 """
 
+import re
 from typing import Optional, Dict
 
 from .schema import ModelCard, Capabilities
@@ -14,6 +15,7 @@ from .catalog import BUILTIN_CARDS
 
 # Cache for dynamically registered custom cards
 _custom_cards: Dict[str, ModelCard] = {}
+_discovered_cards: Dict[str, ModelCard] = {}
 
 
 def _infer_builtin_like_card(model_id: str) -> Optional[ModelCard]:
@@ -28,13 +30,50 @@ def _infer_builtin_like_card(model_id: str) -> Optional[ModelCard]:
 
     # OpenAI image models can appear from the models API before this repo's
     # built-in catalog is updated. Route the whole family through /images.
-    if model_lower.startswith("gpt-image-"):
+    if model_lower.startswith("gpt-image-") or model_lower == "chatgpt-image-latest":
         return ModelCard(
             id=model_id,
             provider="openai",
             display_name=model_id,
             api_family="images",
             capabilities=Capabilities(text=False, image_gen=True, image_edit=True),
+        )
+
+    # Recognize only the conversational Realtime family. Transcription and
+    # translation models with similar names use different session workflows.
+    if (re.fullmatch(r"gpt-realtime(?:-(?:mini|\d+(?:\.\d+)*))*", model_lower)
+        or re.fullmatch(r"gpt-4o(?:-mini)?-realtime-preview(?:-\d{4}-\d{2}-\d{2})?", model_lower)):
+        return ModelCard(
+            id=model_id, provider="openai", api_family="realtime",
+            capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
+            quirks={"realtime_websocket": True},
+        )
+
+    if re.fullmatch(r"(?:gpt-4o-mini-tts|tts-1(?:-hd)?)(?:-\d{4}(?:-\d{2}){0,2})?", model_lower):
+        return ModelCard(
+            id=model_id, provider="openai", api_family="tts",
+            capabilities=Capabilities(text=False, audio_out=True),
+        )
+
+    if (re.fullmatch(r"gpt-audio(?:-(?:mini|\d+(?:\.\d+)*))*", model_lower)
+        or re.fullmatch(r"gpt-4o(?:-mini)?-audio-preview(?:-\d{4}-\d{2}-\d{2})?", model_lower)):
+        return ModelCard(
+            id=model_id, provider="openai", api_family="chat.completions",
+            capabilities=Capabilities(text=True, audio_in=True, audio_out=True),
+            quirks={"requires_audio_modality": True},
+        )
+
+    if re.fullmatch(r"gemini-\d+(?:\.\d+)?-(?:flash|pro)(?:-preview)?-tts(?:-\d{2}-\d{2})?", model_lower):
+        return ModelCard(
+            id=model_id, provider="gemini", api_family="tts",
+            capabilities=Capabilities(text=False, audio_out=True),
+        )
+
+    if re.fullmatch(r"gemini-\d+(?:\.\d+)?-(?:flash|pro)-image(?:-preview)?(?:-\d{2}-\d{2})?", model_lower):
+        return ModelCard(
+            id=model_id, provider="gemini", api_family="generateContent",
+            capabilities=Capabilities(text=True, image_gen=True, image_edit=True),
+            quirks={"multimodal_image_gen": True},
         )
 
     if model_lower.startswith("grok-imagine-image"):
@@ -67,7 +106,8 @@ def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[Mo
     2. Registered custom cards (runtime via register_card())
     3. Built-in catalog (from catalog.py)
     4. Synthesized card from custom_models dict (legacy format)
-    5. None (caller should use heuristics fallback)
+    5. Recognized variants from provider discovery or family inference
+    6. None (capabilities are unknown)
 
     Parameters
     ----------
@@ -98,6 +138,8 @@ def get_card(model_id: str, custom_models: Optional[dict] = None) -> Optional[Mo
     elif custom_models and model_id in custom_models:
         cfg = custom_models[model_id]
         base_card = _synthesize_card_from_custom(model_id, cfg)
+    elif model_id in _discovered_cards:
+        base_card = _discovered_cards[model_id]
     
     if base_card is None:
         base_card = _infer_builtin_like_card(model_id)
@@ -219,6 +261,20 @@ def register_card(card: ModelCard) -> None:
     _custom_cards[card.id] = card
 
 
+def register_discovered_models(provider: str, model_ids) -> None:
+    """Expose recognized provider model variants to capability selectors.
+
+    Discovery never replaces explicit cards or grants capabilities to arbitrary
+    model names. Cached model IDs can be registered again without network access.
+    """
+    for model_id in model_ids:
+        if not isinstance(model_id, str) or model_id in BUILTIN_CARDS:
+            continue
+        card = _infer_builtin_like_card(model_id)
+        if card and card.provider == provider:
+            _discovered_cards[model_id] = card
+
+
 def unregister_card(model_id: str) -> bool:
     """
     Unregister a custom model card.
@@ -241,7 +297,7 @@ def unregister_card(model_id: str) -> bool:
 
 def list_cards() -> Dict[str, ModelCard]:
     """
-    Return all known cards (builtin + custom).
+    Return all known cards (builtin, discovered and custom).
 
     Custom cards override builtin cards with the same ID.
 
@@ -250,7 +306,7 @@ def list_cards() -> Dict[str, ModelCard]:
     Dict[str, ModelCard]
         Mapping of model ID to ModelCard.
     """
-    return {**BUILTIN_CARDS, **_custom_cards}
+    return {**_discovered_cards, **BUILTIN_CARDS, **_custom_cards}
 
 
 def clear_custom_cards() -> None:

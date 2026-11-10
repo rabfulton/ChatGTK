@@ -72,6 +72,12 @@ class ModelCard:
         """Return True if this is a text chat model."""
         return self.capabilities.text and not self.is_image_model()
 
+    def is_realtime_model(self) -> bool:
+        """Return whether the app should use a conversational voice session."""
+        return self.api_family == "realtime" or bool(
+            self.quirks.get("realtime_websocket") or self.quirks.get("realtime")
+        )
+
     def get_display_name(self) -> str:
         """Return the display name, falling back to the model ID."""
         return self.display_name or self.id

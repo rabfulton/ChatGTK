@@ -49,6 +49,7 @@ A GTK-based Linux desktop client for OpenAI, Google Gemini, xAI Grok, Perplexity
 - [Getting API keys](#getting-api-keys)
 - [Custom Models](#custom-models)
 - [Grok Model Discovery and Search](#grok-model-discovery-and-search)
+- [Model Discovery and Specialized Models](#model-discovery-and-specialized-models)
 - [Local Models](#local-models)
 - [Document Mode](#document-mode)
 - [Document Import / Conversion](#document-import--conversion)
@@ -239,6 +240,35 @@ Protocol references: [OpenAI reasoning](https://developers.openai.com/api/docs/g
 [Grok reasoning](https://docs.x.ai/developers/model-capabilities/text/reasoning),
 [OpenRouter reasoning](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens),
 and [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+
+## Model Discovery and Specialized Models
+
+Use **Settings > Models > Refresh Models** to update provider listings, then
+select the models you want in the conversation selector. Anthropic discovery
+uses its [native model-list API](https://platform.claude.com/docs/en/api/models/list),
+including pagination, rather than a fixed list. Gemini discovery also follows
+pagination. Refreshed listings are cached for later sessions.
+
+Recognized variants of the GPT Image, conversational GPT Realtime, GPT Audio,
+OpenAI speech and Gemini image/TTS families inherit the app's existing routing.
+Discovered image models appear in the image tool selector; supported speech
+models appear in **Audio > Text to Speech Model**, including dated snapshots.
+The selected speech model is used for playback, automatic read-aloud, the
+read-aloud tool and voice previews. Existing OpenAI/Gemini provider defaults
+remain available, and model-card overrides take precedence.
+
+Conversational GPT Realtime models use the
+[GA session format](https://developers.openai.com/api/docs/guides/realtime).
+Explicitly named legacy realtime-preview models retain their beta transport.
+Translation and transcription realtime models are separate workflows and are
+not treated as conversational voice models.
+
+Family recognition covers compatible variants, not arbitrary future API changes.
+Unknown models do not automatically gain tools, vision or other capabilities.
+OpenAI's [Speech API retirement notice](https://developers.openai.com/api/docs/guides/text-to-speech)
+sets January 6, 2027 as the shutdown date for `tts-1`, `tts-1-hd` and
+`gpt-4o-mini-tts`. Replacing read-aloud synthesis with a Realtime workflow is a
+separate migration; selecting a realtime model in the Speech API is not supported.
 
 ## Grok Model Discovery and Search
 

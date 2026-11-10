@@ -260,7 +260,7 @@ class AudioService:
             if cache_path:
                 audio_path = cache_path
             else:
-                text_hash = hashlib.md5(text.encode()).hexdigest()[:8]
+                text_hash = hashlib.md5(f"{model}_{voice}_{text}".encode()).hexdigest()[:8]
                 audio_path = Path(tempfile.gettempdir()) / f"tts_openai_{text_hash}.wav"
             
             # Stream audio to file
@@ -291,6 +291,7 @@ class AudioService:
         chat_id: Optional[str] = None,
         prompt_template: str = "",
         stop_event: Optional[threading.Event] = None,
+        model: str = "gemini-2.5-flash-preview-tts",
     ) -> Optional[Path]:
         """
         Synthesize speech using Gemini TTS.
@@ -306,7 +307,7 @@ class AudioService:
             
             # Check cache
             extra_key = prompt_template if prompt_template else ""
-            cache_path = self._get_cache_path(prompt_text, chat_id, "gemini", voice, extra_key) if chat_id else None
+            cache_path = self._get_cache_path(prompt_text, chat_id, f"gemini_{model}", voice, extra_key) if chat_id else None
             if self._check_cache(cache_path):
                 return cache_path
             
@@ -317,10 +318,10 @@ class AudioService:
             if cache_path:
                 audio_path = cache_path
             else:
-                text_hash = hashlib.md5(f"{prompt_text}_{voice}".encode()).hexdigest()[:8]
+                text_hash = hashlib.md5(f"{model}_{prompt_text}_{voice}".encode()).hexdigest()[:8]
                 audio_path = Path(tempfile.gettempdir()) / f"tts_gemini_{text_hash}.wav"
             
-            audio_data = provider.generate_speech(prompt_text, voice)
+            audio_data = provider.generate_speech(prompt_text, voice, model=model)
             
             if stop_event and stop_event.is_set():
                 return None
@@ -663,6 +664,7 @@ class AudioService:
                 chat_id=chat_id,
                 prompt_template=kwargs.get('prompt_template', ''),
                 stop_event=stop_event,
+                model=kwargs.get('model', 'gemini-2.5-flash-preview-tts'),
             )
         elif provider_type == 'audio_preview':
             audio_path = self.synthesize_audio_preview(

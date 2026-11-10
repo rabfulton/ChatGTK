@@ -26,7 +26,7 @@ from tools import (
     parse_tool_arguments,
 )
 from config import HISTORY_DIR
-from model_cards import get_card
+from model_cards import get_card, register_discovered_models
 
 
 # Heavy/optional native deps (NumPy/PortAudio) are imported lazily to keep startup fast,
@@ -1805,6 +1805,8 @@ class OpenAIProvider(AIProvider):
         import re
         try:
             models = self.client.models.list()
+            models = list(models)
+            register_discovered_models("openai", [model.id for model in models])
             
             # Check both parameter and environment variable
             disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')
@@ -3061,17 +3063,7 @@ class ClaudeProvider(AIProvider):
         self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
 
     def get_available_models(self, disable_filter: bool = False):
-        """
-        Return Claude models.
-
-        The Anthropic OpenAI SDK compatibility docs (`https://platform.claude.com/docs/en/api/openai-sdk`)
-        only guarantee support for chat/completions-style endpoints. The models.list
-        endpoint is not documented and may reject otherwise valid API keys.
-
-        To avoid confusing 401 errors during startup, we skip models.list entirely
-        and return a curated set of known Claude chat models, with optional filtering.
-        """
-        # Base curated set; extendable over time.
+        """List Claude models through Anthropic's native, paginated endpoint."""
         allowed_models = {
             "claude-sonnet-4-5", 
             "claude-haiku-4-5",
@@ -3080,14 +3072,40 @@ class ClaudeProvider(AIProvider):
             "claude-3-5-haiku-latest",
         }
 
-        # Allow disabling filtering via parameter or env var to keep similar
-        # semantics to other providers, even though we currently only have a
-        # static set here.
-        env_val = os.getenv('DISABLE_MODEL_FILTER', '')
-        disable_filter = disable_filter or env_val.strip().lower() in ('true', '1', 'yes')
-        if disable_filter:
+        if not self.client:
             return sorted(allowed_models)
-
+        models = set()
+        params = {"limit": 100}
+        seen_cursors = set()
+        try:
+            while True:
+                # The compatibility client authenticates differently. Use the
+                # native headers for discovery; keep chat requests unchanged.
+                response = requests.get(
+                    f"{self.BASE_URL}models",
+                    headers={
+                        "x-api-key": self.client.api_key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    params=dict(params), timeout=30,
+                )
+                response.raise_for_status()
+                data = response.json()
+                for item in data["data"]:
+                    model_id = item.get("id")
+                    if isinstance(model_id, str) and model_id:
+                        models.add(model_id)
+                if not data.get("has_more"):
+                    return sorted(models)
+                cursor = data.get("last_id")
+                if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                    raise ValueError("Invalid Claude model pagination cursor")
+                seen_cursors.add(cursor)
+                params["after_id"] = cursor
+        except Exception as exc:
+            print(f"Error fetching Claude models: {exc}")
+            if models:
+                return sorted(models)
         return sorted(allowed_models)
 
     def generate_chat_completion(
@@ -3520,22 +3538,28 @@ class GeminiProvider(AIProvider):
     def get_available_models(self, disable_filter=False):
         self._require_key()
         try:
-            resp = requests.get(
-                f"{self.BASE_URL}/models",
-                headers=self._headers(),
-                params={"pageSize": 50},
-                timeout=30
-            )
-            resp.raise_for_status()
-            data = resp.json()
             models = []
-            for model in data.get("models", []):
-                name = model.get("name", "")
-                if not name:
-                    continue
-                model_id = name.split("/")[-1]
-                if "generateContent" in model.get("supportedGenerationMethods", []):
-                    models.append(model_id)
+            params = {"pageSize": 100}
+            seen_tokens = set()
+            while True:
+                resp = requests.get(
+                    f"{self.BASE_URL}/models", headers=self._headers(),
+                    params=dict(params), timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for model in data.get("models", []):
+                    name = model.get("name", "")
+                    if name and "generateContent" in model.get("supportedGenerationMethods", []):
+                        models.append(name.split("/")[-1])
+                token = data.get("nextPageToken")
+                if not token:
+                    break
+                if token in seen_tokens:
+                    raise ValueError("Repeated Gemini model pagination token")
+                seen_tokens.add(token)
+                params["pageToken"] = token
+            register_discovered_models("gemini", models)
 
             # Check both parameter and environment variable
             disable_filter = disable_filter or os.getenv('DISABLE_MODEL_FILTER', '').lower() in ('true', '1', 'yes')
@@ -3783,7 +3807,9 @@ class GeminiProvider(AIProvider):
     def transcribe_audio(self, audio_file):
         raise NotImplementedError("Gemini provider does not support audio transcription yet.")
     
-    def generate_speech(self, text: str, voice: str) -> bytes:
+    def generate_speech(
+        self, text: str, voice: str, model: str = "gemini-2.5-flash-preview-tts",
+    ) -> bytes:
         """
         Generate speech audio using Gemini TTS model.
         
@@ -3805,9 +3831,6 @@ class GeminiProvider(AIProvider):
             If the API call fails or no audio is returned.
         """
         self._require_key()
-        
-        # Gemini TTS model
-        model = "gemini-2.5-flash-preview-tts"
         
         # Build the request payload following Gemini speech generation docs
         # The voice is specified in speechConfig

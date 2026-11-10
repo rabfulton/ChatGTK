@@ -142,8 +142,29 @@ class OpenAIWebSocketProvider:
         }
         return f"ws_state={state}"
 
+    def _uses_beta_api(self):
+        """Keep the legacy transport only for explicitly named preview models."""
+        return "realtime-preview" in getattr(self, "model", "")
+
+    @staticmethod
+    def _normalize_event(event):
+        """Accept both GA and legacy response events in the playback loop."""
+        aliases = {
+            "response.output_audio.delta": "response.audio.delta",
+            "response.output_audio.done": "response.audio.done",
+            "response.output_audio_transcript.delta": "response.audio_transcript.delta",
+            "response.output_audio_transcript.done": "response.audio_transcript.done",
+            "response.output_text.delta": "response.text.delta",
+            "response.output_text.done": "response.text.done",
+        }
+        return {**event, "type": aliases.get(event.get("type"), event.get("type"))}
+
     async def ensure_connection(self, voice):
         """Ensure we have an active WebSocket connection"""
+        model = getattr(self, "model", "gpt-realtime")
+        if self._ws_is_open() and getattr(self, "_connected_model", model) != model:
+            await self.ws.close()
+            self.ws = None
         if not self._ws_is_open():
             api_key = self.api_key or os.getenv("OPENAI_API_KEY")
             if not api_key:
@@ -154,8 +175,9 @@ class OpenAIWebSocketProvider:
 
             headers = {
                 "Authorization": f"Bearer {api_key}",
-                "OpenAI-Beta": "realtime=v1",
             }
+            if self._uses_beta_api():
+                headers["OpenAI-Beta"] = "realtime=v1"
             ws_url = f"wss://api.openai.com/v1/realtime?model={model}"
 
             try:
@@ -191,16 +213,43 @@ class OpenAIWebSocketProvider:
                     },
                 },
             }
-            await self.ws.send(json.dumps(config_message))
-
+            if not self._uses_beta_api():
+                legacy = config_message["session"]
+                config_message["session"] = {
+                    "type": "realtime",
+                    "instructions": instructions,
+                    "output_modalities": ["audio"],
+                    "audio": {
+                        "input": {
+                            "format": {"type": "audio/pcm", "rate": 24000},
+                            "transcription": legacy["input_audio_transcription"],
+                            "turn_detection": legacy["turn_detection"],
+                        },
+                        "output": {
+                            "format": {"type": "audio/pcm", "rate": 24000},
+                            "voice": voice,
+                        },
+                    },
+                }
             # Wait for session.updated confirmation
-            while True:
-                response = await self.ws.recv()
-                if isinstance(response, str):
-                    data = json.loads(response)
-                    if data.get("type") == "session.updated":
-                        self.last_event_id = data.get("event_id")  # Store the event ID
-                        break
+            async def wait_for_update():
+                while True:
+                    response = await self.ws.recv()
+                    if isinstance(response, str):
+                        data = json.loads(response)
+                        if data.get("type") == "error":
+                            raise RuntimeError(data.get("error", {}).get("message", "Realtime session rejected"))
+                        if data.get("type") == "session.updated":
+                            self.last_event_id = data.get("event_id")
+                            self._connected_model = model
+                            return
+            try:
+                await self.ws.send(json.dumps(config_message))
+                await asyncio.wait_for(wait_for_update(), timeout=15)
+            except (Exception, asyncio.CancelledError):
+                await self.ws.close()
+                self.ws = None
+                raise
 
     def _initialize_output_stream(self):
         """Initialize audio output stream if needed"""
@@ -329,7 +378,7 @@ class OpenAIWebSocketProvider:
                                 break
                             continue
                         if isinstance(message, str):
-                            response = json.loads(message)
+                            response = self._normalize_event(json.loads(message))
 
                             # Update event ID from responses
                             if "event_id" in response:
@@ -560,6 +609,17 @@ class OpenAIWebSocketProvider:
                 },
             }
             await self.ws.send(json.dumps(text_message))
+            response_config = {"type": "response.create", "response": {}}
+            if self._uses_beta_api():
+                response_config["response"] = {
+                    "modalities": ["audio", "text"],
+                    "output_audio_format": "pcm16",
+                }
+                if self.temperature is not None:
+                    response_config["response"]["temperature"] = self.temperature
+            else:
+                response_config["response"] = {"output_modalities": ["audio"]}
+            await self.ws.send(json.dumps(response_config))
             if self.debug:
                 print(f"Sent text message: {text}")
 
@@ -567,24 +627,9 @@ class OpenAIWebSocketProvider:
             while True:
                 response = await self.ws.recv()
                 if isinstance(response, str):
-                    data = json.loads(response)
+                    data = self._normalize_event(json.loads(response))
 
-                    if data.get("type") == "conversation.item.created":
-                        # Send response configuration
-                        response_config = {
-                            "type": "response.create",
-                            "response": {
-                                "modalities": ["audio", "text"],
-                                "output_audio_format": "pcm16",
-                            },
-                        }
-                        if self.temperature is not None:
-                            response_config["response"]["temperature"] = self.temperature
-                        await self.ws.send(json.dumps(response_config))
-                        if self.debug:
-                            print("Sent response configuration")
-
-                    elif data.get("type") == "response.audio.delta":
+                    if data.get("type") == "response.audio.delta":
                         try:
                             audio_bytes = base64.b64decode(data["delta"])
 
@@ -592,12 +637,20 @@ class OpenAIWebSocketProvider:
                             if audio_data.ndim == 1:
                                 audio_data = audio_data.reshape(-1, 1)
 
+                            self._initialize_output_stream()
                             self.output_stream.write(audio_data)
                         except Exception as e:
                             print(f"Error playing audio delta: {e}")
 
                     elif data.get("type") == "response.done":
+                        for item in data.get("response", {}).get("output", []):
+                            for content in item.get("content", []):
+                                transcript = content.get("transcript")
+                                if transcript and self.on_assistant_transcript:
+                                    self._schedule_callback(self.on_assistant_transcript, transcript)
                         break
+                    elif data.get("type") == "error":
+                        raise RuntimeError(data.get("error", {}).get("message", "Realtime response rejected"))
 
         except Exception as e:
             print(f"Error sending text message: {e}")
@@ -639,11 +692,14 @@ class OpenAIWebSocketProvider:
         # Ensure connection is established
         future = asyncio.run_coroutine_threadsafe(self.ensure_connection(self.voice), self.loop)
         try:
-            future.result(timeout=10.0)  # Wait up to 10 seconds for connection
+            future.result(timeout=30.0)
+            self.last_error = None
             if self.debug:
                 print("WebSocket connection established")
             return True
         except Exception as e:
+            future.cancel()
+            self.last_error = str(e) or "Realtime connection timed out"
             print(f"Error connecting to WebSocket server: {e}")
             return False
 
