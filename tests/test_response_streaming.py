@@ -467,6 +467,97 @@ def test_gemini_streams_native_thoughts_and_keeps_signed_tool_parts(monkeypatch)
     assert payloads[2]["contents"][-1]["parts"] == [{"text": "Continue"}]
 
 
+@pytest.mark.parametrize("model", ["gemini-4-neon", "gemini-3-pro-preview"])
+@pytest.mark.parametrize("search_enabled", [False, True])
+@pytest.mark.parametrize("with_function", [False, True])
+def test_gemini_search_respects_toggle_with_other_tools(
+    monkeypatch, model, search_enabled, with_function
+):
+    provider = GeminiProvider()
+    provider.initialize("test")
+    post = Mock(side_effect=lambda *args, **kwargs: http_stream([
+        {"candidates": [{
+            "content": {"parts": [{"text": "Answer"}]},
+            "finishReason": "STOP",
+        }]}
+    ]))
+    monkeypatch.setattr("services.streaming_service.requests.post", post)
+    handlers = {"text_get_handler": Mock()} if with_function else {}
+    answer, _, meta = run(
+        provider, "gemini", model,
+        web_search_enabled=search_enabled, **handlers,
+    )
+    payload = post.call_args.kwargs["json"]
+    tools = payload.get("tools", [])
+    assert any("google_search" in tool for tool in tools) is search_enabled
+    assert any("functionDeclarations" in tool for tool in tools) is with_function
+    assert meta["gemini"]["web_search_enabled"] is search_enabled
+    if search_enabled and with_function:
+        assert payload["toolConfig"] == {
+            "includeServerSideToolInvocations": True,
+            "functionCallingConfig": {"mode": "VALIDATED"},
+        }
+    else:
+        assert "toolConfig" not in payload
+    assert answer == "Answer"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_gemini_combined_tools_preserve_search_context_across_rounds(
+    monkeypatch, streaming
+):
+    provider = GeminiProvider()
+    provider.initialize("test")
+    payloads = []
+    server_parts = [
+        {"toolCall": {"toolType": "GOOGLE_SEARCH", "args": {"query": "news"}},
+         "thoughtSignature": "signed-search"},
+        {"toolResponse": {"toolType": "GOOGLE_SEARCH",
+                          "response": {"result": "News"}}},
+        {"functionCall": {"id": "call-1", "name": "text_get",
+                          "args": {"target": "document"}},
+         "thoughtSignature": "signed-function"},
+    ]
+
+    def post(url, **kwargs):
+        assert url.endswith(":streamGenerateContent?alt=sse")
+        payloads.append(json.loads(json.dumps(kwargs["json"])))
+        parts = server_parts if len(payloads) == 1 else [{"text": "Answer"}]
+        return http_stream([{"candidates": [{
+            "content": {"parts": parts}, "finishReason": "STOP",
+        }]}])
+
+    monkeypatch.setattr("services.streaming_service.requests.post", post)
+    tool = Mock(return_value="document")
+    kwargs = {"web_search_enabled": True, "text_get_handler": tool}
+    if streaming:
+        answer, _, meta = run(provider, "gemini", "gemini-4-neon", **kwargs)
+    else:
+        meta = {}
+        answer = provider.generate_chat_completion(
+            [{"role": "user", "content": "Hello"}], "gemini-4-neon",
+            response_meta=meta, **kwargs,
+        )
+    assert answer == "Answer"
+    tool.assert_called_once_with("document")
+    assert payloads[1]["contents"][1]["parts"] == server_parts
+    assert payloads[1]["contents"][2]["parts"][0]["functionResponse"] == {
+        "id": "call-1", "name": "text_get", "response": {"result": "document"},
+    }
+    assert all({"google_search": {}} in p["tools"] for p in payloads)
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": answer, "provider_meta": meta},
+        {"role": "user", "content": "Continue"},
+    ]
+    run(provider, "gemini", "gemini-4-neon", messages, **kwargs)
+    assert payloads[2]["contents"][1]["parts"] == server_parts
+    # Disabling search must also discard signed search context from past turns.
+    run(provider, "gemini", "gemini-4-neon", messages, text_get_handler=tool)
+    assert payloads[3]["contents"][1]["parts"] == [{"text": "Answer"}]
+    assert not any("google_search" in t for t in payloads[3]["tools"])
+
+
 def test_audio_and_image_requests_keep_the_existing_provider_path():
     assert not can_stream(OpenAIProvider(), "openai", "gpt-4o-audio-preview")
     assert not can_stream(OpenAIProvider(), "openai", "gpt-image-1")

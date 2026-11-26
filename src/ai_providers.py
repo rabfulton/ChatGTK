@@ -3484,6 +3484,12 @@ class GeminiProvider(AIProvider):
             "Content-Type": "application/json",
             "x-goog-api-key": self.api_key
         }
+
+    def _supports_tool_combination(self, model):
+        """Return whether native search can accompany custom function tools."""
+        # Tool context circulation is supported on Gemini 3 and 4 models.
+        # https://ai.google.dev/gemini-api/docs/tool-combination
+        return bool(re.match(r"gemini-[34](?:[.-])", model))
     
     def _convert_messages(self, messages):
         contents = []
@@ -3633,8 +3639,33 @@ class GeminiProvider(AIProvider):
             wolfram_handler,
         )
 
-        # Gemini native API doesn't support combining google_search with function calling
-        # Use native API only for web search WITHOUT function tools
+        if use_web_search and enabled_tools and self._supports_tool_combination(model):
+            # Consume the native stream without UI callbacks so both entry points
+            # share tool execution and replay of signed server-side tool parts.
+            from services.streaming_service import stream_chat_completion
+
+            return stream_chat_completion(
+                self, "gemini",
+                {
+                    "messages": messages,
+                    "model": model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "web_search_enabled": True,
+                    "image_tool_handler": image_tool_handler,
+                    "music_tool_handler": music_tool_handler,
+                    "read_aloud_tool_handler": read_aloud_tool_handler,
+                    "search_tool_handler": search_tool_handler,
+                    "text_get_handler": text_get_handler,
+                    "text_edit_handler": text_edit_handler,
+                    "wolfram_handler": wolfram_handler,
+                },
+                lambda *_: None,
+                lambda: False,
+                response_meta if response_meta is not None else {},
+            )
+
+        # Older models can use native search only without function tools.
         if use_web_search and not enabled_tools:
             return self._generate_with_native_api(
                 messages, model, temperature, max_tokens, chat_id, response_meta,

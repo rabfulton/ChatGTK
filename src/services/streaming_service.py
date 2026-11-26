@@ -434,7 +434,7 @@ def _stream_gemini(provider, kwargs, emit, cancel_check, meta):
     enabled, context = _tools(kwargs, card)
     search_enabled = bool(
         kwargs.get("web_search_enabled")
-        and not enabled
+        and (not enabled or provider._supports_tool_combination(model))
         and card
         and card.capabilities.web_search
     )
@@ -473,8 +473,13 @@ def _stream_gemini(provider, kwargs, emit, cancel_check, meta):
         payload["tools"] = [
             {"functionDeclarations": build_tools_for_provider(enabled, "gemini")}
         ]
-    elif search_enabled:
-        payload["tools"] = [{"google_search": {}}]
+    if search_enabled:
+        payload.setdefault("tools", []).append({"google_search": {}})
+        if enabled:
+            payload["toolConfig"] = {
+                "includeServerSideToolInvocations": True,
+                "functionCallingConfig": {"mode": "VALIDATED"},
+            }
     snippets = []
     turn_content = []
     for _ in range(5):

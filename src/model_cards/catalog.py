@@ -1128,6 +1128,20 @@ BUILTIN_CARDS: dict[str, ModelCard] = {
     ),
 
     # ---------------------------------------------------------------------------
+    # Gemini 4 Family
+    # https://ai.google.dev/gemini-api/docs/models/gemini-4-neon
+    # ---------------------------------------------------------------------------
+    "gemini-4-neon": ModelCard(
+        id="gemini-4-neon",
+        provider="gemini",
+        display_name="Gemini 4 Neon",
+        api_family="generateContent",
+        capabilities=Capabilities(
+            text=True, vision=True, tool_use=True, web_search=True
+        ),
+    ),
+
+    # ---------------------------------------------------------------------------
     # Gemini Latest/Aliases
     # ---------------------------------------------------------------------------
     "gemini-flash-latest": ModelCard(

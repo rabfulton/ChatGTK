@@ -143,6 +143,7 @@ class TestBuiltinCatalog:
             "gpt-4o-mini",
             "dall-e-3",
             "gemini-2.5-flash",
+            "gemini-4-neon",
             "grok-latest",
             "grok-4.7",
             "claude-sonnet-4-5",
@@ -158,6 +159,14 @@ class TestBuiltinCatalog:
         assert dalle.is_image_model() is True
         assert dalle.capabilities.image_gen is True
         assert dalle.capabilities.text is False
+
+    def test_gemini_neon_search_and_tools(self):
+        card = get_card("gemini-4-neon")
+        assert card.provider == "gemini"
+        assert card.capabilities.web_search is True
+        assert card.capabilities.tool_use is True
+        assert card.capabilities.vision is True
+        assert card.capabilities.image_gen is False
 
     def test_chat_models_have_tool_support(self):
         """Major chat models should have tool_use capability."""
